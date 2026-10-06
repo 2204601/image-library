@@ -286,11 +286,13 @@ fn commit(
 ) -> rusqlite::Result<ImportSummary> {
     let mut summary = ImportSummary::default();
     // Target folder (None = unfiled) -> item ids, in import order.
-    let mut placed: Vec<(Option<String>, Vec<String>)> = Vec::new();
+    // The flag marks already-known items, which only fill an empty spot.
+    let mut placed: Vec<(Option<String>, bool, Vec<String>)> = Vec::new();
     let mut folder_cache: HashMap<Vec<String>, String> = HashMap::new();
     let tx = conn.transaction()?;
     let base = db::now_ms();
     for (i, (o, dirs)) in outcomes.into_iter().enumerate() {
+        let known = matches!(o, Outcome::Duplicate(_));
         let id = match o {
             Outcome::New(item) => {
                 // Offset by index so the import order is preserved when sorting.
@@ -326,14 +328,19 @@ fn commit(
             };
             folder = Some(next);
         }
-        match placed.iter_mut().find(|(f, _)| *f == folder) {
-            Some((_, ids)) => ids.push(id),
-            None => placed.push((folder, vec![id])),
+        match placed.iter_mut().find(|(f, k, _)| *f == folder && *k == known) {
+            Some((_, _, ids)) => ids.push(id),
+            None => placed.push((folder, known, vec![id])),
         }
     }
-    for (folder, ids) in &placed {
+    for (folder, known, ids) in &placed {
         if let Some(f) = folder {
-            db::add_to_folder(&tx, ids, f)?;
+            // Re-importing something already filed elsewhere doesn't move it.
+            if *known {
+                db::file_unfiled(&tx, ids, f)?;
+            } else {
+                db::move_to_folder(&tx, ids, f)?;
+            }
         }
     }
     tx.commit()?;

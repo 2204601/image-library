@@ -27,6 +27,8 @@ export interface Item {
   displayPath: string;
   /** Similar view only: items with the same number look alike. Best copy first. */
   group?: number;
+  /** Similar view only: differing hash bits (of 64) from the group's best copy. */
+  distance?: number;
 }
 
 export type View =
@@ -83,7 +85,11 @@ export interface SmartFolder {
   name: string;
   rule: Rule;
   count: number;
+  color: string | null;
 }
+
+/** How alike images must be to count as duplicates: strict, standard, loose. */
+export type SimilarLevel = "strict" | "standard" | "loose";
 
 export type SortKey = "importedAt" | "name" | "size" | "dimensions" | "rating" | "manual";
 
@@ -96,6 +102,7 @@ export interface ItemQuery {
   includeSubfolders: boolean;
   minRating: number;
   filter: Filter;
+  similarLevel: SimilarLevel;
   sort: SortKey;
   desc: boolean;
 }
@@ -112,17 +119,31 @@ export interface Folder {
   parentId: string | null;
   name: string;
   count: number;
+  /** Colour name (see lib/colors.ts), if set. */
+  color: string | null;
 }
 
 export interface Tag {
   id: number;
   name: string;
   count: number;
+  color: string | null;
 }
 
 export interface SelectionInfo {
   tags: Tag[];
   folders: { id: string; count: number }[];
+}
+
+/** What tidying one duplicate group carries over to the copy kept. */
+export interface DuplicateEffect {
+  keep: string;
+  remove: string[];
+  addedTags: string[];
+  /** The kept copy's new rating, if it goes up. */
+  rating: number | null;
+  /** Folder the kept copy moves into (only if it had none). */
+  folderId: string | null;
 }
 
 export interface ImportSummary {
@@ -159,9 +180,12 @@ export const api = {
     }),
   supportedExts: () => invoke<string[]>("supported_exts"),
   indexSimilar: () => invoke<number>("index_similar"),
-  /** Trashes `remove`, first copying their tags, folders and rating onto `keep`. */
+  /** What `resolveDuplicates` would carry over, without changing anything. */
+  previewDuplicates: (groups: { keep: string; remove: string[] }[]) =>
+    invoke<DuplicateEffect[]>("preview_duplicates", { groups }),
+  /** Trashes `remove`, first copying their tags and rating (and folder, if `keep` has none) onto `keep`. */
   resolveDuplicates: (groups: { keep: string; remove: string[] }[]) =>
-    invoke<void>("resolve_duplicates", { groups }),
+    invoke<DuplicateEffect[]>("resolve_duplicates", { groups }),
 
   listFolders: () => invoke<Folder[]>("list_folders"),
   createFolder: (name: string, parentId: string | null) =>
@@ -170,7 +194,8 @@ export const api = {
   deleteFolder: (id: string) => invoke<void>("delete_folder", { id }),
   moveFolder: (id: string, parentId: string | null) =>
     invoke<boolean>("move_folder", { id, parentId }),
-  addToFolder: (ids: string[], folderId: string) => invoke<void>("add_to_folder", { ids, folderId }),
+  /** An item is in one folder at most: this takes it out of the one it was in. */
+  moveToFolder: (ids: string[], folderId: string) => invoke<void>("move_to_folder", { ids, folderId }),
   reorderInFolder: (folderId: string, ids: string[], before: string | null) =>
     invoke<void>("reorder_in_folder", { folderId, ids, before }),
   placeFolder: (id: string, parentId: string | null, before: string | null) =>
@@ -192,6 +217,11 @@ export const api = {
   removeTag: (ids: string[], tagId: number) => invoke<void>("remove_tag", { ids, tagId }),
   renameTag: (id: number, name: string) => invoke<void>("rename_tag", { id, name }),
   deleteTag: (id: number) => invoke<void>("delete_tag", { id }),
+  /** `color` null clears it. */
+  setFolderColor: (id: string, color: string | null) => invoke<void>("set_folder_color", { id, color }),
+  setSmartFolderColor: (id: string, color: string | null) =>
+    invoke<void>("set_smart_folder_color", { id, color }),
+  setTagColor: (id: number, color: string | null) => invoke<void>("set_tag_color", { id, color }),
 };
 
 export function formatBytes(n: number): string {

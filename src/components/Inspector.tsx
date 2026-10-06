@@ -1,3 +1,4 @@
+import { colorHex } from "../lib/colors";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Folder as FolderIcon, Plus, Star, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -129,9 +130,19 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Chip({ children, onRemove }: { children: React.ReactNode; onRemove: () => void }) {
+function Chip({
+  children,
+  onRemove,
+  color,
+}: {
+  children: React.ReactNode;
+  onRemove: () => void;
+  color?: string | null;
+}) {
+  const hex = colorHex(color);
   return (
     <span className="flex max-w-full items-center gap-1 rounded-full bg-raised py-0.5 pr-1 pl-2.5 text-xs">
+      {hex && <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: hex }} />}
       <span className="truncate">{children}</span>
       <button onClick={onRemove} className="rounded-full p-0.5 text-dim hover:bg-white/10 hover:text-fg">
         <X size={12} />
@@ -320,7 +331,7 @@ export function Inspector() {
       <Field label="タグ">
         <div className="mb-2 flex flex-wrap gap-1.5">
           {info.tags.map((t) => (
-            <Chip key={t.id} onRemove={() => run(() => api.removeTag(ids, t.id))}>
+            <Chip key={t.id} color={t.color} onRemove={() => run(() => api.removeTag(ids, t.id))}>
               {t.name}
               {countSuffix(t.count)}
             </Chip>
@@ -337,8 +348,13 @@ export function Inspector() {
 
       <Field label="フォルダ">
         <div className="flex flex-col gap-1.5">
+          {info.folders.length === 0 && <span className="text-dim">未分類</span>}
           {info.folders.map((f) => (
-            <Chip key={f.id} onRemove={() => run(() => api.removeFromFolder(ids, f.id))}>
+            <Chip
+              key={f.id}
+              color={folders.find((x) => x.id === f.id)?.color}
+              onRemove={() => run(() => api.removeFromFolder(ids, f.id))}
+            >
               <FolderIcon size={12} className="mr-1 inline text-dim" />
               {folderPath(folders, f.id)}
               {countSuffix(f.count)}
@@ -352,11 +368,11 @@ export function Inspector() {
             onBlur={() => setAdding(false)}
             onChange={(e) => {
               setAdding(false);
-              if (e.target.value) run(() => api.addToFolder(ids, e.target.value));
+              if (e.target.value) run(() => api.moveToFolder(ids, e.target.value));
             }}
             className="mt-2 h-8 w-full rounded-md border border-line bg-bg px-2 outline-none"
           >
-            <option value="">フォルダを選択…</option>
+            <option value="">移動先のフォルダを選択…</option>
             {unusedFolders.map((f) => (
               <option key={f.id} value={f.id}>
                 {folderPath(folders, f.id)}
@@ -369,7 +385,7 @@ export function Inspector() {
               onClick={() => setAdding(true)}
               className="mt-2 flex items-center gap-1 text-xs text-dim hover:text-fg"
             >
-              <Plus size={13} /> フォルダに追加
+              <Plus size={13} /> フォルダへ移動
             </button>
           )
         )}

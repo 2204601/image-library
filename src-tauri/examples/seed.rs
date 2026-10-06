@@ -55,8 +55,8 @@ fn main() {
     let cats = db::create_folder(&l.conn, "ねこ", Some(&animals)).unwrap();
     db::create_folder(&l.conn, "風景", None).unwrap();
     let ids: Vec<String> = all.iter().map(|i| i.id.clone()).collect();
-    db::add_to_folder(&l.conn, &ids[..ids.len() / 4], &animals).unwrap();
-    db::add_to_folder(&l.conn, &ids[..ids.len() / 8], &cats).unwrap();
+    db::move_to_folder(&l.conn, &ids[..ids.len() / 4], &animals).unwrap();
+    db::move_to_folder(&l.conn, &ids[..ids.len() / 8], &cats).unwrap();
     db::add_tags(&mut l.conn, &ids[..ids.len() / 3], &["参考".into()]).unwrap();
     db::add_tags(&mut l.conn, &ids[ids.len() / 6..ids.len() / 2], &["ブルー".into(), "背景".into()]).unwrap();
 

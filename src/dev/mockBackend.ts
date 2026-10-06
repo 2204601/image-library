@@ -2,22 +2,24 @@
 // opened in a normal browser (`npm run dev`) instead of inside Tauri.
 // Mirrors the semantics of src-tauri/src/db.rs closely enough for UI work.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { Folder, Item, ItemQuery, Rule, Tag } from "../lib/api";
+import type { Folder, Item, ItemQuery, Rule, SimilarLevel, Tag } from "../lib/api";
 
 type MockItem = Omit<Item, "filePath" | "thumbPath" | "displayPath" | "preview"> & { hue: number };
 
 const items: MockItem[] = [];
 const folders: Omit<Folder, "count">[] = [];
-const tags: { id: number; name: string }[] = [];
+const tags: { id: number; name: string; color: string | null }[] = [];
 // `${itemId}|${folderId}` -> manual position
 const itemFolders = new Map<string, number>();
 let posSeq = 0;
+// An item is in at most one folder; linking moves it.
 const link = (i: string, f: string) => {
-  const k = `${i}|${f}`;
-  if (!itemFolders.has(k)) itemFolders.set(k, ++posSeq);
+  if (itemFolders.has(`${i}|${f}`)) return;
+  [...itemFolders.keys()].filter((k) => k.startsWith(`${i}|`)).forEach((k) => itemFolders.delete(k));
+  itemFolders.set(`${i}|${f}`, ++posSeq);
 };
 const itemTags = new Set<string>(); // `${itemId}|${tagId}`
-const smartFolders: { id: string; name: string; rule: Rule }[] = [];
+const smartFolders: { id: string; name: string; rule: Rule; color: string | null }[] = [];
 const EXTS = ["jpg", "png", "jpg", "webp", "jpg", "heic"];
 let tagSeq = 0;
 let uid = 0;
@@ -49,8 +51,12 @@ function seed() {
       hue: (i * 47) % 360,
     });
   }
-  const animals = { id: id(), parentId: null, name: "動物" };
-  folders.push(animals, { id: id(), parentId: animals.id, name: "ねこ" }, { id: id(), parentId: null, name: "風景" });
+  const animals = { id: id(), parentId: null, name: "動物", color: "orange" };
+  folders.push(
+    animals,
+    { id: id(), parentId: animals.id, name: "ねこ", color: null },
+    { id: id(), parentId: null, name: "風景", color: "green" },
+  );
   items.slice(0, 30).forEach((it) => link(it.id, animals.id));
   items.slice(30, 36).forEach((it) => link(it.id, folders[1].id));
   addTags(items.slice(0, 40).map((i) => i.id), ["参考"]);
@@ -74,16 +80,22 @@ function seed() {
 }
 
 /** Mock stand-in for the perceptual hash: same colours and shape = look-alike. */
-function similar(r: MockItem[]): MockItem[] {
-  const key = (i: MockItem) => `${i.hue}|${(i.width / i.height).toFixed(2)}`;
+function similar(r: MockItem[], level: SimilarLevel): MockItem[] {
+  const key = (i: MockItem) =>
+    level === "loose"
+      ? `${Math.round(i.hue / 20)}|${(i.width / i.height).toFixed(1)}`
+      : `${i.hue}|${(i.width / i.height).toFixed(2)}`;
   const groups = new Map<string, MockItem[]>();
   r.forEach((i) => groups.set(key(i), [...(groups.get(key(i)) ?? []), i]));
   return [...groups.values()]
+    .map((g) =>
+      [...g].sort((a, b) => b.width * b.height - a.width * a.height || b.size - a.size),
+    )
+    // Strict: only copies that are barely smaller than the best one.
+    .map((g) => (level === "strict" ? g.filter((i) => i.width >= g[0].width / 2.2) : g))
     .filter((g) => g.length > 1)
     .flatMap((g, n) =>
-      [...g]
-        .sort((a, b) => b.width * b.height - a.width * a.height || b.size - a.size)
-        .map((i) => ({ ...i, group: n })),
+      g.map((i) => ({ ...i, group: n, distance: Math.round(Math.log2(g[0].width / i.width) * 4) })),
     );
 }
 
@@ -107,7 +119,7 @@ function addTags(ids: string[], names: string[]) {
     const name = raw.trim();
     if (!name) continue;
     let t = tags.find((x) => x.name.toLowerCase() === name.toLowerCase());
-    if (!t) tags.push((t = { id: ++tagSeq, name }));
+    if (!t) tags.push((t = { id: ++tagSeq, name, color: name === "参考" ? "blue" : null }));
     ids.forEach((i) => itemTags.add(`${i}|${t!.id}`));
   }
 }
@@ -210,7 +222,7 @@ function query(q: ItemQuery): Item[] {
             ? i.rating
             : i.importedAt;
   r = [...r].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * (q.desc ? -1 : 1));
-  return (v.kind === "similar" ? similar(r) : r).map(view);
+  return (v.kind === "similar" ? similar(r, q.similarLevel ?? "standard") : r).map(view);
 }
 
 function removeFolder(fid: string) {
@@ -274,18 +286,34 @@ function handle(cmd: string, a: any): unknown {
       return a.ids.length;
     case "index_similar":
       return 0;
-    case "resolve_duplicates":
-      for (const g of a.groups as { keep: string; remove: string[] }[]) {
+    case "preview_duplicates":
+    case "resolve_duplicates": {
+      const effects = (a.groups as { keep: string; remove: string[] }[]).map((g) => {
         const keep = items.find((i) => i.id === g.keep)!;
-        for (const rid of g.remove) {
-          const it = items.find((i) => i.id === rid)!;
-          tags.forEach((t) => hasTag(rid, t.id) && itemTags.add(`${keep.id}|${t.id}`));
-          folders.forEach((f) => inFolder(rid, f.id) && link(keep.id, f.id));
-          keep.rating = Math.max(keep.rating, it.rating);
-          it.deletedAt ??= Date.now();
+        const removed = g.remove.map((rid) => items.find((i) => i.id === rid)!);
+        const addedTags = tags
+          .filter((t) => !hasTag(keep.id, t.id) && g.remove.some((rid) => hasTag(rid, t.id)))
+          .map((t) => t.name);
+        const best = Math.max(...removed.map((i) => i.rating));
+        const hasFolder = folders.some((f) => inFolder(keep.id, f.id));
+        const folderId = hasFolder
+          ? null
+          : (folders.find((f) => g.remove.some((rid) => inFolder(rid, f.id)))?.id ?? null);
+        return { keep: g.keep, remove: g.remove, addedTags, rating: best > keep.rating ? best : null, folderId };
+      });
+      if (cmd === "resolve_duplicates") {
+        for (const e of effects) {
+          const keep = items.find((i) => i.id === e.keep)!;
+          for (const rid of e.remove) {
+            tags.forEach((t) => hasTag(rid, t.id) && itemTags.add(`${keep.id}|${t.id}`));
+            items.find((i) => i.id === rid)!.deletedAt ??= Date.now();
+          }
+          if (e.rating != null) keep.rating = e.rating;
+          if (e.folderId) link(keep.id, e.folderId);
         }
       }
-      return;
+      return effects;
+    }
     case "supported_exts":
       return ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif"];
     case "import_paths":
@@ -311,7 +339,7 @@ function handle(cmd: string, a: any): unknown {
     case "list_smart_folders":
       return smartFolders.map((f) => ({ ...f, count: applyRule(live(), f.rule).length }));
     case "create_smart_folder": {
-      const f = { id: id(), name: a.name, rule: a.rule };
+      const f = { id: id(), name: a.name, rule: a.rule, color: null };
       smartFolders.push(f);
       return f.id;
     }
@@ -330,7 +358,7 @@ function handle(cmd: string, a: any): unknown {
       return [...m.entries()].sort((x, y) => y[1] - x[1]);
     }
     case "create_folder": {
-      const f = { id: id(), parentId: a.parentId ?? null, name: a.name };
+      const f = { id: id(), parentId: a.parentId ?? null, name: a.name, color: null };
       folders.push(f);
       return f.id;
     }
@@ -342,7 +370,7 @@ function handle(cmd: string, a: any): unknown {
       return;
     case "move_folder":
       return placeFolder(a.id, a.parentId ?? null, null);
-    case "add_to_folder":
+    case "move_to_folder":
       a.ids.forEach((i: string) => link(i, a.folderId));
       return;
     case "reorder_in_folder": {
@@ -368,6 +396,15 @@ function handle(cmd: string, a: any): unknown {
       return;
     case "remove_tag":
       a.ids.forEach((i: string) => itemTags.delete(`${i}|${a.tagId}`));
+      return;
+    case "set_folder_color":
+      folders.find((f) => f.id === a.id)!.color = a.color;
+      return;
+    case "set_smart_folder_color":
+      smartFolders.find((f) => f.id === a.id)!.color = a.color;
+      return;
+    case "set_tag_color":
+      tags.find((t) => t.id === a.id)!.color = a.color;
       return;
     case "rename_tag": {
       const t = tags.find((x) => x.id === a.id)!;

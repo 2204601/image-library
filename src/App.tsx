@@ -4,6 +4,7 @@ import { ImageDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ContextMenu } from "./components/ContextMenu";
 import { DragLayer } from "./components/DragLayer";
+import { DuplicateReview } from "./components/DuplicateReview";
 import { FolderPicker } from "./components/FolderPicker";
 import { Grid } from "./components/Grid";
 import { Inspector } from "./components/Inspector";
@@ -130,6 +131,7 @@ export default function App() {
       )}
       <Viewer />
       <FolderPicker />
+      <DuplicateReview />
       <DragLayer />
       <ContextMenu />
       <Toasts />

@@ -168,8 +168,20 @@ pub fn trash_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
     with_lib(&state, |lib| db::trash_items(&lib.conn, &ids).map_err(err))
 }
 
+/// What tidying these groups would carry over to the copies kept.
 #[tauri::command]
-pub fn resolve_duplicates(state: State<AppState>, groups: Vec<db::DuplicateGroup>) -> CmdResult<()> {
+pub fn preview_duplicates(
+    state: State<AppState>,
+    groups: Vec<db::DuplicateGroup>,
+) -> CmdResult<Vec<db::DuplicateEffect>> {
+    with_lib(&state, |lib| db::plan_duplicates(&lib.conn, &groups).map_err(err))
+}
+
+#[tauri::command]
+pub fn resolve_duplicates(
+    state: State<AppState>,
+    groups: Vec<db::DuplicateGroup>,
+) -> CmdResult<Vec<db::DuplicateEffect>> {
     with_lib(&state, |lib| db::resolve_duplicates(&mut lib.conn, &groups).map_err(err))
 }
 
@@ -408,8 +420,8 @@ pub fn move_folder(state: State<AppState>, id: String, parent_id: Option<String>
 }
 
 #[tauri::command]
-pub fn add_to_folder(state: State<AppState>, ids: Vec<String>, folder_id: String) -> CmdResult<()> {
-    with_lib(&state, |lib| db::add_to_folder(&lib.conn, &ids, &folder_id).map_err(err))
+pub fn move_to_folder(state: State<AppState>, ids: Vec<String>, folder_id: String) -> CmdResult<()> {
+    with_lib(&state, |lib| db::move_to_folder(&lib.conn, &ids, &folder_id).map_err(err))
 }
 
 /// Drops a folder under `parent_id`, in front of sibling `before` (None = last).
@@ -508,6 +520,27 @@ pub fn remove_tag(state: State<AppState>, ids: Vec<String>, tag_id: i64) -> CmdR
 #[tauri::command]
 pub fn rename_tag(state: State<AppState>, id: i64, name: String) -> CmdResult<()> {
     with_lib(&state, |lib| db::rename_tag(&mut lib.conn, id, &name).map_err(err))
+}
+
+#[tauri::command]
+pub fn set_folder_color(state: State<AppState>, id: String, color: Option<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| {
+        db::set_color(&lib.conn, db::ColorTarget::Folder, &id, color.as_deref()).map_err(err)
+    })
+}
+
+#[tauri::command]
+pub fn set_smart_folder_color(state: State<AppState>, id: String, color: Option<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| {
+        db::set_color(&lib.conn, db::ColorTarget::SmartFolder, &id, color.as_deref()).map_err(err)
+    })
+}
+
+#[tauri::command]
+pub fn set_tag_color(state: State<AppState>, id: i64, color: Option<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| {
+        db::set_color(&lib.conn, db::ColorTarget::Tag, &id, color.as_deref()).map_err(err)
+    })
 }
 
 #[tauri::command]

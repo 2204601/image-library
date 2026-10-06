@@ -16,16 +16,18 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   emptyTrash,
   importFilesDialog,
   importFolderDialog,
-  resolveDuplicates,
+  keepPlan,
+  reviewDuplicates,
   similarGroups,
 } from "../lib/actions";
-import type { Folder, SmartFolder, SortKey, View } from "../lib/api";
-import { describeRule } from "../lib/rule";
+import type { Folder, SimilarLevel, SmartFolder, SortKey, View } from "../lib/api";
+import { colorHex } from "../lib/colors";
+import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
 import { activeConditions, useStore } from "../store";
 import { FilterBar } from "./FilterBar";
 import { ViewMenu } from "./ViewMenu";
@@ -75,9 +77,6 @@ export function Toolbar() {
   const thumbSize = useStore((s) => s.thumbSize);
   const setThumbSize = useStore((s) => s.setThumbSize);
   const tags = useStore((s) => s.tags);
-  const tagFilter = useStore((s) => s.tagFilter);
-  const toggleTagFilter = useStore((s) => s.toggleTagFilter);
-  const tagMatchAll = useStore((s) => s.tagMatchAll);
   const items = useStore((s) => s.items);
   const count = items.length;
   const selectedCount = useStore((s) => s.selected.size);
@@ -101,6 +100,7 @@ export function Toolbar() {
   const isSimilar = view.kind === "similar";
   const manual = sort === "manual";
   const groups = useMemo(() => (isSimilar ? similarGroups(items) : []), [isSimilar, items]);
+  const keepPick = useStore((s) => s.keepPick);
   const sortLabel = SORTS.find((s) => s.key === sort)?.label ?? "";
 
   // Debounce typing so each keystroke doesn't hit the DB.
@@ -226,12 +226,12 @@ export function Toolbar() {
             </button>
           ) : isSimilar ? (
             <button
-              title="各グループで解像度が最も高い1枚を残し、残りをゴミ箱へ移動"
+              title="残す1枚を確認してから、残りをゴミ箱へ移動"
               disabled={groups.length === 0}
-              onClick={() => resolveDuplicates(groups, true)}
+              onClick={() => reviewDuplicates(keepPlan(groups, keepPick))}
               className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-3 whitespace-nowrap enabled:hover:bg-white/5 disabled:opacity-40 @max-3xl:px-2"
             >
-              <CopyCheck size={15} /> <span className="@max-3xl:hidden">まとめて整理</span>
+              <CopyCheck size={15} /> <span className="@max-3xl:hidden">まとめて整理…</span>
             </button>
           ) : (
             // One bordered group, like the other controls.
@@ -303,32 +303,17 @@ export function Toolbar() {
             </button>
           )}
         </div>
+        {isSimilar && <SimilarLevelControl />}
         {isSimilar && groups.length > 0 && (
           <span className="text-dim">
-            {groups.length} グループ・重複 {count - groups.length} 件。各グループの先頭（解像度が最も高い画像）が残す候補です
+            {groups.length} グループ・重複 {count - groups.length} 枚。画像の「残す」で残す1枚を選べます（初期値は解像度が最も高い画像）
           </span>
         )}
         {manual && isFolder && !showSubfolders && (
           <span className="text-dim">画像をドラッグして並べ替えできます</span>
         )}
-        {tagFilter.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-dim">タグ:</span>
-          {tagFilter.map((id, i) => (
-            <Fragment key={id}>
-              {i > 0 && <span className="text-[11px] text-dim">{tagMatchAll ? "かつ" : "または"}</span>}
-              <button
-                onClick={() => toggleTagFilter(id)}
-                className="flex items-center gap-1 rounded-full bg-accent/25 px-2 py-0.5 text-xs hover:bg-accent/40"
-              >
-                {tags.find((t) => t.id === id)?.name}
-                <X size={12} />
-              </button>
-            </Fragment>
-          ))}
-        </div>
-        )}
       </div>
+      {conditions > 0 && !editingSmart && <ActiveFilters count={count} />}
     </header>
   );
 }
@@ -347,5 +332,114 @@ function InspectorToggle({ className }: { className: string }) {
     >
       {inspectorOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
     </button>
+  );
+}
+
+const LEVELS: { key: SimilarLevel; label: string; hint: string }[] = [
+  { key: "strict", label: "ほぼ同じ", hint: "リサイズや再保存だけ違う、ほぼ同一の画像" },
+  { key: "standard", label: "似ている", hint: "構図と色が同じ画像（標準）" },
+  { key: "loose", label: "やや似ている", hint: "なんとなく似ている画像まで。無関係なものも混ざります" },
+];
+
+/** Similar view: how alike two images must be to be grouped. */
+function SimilarLevelControl() {
+  const level = useStore((s) => s.similarLevel);
+  const setLevel = useStore((s) => s.setSimilarLevel);
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-dim">似ている度合い</span>
+      <div className="flex h-6 items-stretch overflow-hidden rounded-md border border-line">
+        {LEVELS.map((l, i) => (
+          <button
+            key={l.key}
+            title={l.hint}
+            onClick={() => setLevel(l.key)}
+            className={`px-2.5 whitespace-nowrap ${i > 0 ? "border-l border-line" : ""} ${
+              level === l.key ? "bg-accent/20 font-medium text-accent" : "text-dim hover:bg-white/5 hover:text-fg"
+            }`}
+          >
+            {l.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Everything currently narrowing the list, each removable, plus one "clear all". */
+function ActiveFilters({ count }: { count: number }) {
+  const search = useStore((s) => s.search);
+  const setSearch = useStore((s) => s.setSearch);
+  const tags = useStore((s) => s.tags);
+  const tagFilter = useStore((s) => s.tagFilter);
+  const tagMatchAll = useStore((s) => s.tagMatchAll);
+  const toggleTagFilter = useStore((s) => s.toggleTagFilter);
+  const minRating = useStore((s) => s.minRating);
+  const setMinRating = useStore((s) => s.setMinRating);
+  const filter = useStore((s) => s.filter);
+  const setFilter = useStore((s) => s.setFilter);
+  const clearConditions = useStore((s) => s.clearConditions);
+
+  const chips: { key: string; label: string; color?: string; clear: () => void }[] = [];
+  if (search.trim()) chips.push({ key: "search", label: `検索「${search.trim()}」`, clear: () => setSearch("") });
+  tagFilter.forEach((id, i) => {
+    const t = tags.find((x) => x.id === id);
+    chips.push({
+      key: `tag${id}`,
+      label: `${i > 0 ? (tagMatchAll ? "かつ " : "または ") : "タグ: "}${t?.name ?? ""}`,
+      color: colorHex(t?.color),
+      clear: () => toggleTagFilter(id),
+    });
+  });
+  if (minRating) chips.push({ key: "rating", label: `★${minRating} 以上`, clear: () => setMinRating(0) });
+  if (filter.exts.length)
+    chips.push({ key: "exts", label: `形式: ${filter.exts.join(", ")}`, clear: () => setFilter({ exts: [] }) });
+  if (filter.shapes.length)
+    chips.push({
+      key: "shapes",
+      label: filter.shapes.map((x) => SHAPE_LABEL[x]).join("・"),
+      clear: () => setFilter({ shapes: [] }),
+    });
+  const dims = describeDims(filter);
+  if (dims)
+    chips.push({
+      key: "dims",
+      label: `サイズ: ${dims}`,
+      clear: () => setFilter({ minWidth: null, maxWidth: null, minHeight: null, maxHeight: null }),
+    });
+  const date = describeDate(filter);
+  if (date)
+    chips.push({
+      key: "date",
+      label: `追加日: ${date}`,
+      clear: () => setFilter({ importedAfter: null, importedBefore: null }),
+    });
+  const size = describeSize(filter);
+  if (filter.minSize != null || filter.maxSize != null)
+    chips.push({ key: "size", label: `容量: ${size}`, clear: () => setFilter({ minSize: null, maxSize: null }) });
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-xs">
+      <FilterIcon size={13} className="shrink-0 text-accent" />
+      <span className="mr-1 font-medium text-accent">絞り込み中 · {count} 件</span>
+      {chips.map((c) => (
+        <button
+          key={c.key}
+          onClick={c.clear}
+          title="この条件を外す"
+          className="flex items-center gap-1 rounded-full bg-bg/60 py-0.5 pr-1.5 pl-2 hover:bg-bg"
+        >
+          {c.color && <span className="h-2 w-2 rounded-full" style={{ background: c.color }} />}
+          {c.label}
+          <X size={12} className="text-dim" />
+        </button>
+      ))}
+      <button
+        onClick={clearConditions}
+        className="ml-auto flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 font-medium text-white hover:brightness-110"
+      >
+        <X size={12} /> すべて解除
+      </button>
+    </div>
   );
 }
