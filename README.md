@@ -89,4 +89,4 @@ src-tauri/examples/seed.rs  テストデータ生成
 
 ### Windows 版のビルド
 
-`.github/workflows/build.yml` を GitHub Actions で手動実行（または `v*` タグを push）すると、macOS（Universal）と Windows のインストーラが Artifacts に出る。
+`v*` タグを push すると GitHub Actions で macOS（Apple Silicon 専用）と Windows のインストーラがビルドされ、そのタグのリリースが下書きで作られてインストーラが添付される（内容を確認して Publish）。手動実行（workflow_dispatch）の場合は Actions の Artifacts にだけ出る。
