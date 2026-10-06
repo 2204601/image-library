@@ -192,7 +192,7 @@ export function Viewer() {
         >
           <img
             key={item.id}
-            src={convertFileSrc(item.filePath)}
+            src={convertFileSrc(item.displayPath)}
             alt={item.name}
             draggable={false}
             onClick={(e) => {

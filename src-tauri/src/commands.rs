@@ -119,6 +119,8 @@ pub struct ItemView {
     item: Item,
     file_path: String,
     thumb_path: String,
+    /// What the viewer shows (a JPEG copy for HEIC / TIFF).
+    display_path: String,
 }
 
 #[tauri::command]
@@ -130,6 +132,7 @@ pub fn query_items(state: State<AppState>, query: ItemQuery) -> CmdResult<Vec<It
             .map(|item| ItemView {
                 file_path: lib.file_path(&item).display().to_string(),
                 thumb_path: lib.thumb_path(&item).display().to_string(),
+                display_path: lib.display_path(&item).display().to_string(),
                 item,
             })
             .collect())
@@ -401,12 +404,71 @@ pub fn delete_folder(state: State<AppState>, id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn move_folder(state: State<AppState>, id: String, parent_id: Option<String>) -> CmdResult<bool> {
-    with_lib(&state, |lib| db::move_folder(&lib.conn, &id, parent_id.as_deref()).map_err(err))
+    with_lib(&state, |lib| db::move_folder(&mut lib.conn, &id, parent_id.as_deref()).map_err(err))
 }
 
 #[tauri::command]
 pub fn add_to_folder(state: State<AppState>, ids: Vec<String>, folder_id: String) -> CmdResult<()> {
     with_lib(&state, |lib| db::add_to_folder(&lib.conn, &ids, &folder_id).map_err(err))
+}
+
+/// Drops a folder under `parent_id`, in front of sibling `before` (None = last).
+#[tauri::command]
+pub fn place_folder(
+    state: State<AppState>,
+    id: String,
+    parent_id: Option<String>,
+    before: Option<String>,
+) -> CmdResult<bool> {
+    with_lib(&state, |lib| {
+        db::place_folder(&mut lib.conn, &id, parent_id.as_deref(), before.as_deref()).map_err(err)
+    })
+}
+
+/// -1 / +1 = up / down one, i32::MIN / i32::MAX = to the top / bottom.
+#[tauri::command]
+pub fn shift_folder(state: State<AppState>, id: String, by: i32) -> CmdResult<()> {
+    with_lib(&state, |lib| db::shift_folder(&mut lib.conn, &id, by).map_err(err))
+}
+
+#[tauri::command]
+pub fn sort_folders_by_name(state: State<AppState>, parent_id: Option<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::sort_folders_by_name(&mut lib.conn, parent_id.as_deref()).map_err(err))
+}
+
+// -------------------------------------------------------- smart folders
+
+#[tauri::command]
+pub fn list_smart_folders(state: State<AppState>) -> CmdResult<Vec<db::SmartFolder>> {
+    with_lib(&state, |lib| db::list_smart_folders(&lib.conn).map_err(err))
+}
+
+#[tauri::command]
+pub fn create_smart_folder(state: State<AppState>, name: String, rule: db::Rule) -> CmdResult<String> {
+    with_lib(&state, |lib| db::create_smart_folder(&lib.conn, name.trim(), &rule).map_err(err))
+}
+
+#[tauri::command]
+pub fn update_smart_folder(
+    state: State<AppState>,
+    id: String,
+    name: Option<String>,
+    rule: Option<db::Rule>,
+) -> CmdResult<()> {
+    let name = name.map(|n| n.trim().to_owned()).filter(|n| !n.is_empty());
+    with_lib(&state, |lib| {
+        db::update_smart_folder(&lib.conn, &id, name.as_deref(), rule.as_ref()).map_err(err)
+    })
+}
+
+#[tauri::command]
+pub fn delete_smart_folder(state: State<AppState>, id: String) -> CmdResult<()> {
+    with_lib(&state, |lib| db::delete_smart_folder(&lib.conn, &id).map_err(err))
+}
+
+#[tauri::command]
+pub fn list_exts(state: State<AppState>) -> CmdResult<Vec<(String, i64)>> {
+    with_lib(&state, |lib| db::list_exts(&lib.conn).map_err(err))
 }
 
 #[tauri::command]

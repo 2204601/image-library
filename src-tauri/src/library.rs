@@ -36,6 +36,7 @@ impl Library {
     fn load(root: &Path) -> Result<Self, String> {
         fs::create_dir_all(root.join("images")).map_err(|e| e.to_string())?;
         fs::create_dir_all(root.join("thumbs")).map_err(|e| e.to_string())?;
+        fs::create_dir_all(root.join("previews")).map_err(|e| e.to_string())?;
         let conn = db::open(&root.join(DB_FILE)).map_err(|e| e.to_string())?;
         Ok(Self { root: root.to_path_buf(), conn })
     }
@@ -48,6 +49,14 @@ impl Library {
         self.root.join("thumbs").join(&item.thumb)
     }
 
+    /// What the viewer shows: the JPEG display copy if there is one.
+    pub fn display_path(&self, item: &Item) -> PathBuf {
+        match &item.preview {
+            Some(p) => self.root.join("previews").join(p),
+            None => self.file_path(item),
+        }
+    }
+
     /// Permanently deletes items (rows and files).
     pub fn delete_items(&self, ids: &[String]) -> Result<(), String> {
         if ids.is_empty() {
@@ -57,6 +66,9 @@ impl Library {
         for item in removed {
             let _ = fs::remove_dir_all(self.root.join("images").join(&item.id));
             let _ = fs::remove_file(self.thumb_path(&item));
+            if let Some(p) = &item.preview {
+                let _ = fs::remove_file(self.root.join("previews").join(p));
+            }
         }
         Ok(())
     }

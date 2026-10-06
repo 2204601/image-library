@@ -2,9 +2,9 @@
 // opened in a normal browser (`npm run dev`) instead of inside Tauri.
 // Mirrors the semantics of src-tauri/src/db.rs closely enough for UI work.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { Folder, Item, ItemQuery, Tag } from "../lib/api";
+import type { Folder, Item, ItemQuery, Rule, Tag } from "../lib/api";
 
-type MockItem = Omit<Item, "filePath" | "thumbPath"> & { hue: number };
+type MockItem = Omit<Item, "filePath" | "thumbPath" | "displayPath" | "preview"> & { hue: number };
 
 const items: MockItem[] = [];
 const folders: Omit<Folder, "count">[] = [];
@@ -17,6 +17,8 @@ const link = (i: string, f: string) => {
   if (!itemFolders.has(k)) itemFolders.set(k, ++posSeq);
 };
 const itemTags = new Set<string>(); // `${itemId}|${tagId}`
+const smartFolders: { id: string; name: string; rule: Rule }[] = [];
+const EXTS = ["jpg", "png", "jpg", "webp", "jpg", "heic"];
 let tagSeq = 0;
 let uid = 0;
 const id = () => `m${(++uid).toString(36)}`;
@@ -30,14 +32,15 @@ function seed() {
   ];
   for (let i = 0; i < 120; i++) {
     const [width, height] = sizes[i % 4];
+    const ext = EXTS[i % EXTS.length];
     items.push({
       id: id(),
-      name: `sample-${String(i).padStart(3, "0")}.jpg`,
-      fileName: `sample-${i}.jpg`,
-      ext: "jpg",
-      width,
-      height,
-      size: 40_000 + i * 997,
+      name: `sample-${String(i).padStart(3, "0")}.${ext}`,
+      fileName: `sample-${i}.${ext}`,
+      ext,
+      width: width * (1 + (i % 3)),
+      height: height * (1 + (i % 3)),
+      size: 40_000 + i * 997 * (i % 9) * 30,
       thumb: "",
       note: "",
       rating: i % 7 === 0 ? 3 : i % 11 === 0 ? 5 : 0,
@@ -59,7 +62,7 @@ function seed() {
       items.push({
         ...orig,
         id: id(),
-        name: orig.name.replace(".jpg", k > 1 ? ` (コピー ${k}).jpg` : " (コピー).jpg"),
+        name: orig.name.replace(/\.(\w+)$/, k > 1 ? ` (コピー ${k}).$1` : " (コピー).$1"),
         width: Math.round(orig.width / (k + 1)),
         height: Math.round(orig.height / (k + 1)),
         size: Math.round(orig.size / (k + 1)),
@@ -91,7 +94,10 @@ function svg(it: MockItem, scale: number) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
 }
 
-const view = (it: MockItem): Item => ({ ...it, filePath: svg(it, 1), thumbPath: svg(it, 3) });
+const view = (it: MockItem): Item => {
+  const filePath = svg(it, 1);
+  return { ...it, preview: null, filePath, displayPath: filePath, thumbPath: svg(it, 3) };
+};
 const inFolder = (i: string, f: string) => itemFolders.has(`${i}|${f}`);
 const hasTag = (i: string, t: number) => itemTags.has(`${i}|${t}`);
 const live = () => items.filter((i) => i.deletedAt === null);
@@ -110,7 +116,71 @@ function descendants(fid: string): string[] {
   return [fid, ...folders.filter((f) => f.parentId === fid).flatMap((f) => descendants(f.id))];
 }
 
+const aliases = (e: string) =>
+  ({ jpeg: "jpg", tiff: "tif", heif: "heic" })[e.toLowerCase()] ?? e.toLowerCase();
+
 // Simplified search (AND + "-exclude"); the real parser lives in src-tauri/src/search.rs.
+function applyRule(r: MockItem[], rule: Rule): MockItem[] {
+  for (const raw of rule.search.toLowerCase().split(/\s+/).filter(Boolean)) {
+    const neg = raw.startsWith("-") && raw.length > 1;
+    const w = neg ? raw.slice(1) : raw;
+    const hit = (i: MockItem) =>
+      i.name.toLowerCase().includes(w) ||
+      i.note.toLowerCase().includes(w) ||
+      tags.some((t) => hasTag(i.id, t.id) && t.name.toLowerCase().includes(w));
+    r = r.filter((i) => hit(i) !== neg);
+  }
+  const tagIds = rule.tagIds.filter((t) => tags.some((x) => x.id === t));
+  if (tagIds.length) {
+    const need = rule.tagMatchAll ? tagIds.length : 1;
+    r = r.filter((i) => tagIds.filter((t) => hasTag(i.id, t)).length >= need);
+  }
+  if (rule.minRating) r = r.filter((i) => i.rating >= rule.minRating);
+  const f = rule.filter;
+  if (!f) return r;
+  if (f.exts.length) r = r.filter((i) => f.exts.map(aliases).includes(aliases(i.ext)));
+  if (f.shapes.length) {
+    r = r.filter((i) =>
+      f.shapes.some((s) =>
+        s === "landscape"
+          ? i.width > i.height * 1.05
+          : s === "portrait"
+            ? i.height > i.width * 1.05
+            : i.width <= i.height * 1.05 && i.height <= i.width * 1.05,
+      ),
+    );
+  }
+  const within = (v: number, min: number | null, max: number | null) =>
+    (min == null || v >= min) && (max == null || v <= max);
+  return r.filter(
+    (i) =>
+      within(i.width, f.minWidth, f.maxWidth) &&
+      within(i.height, f.minHeight, f.maxHeight) &&
+      within(i.size, f.minSize, f.maxSize) &&
+      (f.importedAfter == null || i.importedAt >= f.importedAfter) &&
+      (f.importedBefore == null || i.importedAt < f.importedBefore),
+  );
+}
+
+/** Puts `fid` among the children of `parent`, before sibling `before` (null = last). */
+function placeFolder(fid: string, parent: string | null, before: string | null): boolean {
+  for (let c: string | null = parent; c; c = folders.find((f) => f.id === c)?.parentId ?? null) {
+    if (c === fid) return false;
+  }
+  const f = folders.splice(folders.findIndex((x) => x.id === fid), 1)[0];
+  f.parentId = parent;
+  const at = before ? folders.findIndex((x) => x.id === before) : -1;
+  folders.splice(at < 0 ? folders.length : at, 0, f);
+  return true;
+}
+
+/** Rewrites the order of `parent`'s children (array order = sibling order). */
+function reorderSiblings(parent: string | null, order: (sibs: typeof folders) => typeof folders) {
+  const slots = folders.map((f, i) => (f.parentId === parent ? i : -1)).filter((i) => i >= 0);
+  const next = order(slots.map((i) => folders[i]));
+  slots.forEach((slot, k) => (folders[slot] = next[k]));
+}
+
 function query(q: ItemQuery): Item[] {
   let r = q.view.kind === "trash" ? items.filter((i) => i.deletedAt !== null) : live();
   const v = q.view;
@@ -120,20 +190,11 @@ function query(q: ItemQuery): Item[] {
     const ids = q.includeSubfolders ? descendants(v.id) : [v.id];
     r = r.filter((i) => ids.some((f) => inFolder(i.id, f)));
   }
-  for (const raw of q.search.toLowerCase().split(/\s+/).filter(Boolean)) {
-    const neg = raw.startsWith("-") && raw.length > 1;
-    const w = neg ? raw.slice(1) : raw;
-    const hit = (i: MockItem) =>
-      i.name.toLowerCase().includes(w) ||
-      i.note.toLowerCase().includes(w) ||
-      tags.some((t) => hasTag(i.id, t.id) && t.name.toLowerCase().includes(w));
-    r = r.filter((i) => hit(i) !== neg);
+  r = applyRule(r, q);
+  if (v.kind === "smart") {
+    const sf = smartFolders.find((f) => f.id === v.id);
+    r = sf ? applyRule(r, sf.rule) : [];
   }
-  if (q.tagIds.length) {
-    const need = q.tagMatchAll ? q.tagIds.length : 1;
-    r = r.filter((i) => q.tagIds.filter((t) => hasTag(i.id, t)).length >= need);
-  }
-  if (q.minRating) r = r.filter((i) => i.rating >= q.minRating);
   if (q.sort === "manual" && v.kind === "folder") {
     const pos = (i: MockItem) => itemFolders.get(`${i.id}|${v.id}`) ?? Infinity;
     return [...r].sort((a, b) => pos(a) - pos(b)).map(view);
@@ -226,14 +287,48 @@ function handle(cmd: string, a: any): unknown {
       }
       return;
     case "supported_exts":
-      return ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
+      return ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif"];
     case "import_paths":
     case "import_bytes":
       return { imported: 0, duplicates: 0, failed: ["mock backend: import is not available in the browser"] };
     case "list_folders":
-      return [...folders]
-        .sort((x, y) => x.name.localeCompare(y.name))
-        .map((f) => ({ ...f, count: live().filter((i) => inFolder(i.id, f.id)).length }));
+      return folders.map((f) => ({ ...f, count: live().filter((i) => inFolder(i.id, f.id)).length }));
+    case "place_folder":
+      return placeFolder(a.id, a.parentId ?? null, a.before ?? null);
+    case "shift_folder": {
+      const parent = folders.find((f) => f.id === a.id)?.parentId ?? null;
+      reorderSiblings(parent, (sibs) => {
+        const from = sibs.findIndex((f) => f.id === a.id);
+        const [f] = sibs.splice(from, 1);
+        sibs.splice(Math.max(0, Math.min(sibs.length, from + a.by)), 0, f);
+        return sibs;
+      });
+      return;
+    }
+    case "sort_folders_by_name":
+      reorderSiblings(a.parentId ?? null, (sibs) => [...sibs].sort((x, y) => x.name.localeCompare(y.name)));
+      return;
+    case "list_smart_folders":
+      return smartFolders.map((f) => ({ ...f, count: applyRule(live(), f.rule).length }));
+    case "create_smart_folder": {
+      const f = { id: id(), name: a.name, rule: a.rule };
+      smartFolders.push(f);
+      return f.id;
+    }
+    case "update_smart_folder": {
+      const f = smartFolders.find((x) => x.id === a.id)!;
+      if (a.name) f.name = a.name;
+      if (a.rule) f.rule = a.rule;
+      return;
+    }
+    case "delete_smart_folder":
+      smartFolders.splice(smartFolders.findIndex((x) => x.id === a.id), 1);
+      return;
+    case "list_exts": {
+      const m = new Map<string, number>();
+      live().forEach((i) => m.set(aliases(i.ext), (m.get(aliases(i.ext)) ?? 0) + 1));
+      return [...m.entries()].sort((x, y) => y[1] - x[1]);
+    }
     case "create_folder": {
       const f = { id: id(), parentId: a.parentId ?? null, name: a.name };
       folders.push(f);
@@ -245,13 +340,8 @@ function handle(cmd: string, a: any): unknown {
     case "delete_folder":
       removeFolder(a.id);
       return;
-    case "move_folder": {
-      for (let c: string | null = a.parentId; c; c = folders.find((f) => f.id === c)?.parentId ?? null) {
-        if (c === a.id) return false;
-      }
-      folders.find((f) => f.id === a.id)!.parentId = a.parentId ?? null;
-      return true;
-    }
+    case "move_folder":
+      return placeFolder(a.id, a.parentId ?? null, null);
     case "add_to_folder":
       a.ids.forEach((i: string) => link(i, a.folderId));
       return;

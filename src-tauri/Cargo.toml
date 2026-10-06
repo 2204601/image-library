@@ -23,7 +23,7 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff"] }
 sha2 = "0.11.0"
 rayon = "1.12.0"
 walkdir = "2.5.0"
@@ -32,6 +32,8 @@ uuid = { version = "1.27.0", features = ["v4"] }
 tauri-plugin-dialog = "2.8.1"
 clipboard-rs = "0.3.5"
 tauri-plugin-drag = "2.1.1"
+resvg = "0.48"
+tempfile = "3.27.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -43,4 +45,6 @@ panic = "abort"
 strip = true
 
 [dev-dependencies]
-tempfile = "3.27.0"
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation"] }

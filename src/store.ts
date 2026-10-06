@@ -1,8 +1,12 @@
 import { create } from "zustand";
 import {
   api,
+  EMPTY_FILTER,
   type Counts,
+  type Filter,
   type Folder,
+  type Rule,
+  type SmartFolder,
   type ImportSummary,
   type Item,
   type LibraryInfo,
@@ -20,6 +24,17 @@ export type Drag =
 export interface ToastAction {
   label: string;
   onClick: () => void;
+}
+
+export type Layout = "justified" | "grid" | "waterfall" | "list";
+
+/** What the grid shows under each thumbnail. */
+export interface ShowInfo {
+  name: boolean;
+  dims: boolean;
+  rating: boolean;
+  /** File type and size. */
+  meta: boolean;
 }
 
 interface Toast {
@@ -46,6 +61,15 @@ interface State {
   /** Folder views include items from subfolders. */
   showSubfolders: boolean;
   minRating: number;
+  /** Attribute filters from the filter bar. */
+  filter: Filter;
+  filterOpen: boolean;
+  /** Smart folder whose rule is loaded into the filters for editing. */
+  editingSmart: { id: string; name: string } | null;
+  layout: Layout;
+  showInfo: ShowInfo;
+  /** Tag names copied with ⌘⇧C. */
+  tagClipboard: string[];
   /** Most recently used target folders (for Shift+D and the picker). */
   recentFolders: string[];
   /** Most recently assigned tags, newest first (suggested in the tag input). */
@@ -58,6 +82,9 @@ interface State {
 
   items: Item[];
   folders: Folder[];
+  smartFolders: SmartFolder[];
+  /** File types in the library with counts (filter bar options). */
+  exts: [string, number][];
   tags: Tag[];
   counts: Counts;
   /** Bumped after every refresh so dependents (inspector) can re-fetch. */
@@ -93,6 +120,18 @@ interface State {
   toggleSidebar: () => void;
   setShowSubfolders: (on: boolean) => void;
   setMinRating: (n: number) => void;
+  setFilter: (patch: Partial<Filter>) => void;
+  /** Resets search, tag, rating and attribute filters. */
+  clearConditions: () => void;
+  toggleFilterOpen: () => void;
+  /** The ad-hoc conditions as a smart folder rule. */
+  currentRule: () => Rule;
+  /** Loads a smart folder's rule into the filters so it can be edited. */
+  startEditSmart: (sf: SmartFolder) => void;
+  stopEditSmart: () => void;
+  setLayout: (l: Layout) => void;
+  setShowInfo: (patch: Partial<ShowInfo>) => void;
+  setTagClipboard: (names: string[]) => void;
   rememberFolders: (ids: string[]) => void;
   rememberTags: (names: string[]) => void;
   setRenamingFolder: (id: string | null) => void;
@@ -136,6 +175,35 @@ const loadNumber = (key: string, fallback: number) => {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 };
 
+const loadJson = (key: string): object => {
+  try {
+    const v = JSON.parse(load(key) ?? "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
+  }
+};
+
+/** Number of active ad-hoc conditions (for badges / "clear" buttons). */
+export function activeConditions(s: {
+  search: string;
+  tagFilter: number[];
+  minRating: number;
+  filter: Filter;
+}): number {
+  const f = s.filter;
+  return (
+    (s.search.trim() ? 1 : 0) +
+    (s.tagFilter.length ? 1 : 0) +
+    (s.minRating ? 1 : 0) +
+    (f.exts.length ? 1 : 0) +
+    (f.shapes.length ? 1 : 0) +
+    (f.minWidth != null || f.maxWidth != null || f.minHeight != null || f.maxHeight != null ? 1 : 0) +
+    (f.importedAfter != null || f.importedBefore != null ? 1 : 0) +
+    (f.minSize != null || f.maxSize != null ? 1 : 0)
+  );
+}
+
 const recentTagsKey = (root: string) => `recentTags:${root}`;
 const loadRecentTags = (root: string): number[] => {
   try {
@@ -165,6 +233,12 @@ export const useStore = create<State>((set, get) => ({
   sidebarOpen: load("sidebarOpen") !== "false",
   showSubfolders: load("showSubfolders") === "true",
   minRating: 0,
+  filter: EMPTY_FILTER,
+  filterOpen: load("filterOpen") === "true",
+  editingSmart: null,
+  layout: (["justified", "grid", "waterfall", "list"] as const).find((l) => l === load("layout")) ?? "justified",
+  showInfo: { name: true, dims: true, rating: true, meta: false, ...loadJson("showInfo") },
+  tagClipboard: [],
   recentFolders: [],
   recentTags: [],
   renamingFolder: null,
@@ -173,6 +247,8 @@ export const useStore = create<State>((set, get) => ({
 
   items: [],
   folders: [],
+  smartFolders: [],
+  exts: [],
   tags: [],
   counts: { all: 0, unfiled: 0, untagged: 0, trash: 0 },
   rev: 0,
@@ -196,6 +272,9 @@ export const useStore = create<State>((set, get) => ({
       view: { kind: "all" },
       search: "",
       tagFilter: [],
+      minRating: 0,
+      filter: EMPTY_FILTER,
+      editingSmart: null,
       recentTags: library ? loadRecentTags(library.root) : [],
       selected: new Set(),
       anchor: null,
@@ -255,6 +334,49 @@ export const useStore = create<State>((set, get) => ({
     set({ minRating });
     get().refresh();
   },
+  setFilter: (patch) => {
+    set({ filter: { ...get().filter, ...patch } });
+    get().refresh();
+  },
+  clearConditions: () => {
+    set({ search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER });
+    get().refresh();
+  },
+  toggleFilterOpen: () => {
+    const filterOpen = !get().filterOpen;
+    set({ filterOpen });
+    persist("filterOpen", String(filterOpen));
+  },
+  currentRule: () => {
+    const { search, tagFilter, tagMatchAll, minRating, filter } = get();
+    return { search, tagIds: tagFilter, tagMatchAll, minRating, filter };
+  },
+  startEditSmart: (sf) => {
+    // Edit in the "all" view so the user sees exactly what the rule matches.
+    set({
+      editingSmart: { id: sf.id, name: sf.name },
+      view: { kind: "all" },
+      search: sf.rule.search,
+      tagFilter: sf.rule.tagIds,
+      tagMatchAll: sf.rule.tagMatchAll,
+      minRating: sf.rule.minRating,
+      filter: { ...EMPTY_FILTER, ...sf.rule.filter },
+      filterOpen: true,
+      selected: new Set(),
+    });
+    get().refresh();
+  },
+  stopEditSmart: () => set({ editingSmart: null }),
+  setLayout: (layout) => {
+    set({ layout });
+    persist("layout", layout);
+  },
+  setShowInfo: (patch) => {
+    const showInfo = { ...get().showInfo, ...patch };
+    set({ showInfo });
+    persist("showInfo", JSON.stringify(showInfo));
+  },
+  setTagClipboard: (tagClipboard) => set({ tagClipboard }),
   rememberFolders: (ids) => {
     const rest = get().recentFolders.filter((f) => !ids.includes(f));
     set({ recentFolders: [...ids, ...rest].slice(0, 8) });
@@ -271,7 +393,7 @@ export const useStore = create<State>((set, get) => ({
   refresh: async () => {
     if (!get().library) return;
     const seq = ++refreshSeq;
-    const { view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating } = get();
+    const { view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating, filter } = get();
     try {
       if (view.kind === "similar") {
         set({ analyzing: true });
@@ -281,7 +403,7 @@ export const useStore = create<State>((set, get) => ({
           set({ analyzing: false });
         }
       }
-      const [items, folders, tags, counts] = await Promise.all([
+      const [items, folders, tags, counts, smartFolders, exts] = await Promise.all([
         api.queryItems({
           view,
           search,
@@ -289,12 +411,15 @@ export const useStore = create<State>((set, get) => ({
           tagMatchAll,
           includeSubfolders: showSubfolders,
           minRating,
+          filter,
           sort,
           desc,
         }),
         api.listFolders(),
         api.listTags(),
         api.getCounts(),
+        api.listSmartFolders(),
+        api.listExts(),
       ]);
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
       const present = new Set(items.map((i) => i.id));
@@ -303,7 +428,9 @@ export const useStore = create<State>((set, get) => ({
       const tagIds = new Set(tags.map((t) => t.id));
       const tagFilterNow = get().tagFilter.filter((t) => tagIds.has(t));
       const viewNow = get().view;
-      const viewGone = viewNow.kind === "folder" && !folders.some((f) => f.id === viewNow.id);
+      const viewGone =
+        (viewNow.kind === "folder" && !folders.some((f) => f.id === viewNow.id)) ||
+        (viewNow.kind === "smart" && !smartFolders.some((f) => f.id === viewNow.id));
       const folderIds = new Set(folders.map((f) => f.id));
       const byName = new Map(tags.map((t) => [t.name, t.id]));
       const fresh = pendingRecentTags.flatMap((n) => byName.get(n) ?? []);
@@ -316,6 +443,8 @@ export const useStore = create<State>((set, get) => ({
       set({
         items,
         folders,
+        smartFolders,
+        exts,
         tags,
         counts,
         selected,

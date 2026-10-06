@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod formats;
 pub mod import;
 pub mod library;
 pub mod search;
@@ -33,6 +34,14 @@ pub fn run() {
             copy_items,
             export_items,
             reorder_in_folder,
+            place_folder,
+            shift_folder,
+            sort_folders_by_name,
+            list_smart_folders,
+            create_smart_folder,
+            update_smart_folder,
+            delete_smart_folder,
+            list_exts,
             import_paths,
             import_bytes,
             index_similar,

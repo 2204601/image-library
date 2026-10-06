@@ -1,7 +1,7 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, type Item } from "./api";
-import { currentFolderId, useStore } from "../store";
+import { api, EMPTY_FILTER, type Item } from "./api";
+import { activeConditions, currentFolderId, useStore } from "../store";
 
 const st = () => useStore.getState();
 
@@ -271,4 +271,105 @@ export async function openSelection(ids: string[]) {
     if (!ok) return;
   }
   await st().run(() => api.openItems(ids));
+}
+
+// -------------------------------------------------------- smart folders
+
+/**
+ * Saves the current conditions as a new smart folder and opens it. With no
+ * conditions set yet, the new folder opens straight into editing them.
+ */
+export async function createSmartFolder() {
+  const s = st();
+  const empty = activeConditions(s) === 0;
+  try {
+    const rule = s.currentRule();
+    const id = await api.createSmartFolder("新しいスマートフォルダ", rule);
+    // The conditions now live in the folder; start it with a clean slate.
+    useStore.setState({ search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER });
+    s.setView({ kind: "smart", id });
+    if (!st().sidebarOpen) st().toggleSidebar();
+    st().setRenamingFolder(id);
+    if (empty) st().startEditSmart({ id, name: "新しいスマートフォルダ", rule, count: 0 });
+  } catch (e) {
+    s.toast(String(e), true);
+  }
+}
+
+/** Writes the edited conditions back to the smart folder being edited. */
+export async function saveEditedSmartFolder() {
+  const s = st();
+  const editing = s.editingSmart;
+  if (!editing) return;
+  try {
+    await api.updateSmartFolder(editing.id, { rule: s.currentRule() });
+    leaveSmartEdit(editing.id);
+    st().toast(`スマートフォルダ「${editing.name}」の条件を保存しました`);
+  } catch (e) {
+    s.toast(String(e), true);
+  }
+}
+
+export function cancelSmartEdit() {
+  const editing = st().editingSmart;
+  if (editing) leaveSmartEdit(editing.id);
+}
+
+function leaveSmartEdit(id: string) {
+  useStore.setState({ editingSmart: null, search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER });
+  st().setView({ kind: "smart", id });
+}
+
+export async function renameSmartFolder(id: string, name: string) {
+  await st().run(() => api.updateSmartFolder(id, { name }));
+}
+
+export async function confirmDeleteSmartFolder(id: string, name: string) {
+  const ok = await ask(`スマートフォルダ「${name}」を削除します。\n画像は削除されません。`, {
+    title: "スマートフォルダを削除",
+    kind: "warning",
+    okLabel: "削除",
+    cancelLabel: "キャンセル",
+  });
+  if (ok) await st().run(() => api.deleteSmartFolder(id));
+}
+
+// --------------------------------------------------------- folder order
+
+/** ⌘[ / ⌘] (one step) and ⌘⇧[ / ⌘⇧] (to the top / bottom). */
+export async function shiftFolder(id: string, by: -1 | 1, toEnd = false) {
+  await st().run(() => api.shiftFolder(id, toEnd ? by * 1_000_000 : by));
+  st().flashTarget(`folder:${id}`);
+}
+
+export async function sortFoldersByName(parentId: string | null) {
+  await st().run(() => api.sortFoldersByName(parentId));
+}
+
+// ------------------------------------------------------- tag clipboard
+
+/** ⌘⇧C: copies the tags of the selection (all of them, for several images). */
+export async function copyTags(ids: string[]) {
+  if (!ids.length) return;
+  try {
+    const info = await api.selectionInfo(ids);
+    const names = info.tags.map((t) => t.name);
+    st().setTagClipboard(names);
+    st().toast(names.length ? `タグ ${names.length} 件をコピーしました：${names.join("、")}` : "タグはありません");
+  } catch (e) {
+    st().toast(String(e), true);
+  }
+}
+
+/** ⌘⇧V: adds the copied tags to the selection. */
+export async function pasteTags(ids: string[]) {
+  const names = st().tagClipboard;
+  if (!ids.length) return;
+  if (!names.length) {
+    st().toast("コピーしたタグがありません（⌘⇧C でコピー）");
+    return;
+  }
+  await st().run(() => api.addTags(ids, names));
+  st().rememberTags(names);
+  st().toast(`${ids.length} 件にタグ ${names.length} 件を貼り付けました`);
 }
