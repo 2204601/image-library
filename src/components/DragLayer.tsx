@@ -48,7 +48,8 @@ function isDescendant(folders: Folder[], id: string, ancestor: string): boolean 
 
 /**
  * The drop target under the pointer, or null if this drag can't go there.
- * "folder:<id>" | "root" | "item:<id>:before|after" (manual reordering).
+ * "folder:<id>" | "root" | "item:<id>:before|after" (manual reordering)
+ * | "pos:folder:<id>:before|after" (folder reordering among siblings).
  */
 function targetAt(x: number, y: number, drag: Drag): string | null {
   const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop]");
@@ -58,7 +59,9 @@ function targetAt(x: number, y: number, drag: Drag): string | null {
     if (t.startsWith("folder:")) return t;
     if (t.startsWith("item:") && !drag.ids.includes(t.slice(5))) {
       const r = el.getBoundingClientRect();
-      return `${t}:${x < r.left + r.width / 2 ? "before" : "after"}`;
+      // List rows stack vertically; everything else flows left to right.
+      const first = el.dataset.axis === "y" ? y < r.top + r.height / 2 : x < r.left + r.width / 2;
+      return `${t}:${first ? "before" : "after"}`;
     }
     return null;
   }
@@ -69,11 +72,17 @@ function targetAt(x: number, y: number, drag: Drag): string | null {
   }
   const fid = t.slice(7);
   // A folder can't go into itself or its own subfolders.
-  return isDescendant(useStore.getState().folders, fid, drag.id) ? null : t;
+  if (isDescendant(useStore.getState().folders, fid, drag.id)) return null;
+  // Top / bottom quarter of a row: place next to it; middle: put inside it.
+  const r = el.getBoundingClientRect();
+  const rel = (y - r.top) / r.height;
+  if (rel < 0.25) return `pos:${t}:before`;
+  if (rel > 0.75) return `pos:${t}:after`;
+  return t;
 }
 
 function targetRect(target: string): DOMRect | null {
-  const base = target.replace(/:(before|after)$/, "");
+  const base = target.replace(/:(before|after)$/, "").replace(/^pos:/, "");
   return document.querySelector(`[data-drop="${CSS.escape(base)}"]`)?.getBoundingClientRect() ?? null;
 }
 
@@ -91,6 +100,16 @@ async function drop(drag: Drag, target: string) {
     await reorder(moving, before);
   } else if (drag.kind === "items") {
     await addToFolders(drag.ids, [target.slice(7)]);
+  } else if (target.startsWith("pos:")) {
+    // "pos:folder:<id>:before|after" → same parent as <id>, next to it.
+    const [, , id, side] = target.split(":");
+    const ref = s.folders.find((f) => f.id === id);
+    if (!ref) return;
+    const siblings = s.folders.filter((f) => f.parentId === ref.parentId && f.id !== drag.id);
+    const before =
+      side === "before" ? id : (siblings[siblings.findIndex((f) => f.id === id) + 1]?.id ?? null);
+    await s.run(() => api.placeFolder(drag.id, ref.parentId, before));
+    s.flashTarget(`folder:${drag.id}`);
   } else {
     await s.run(() => api.moveFolder(drag.id, target === "root" ? null : target.slice(7)));
     s.flashTarget(target);
@@ -110,6 +129,10 @@ function targetLabel(target: string | null, folders: Folder[]): string | null {
   if (!target) return null;
   if (target === "root") return "最上位へ移動";
   if (target.startsWith("item:")) return "ここへ並べ替え";
+  if (target.startsWith("pos:")) {
+    const name = folders.find((f) => f.id === target.split(":")[2])?.name;
+    return name ? `「${name}」の${target.endsWith("before") ? "前" : "後"}へ` : null;
+  }
   const name = folders.find((f) => f.id === target.slice(7))?.name;
   return name ? `「${name}」へ` : null;
 }

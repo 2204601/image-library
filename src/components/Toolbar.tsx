@@ -3,7 +3,9 @@ import {
   ArrowUpNarrowWide,
   ChevronDown,
   CopyCheck,
+  Filter as FilterIcon,
   FolderInput,
+  FolderSearch,
   ImagePlus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -22,8 +24,11 @@ import {
   resolveDuplicates,
   similarGroups,
 } from "../lib/actions";
-import type { Folder, SortKey, View } from "../lib/api";
-import { useStore } from "../store";
+import type { Folder, SmartFolder, SortKey, View } from "../lib/api";
+import { describeRule } from "../lib/rule";
+import { activeConditions, useStore } from "../store";
+import { FilterBar } from "./FilterBar";
+import { ViewMenu } from "./ViewMenu";
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "importedAt", label: "追加日" },
@@ -42,7 +47,7 @@ const SEARCH_HELP = [
   "  ( ) … グループ化、\"語句\" … 完全一致",
 ].join("\n");
 
-function viewTitle(view: View, folders: Folder[]): string {
+function viewTitle(view: View, folders: Folder[], smart: SmartFolder[]): string {
   switch (view.kind) {
     case "all":
       return "すべて";
@@ -56,6 +61,8 @@ function viewTitle(view: View, folders: Folder[]): string {
       return "重複の候補";
     case "folder":
       return folders.find((f) => f.id === view.id)?.name ?? "";
+    case "smart":
+      return smart.find((f) => f.id === view.id)?.name ?? "";
   }
 }
 
@@ -82,6 +89,13 @@ export function Toolbar() {
   const setShowSubfolders = useStore((s) => s.setShowSubfolders);
   const minRating = useStore((s) => s.minRating);
   const setMinRating = useStore((s) => s.setMinRating);
+  const smartFolders = useStore((s) => s.smartFolders);
+  const filterOpen = useStore((s) => s.filterOpen);
+  const toggleFilterOpen = useStore((s) => s.toggleFilterOpen);
+  const editingSmart = useStore((s) => s.editingSmart);
+  const startEditSmart = useStore((s) => s.startEditSmart);
+  const conditions = useStore(activeConditions);
+  const smart = view.kind === "smart" ? smartFolders.find((f) => f.id === view.id) : undefined;
   const isTrash = view.kind === "trash";
   const isFolder = view.kind === "folder";
   const isSimilar = view.kind === "similar";
@@ -114,7 +128,8 @@ export function Toolbar() {
             {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </button>
           <h1 className="flex min-w-0 flex-1 items-baseline gap-2 text-base font-semibold">
-            <span className="truncate">{viewTitle(view, folders)}</span>
+            {smart && <FolderSearch size={15} className="shrink-0 self-center text-accent" />}
+            <span className="truncate">{viewTitle(view, folders, smartFolders)}</span>
             <span className="shrink-0 text-xs font-normal text-dim tabular-nums">
               {selectedCount > 0 ? (
                 <span className="text-fg">
@@ -175,6 +190,21 @@ export function Toolbar() {
           >
             {desc ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
           </button>
+          <button
+            title="絞り込み（⌘⇧F）"
+            onClick={toggleFilterOpen}
+            className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md border hover:bg-white/5 ${
+              filterOpen || editingSmart ? "border-accent/60 text-accent" : "border-line"
+            }`}
+          >
+            <FilterIcon size={15} />
+            {conditions > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 animate-pop items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">
+                {conditions}
+              </span>
+            )}
+          </button>
+          <ViewMenu />
           <input
             type="range"
             min={80}
@@ -225,7 +255,20 @@ export function Toolbar() {
           <InspectorToggle className="flex @max-xl:hidden" />
         </div>
       </div>
+      {(filterOpen || editingSmart) && <FilterBar />}
       <div className="flex min-h-6 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
+        {smart && (
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="text-dim">条件:</span>
+            <span className="truncate">{describeRule(smart.rule, tags).join(" / ") || "なし（すべて）"}</span>
+            <button
+              onClick={() => startEditSmart(smart)}
+              className="shrink-0 rounded px-1.5 py-0.5 text-accent hover:bg-accent/15"
+            >
+              条件を編集
+            </button>
+          </div>
+        )}
         {isFolder && (
           <label className="flex items-center gap-1.5 text-dim hover:text-fg">
             <input

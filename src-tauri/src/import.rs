@@ -3,24 +3,26 @@
 //! afterwards in a single transaction.
 
 use crate::db::{self, NewItem};
+use crate::formats;
 use crate::library::Library;
 use crate::similar;
 use image::codecs::jpeg::JpegEncoder;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
+use image::{DynamicImage, ImageFormat};
 use rayon::prelude::*;
 use rusqlite::Connection;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use walkdir::WalkDir;
 
-pub const SUPPORTED_EXTS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp", "bmp"];
+pub use formats::SUPPORTED_EXTS;
 const THUMB_MAX: u32 = 512;
+/// Longest side of display copies (see `formats::needs_preview`).
+const PREVIEW_MAX: u32 = 4096;
 
 pub enum Source {
     /// `dirs` is the folder path to file it under, relative to the import
@@ -116,14 +118,11 @@ fn sanitize(name: &str) -> String {
     if trimmed.is_empty() { "image".into() } else { trimmed.into() }
 }
 
-fn decode(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
-    let mut decoder = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()?
-        .into_decoder()?;
-    let orientation = decoder.orientation()?;
-    let mut img = DynamicImage::from_decoder(decoder)?;
-    img.apply_orientation(orientation);
-    Ok(img)
+fn write_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> Result<(), String> {
+    let file = fs::File::create(path).map_err(|e| e.to_string())?;
+    JpegEncoder::new_with_quality(std::io::BufWriter::new(file), quality)
+        .encode_image(&img.to_rgb8())
+        .map_err(|e| e.to_string())
 }
 
 /// Writes a JPEG thumbnail, or PNG when the image has real transparency.
@@ -138,10 +137,7 @@ fn write_thumb(thumb: &DynamicImage, dir: &Path, id: &str) -> Result<String, Str
         Ok(name)
     } else {
         let name = format!("{id}.jpg");
-        let file = fs::File::create(dir.join(&name)).map_err(|e| e.to_string())?;
-        JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 85)
-            .encode_image(&thumb.to_rgb8())
-            .map_err(|e| e.to_string())?;
+        write_jpeg(thumb, &dir.join(&name), 85)?;
         Ok(name)
     }
 }
@@ -168,7 +164,8 @@ fn process(
         return Ok(Outcome::Duplicate(String::new())); // same file twice in this batch
     }
 
-    let img = decode(&data).map_err(|e| e.to_string())?;
+    let decoded = formats::decode(&data, &ext)?;
+    let img = decoded.image;
     let id = uuid::Uuid::new_v4().simple().to_string();
     let file_name = sanitize(&name);
     let item_dir = root.join("images").join(&id);
@@ -185,18 +182,36 @@ fn process(
             return Err(e);
         }
     };
+    // HEIC / TIFF: keep a JPEG the web view can always display.
+    let preview = if formats::needs_preview(&ext) {
+        let name = format!("{id}.jpg");
+        let big = if img.width().max(img.height()) > PREVIEW_MAX {
+            img.resize(PREVIEW_MAX, PREVIEW_MAX, image::imageops::FilterType::Lanczos3)
+        } else {
+            img.clone()
+        };
+        if let Err(e) = write_jpeg(&big, &root.join("previews").join(&name), 90) {
+            let _ = fs::remove_dir_all(&item_dir);
+            let _ = fs::remove_file(root.join("thumbs").join(&thumb));
+            return Err(e);
+        }
+        Some(name)
+    } else {
+        None
+    };
 
     Ok(Outcome::New(NewItem {
         id,
         name,
         file_name,
         ext,
-        width: img.width(),
-        height: img.height(),
+        width: decoded.width,
+        height: decoded.height,
         size: data.len() as i64,
         hash,
         thumb,
         phash: Some(phash),
+        preview,
     }))
 }
 
@@ -328,6 +343,7 @@ fn commit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
     use image::{Rgb, RgbImage, Rgba, RgbaImage};
 
     fn setup() -> (tempfile::TempDir, Mutex<Option<Library>>) {
@@ -491,6 +507,63 @@ mod tests {
         assert_eq!(compute_missing_phashes(&lib).unwrap(), 3);
         assert_eq!(compute_missing_phashes(&lib).unwrap(), 0);
         assert_eq!(similar(&lib), expected);
+    }
+
+    #[test]
+    fn imports_new_formats_with_display_copies() {
+        let (tmp, lib) = setup();
+        let dir = tmp.path().join("fmt");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("logo.svg"),
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="300" height="150"><circle cx="75" cy="75" r="60" fill="#09f"/></svg>"##,
+        )
+        .unwrap();
+        image::RgbImage::from_fn(80, 60, |x, y| image::Rgb([x as u8 * 3, y as u8 * 4, 90]))
+            .save(dir.join("scan.tiff"))
+            .unwrap();
+        #[cfg(target_os = "macos")]
+        let heic = std::process::Command::new("/usr/bin/sips")
+            .args(["-s", "format", "heic"])
+            .arg(dir.join("scan.tiff"))
+            .arg("--out")
+            .arg(dir.join("photo.heic"))
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        #[cfg(not(target_os = "macos"))]
+        let heic = false;
+
+        let sum = run(&lib, collect_files(std::slice::from_ref(&dir)), None, |_, _| {}).unwrap();
+        assert!(sum.failed.is_empty(), "{:?}", sum.failed);
+        assert_eq!(sum.imported, if heic { 3 } else { 2 });
+
+        let g = lib.lock().unwrap();
+        let l = g.as_ref().unwrap();
+        let items = db::query_items(&l.conn, &db::ItemQuery { sort: db::SortKey::Name, ..Default::default() }).unwrap();
+        let by = |n: &str| items.iter().find(|i| i.name == n).unwrap();
+
+        let svg = by("logo.svg");
+        assert_eq!((svg.width, svg.height), (300, 150), "SVG keeps its document size");
+        assert!(svg.preview.is_none(), "web views render SVG directly");
+        assert!(l.thumb_path(svg).is_file());
+
+        let tif = by("scan.tiff");
+        assert_eq!((tif.width, tif.height), (80, 60));
+        let p = l.display_path(tif);
+        assert!(p.starts_with(l.root.join("previews")) && p.is_file(), "TIFF gets a JPEG display copy");
+        assert_eq!(image::open(&p).unwrap().width(), 80);
+
+        if heic {
+            let h = by("photo.heic");
+            assert_eq!((h.width, h.height), (80, 60));
+            assert!(l.display_path(h).is_file());
+        }
+
+        // Deleting removes the display copy too.
+        let preview = l.display_path(tif);
+        l.delete_items(std::slice::from_ref(&tif.id)).unwrap();
+        assert!(!preview.exists());
     }
 
     #[test]

@@ -1,48 +1,40 @@
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ImagePlus, Star } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   addToLastFolder,
   copySelection,
+  copyTags,
   createFolder,
   createFolderHere,
+  createSmartFolder,
   deleteSelection,
   exportSelection,
   importFilesDialog,
   openSelection,
+  pasteTags,
   resolveDuplicates,
   setRating,
+  shiftFolder,
 } from "../lib/actions";
-import { api, type Item } from "../lib/api";
-import { currentFolderId, useStore } from "../store";
+import { api, formatBytes, type Item } from "../lib/api";
+import {
+  computeLayout,
+  GAP,
+  HEADER,
+  neighbour,
+  PAD,
+  rawAspect,
+  clampedAspect,
+  visibleRange,
+  type Placement,
+} from "../lib/layouts";
+import { currentFolderId, useStore, type ShowInfo } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 
-const PAD = 16;
-const GAP = 12;
-const LABEL = 34;
-/** Similar view: band above each group's first row. */
-const HEADER = 40;
-/** Aspect ratios outside this range are letterboxed instead of making absurd cells. */
-const MIN_AR = 0.4;
-const MAX_AR = 3;
-
-const rawAspect = (item: Item) => (item.width > 0 && item.height > 0 ? item.width / item.height : 1);
-const aspect = (item: Item) => Math.min(MAX_AR, Math.max(MIN_AR, rawAspect(item)));
-
-type Row = {
-  /** Index of the first item in the row. */
-  start: number;
-  /** Top edge in content coordinates. */
-  top: number;
-  height: number;
-  /** Left edge of each cell (content coordinates); `xs[k + 1] - GAP` is its right edge. */
-  xs: number[];
-  widths: number[];
-  /** Similar view: the row starts a group, with a header band above `top`. */
-  header: boolean;
-};
+/** Extra rows rendered above / below the viewport. */
+const OVERSCAN = 600;
 
 /** Index one past the last item of the group starting at `start`. */
 function groupEnd(items: Item[], start: number): number {
@@ -51,61 +43,60 @@ function groupEnd(items: Item[], start: number): number {
   return end;
 }
 
-/**
- * Justified layout: each row is filled edge to edge with cells in the images' own
- * aspect ratios, so there's no letterboxing. `target` (the slider) is the row height
- * the rows stay close to; the last row keeps it instead of stretching.
- */
-function justify(items: Item[], inner: number, target: number): Row[] {
-  const rows: Row[] = [];
-  const grouped = items[0]?.group !== undefined;
-  let top = PAD;
-  let i = 0;
-  while (i < items.length) {
-    // In the similar view a row never spans two groups.
-    const header = grouped && (i === 0 || items[i].group !== items[i - 1].group);
-    if (header) top += HEADER;
-    const end = grouped ? groupEnd(items, i) : items.length;
-    let sum = 0;
-    let j = i;
-    while (j < end) {
-      sum += aspect(items[j++]);
-      if (sum * target + GAP * (j - i - 1) >= inner) break;
-    }
-    const fill = (n: number, s: number) => (inner - GAP * (n - 1)) / s;
-    let full = sum * target + GAP * (j - i - 1) >= inner;
-    let height = full ? fill(j - i, sum) : target;
-    // Ending the row one image earlier may land closer to the target height.
-    if (full && j - i > 1) {
-      const without = sum - aspect(items[j - 1]);
-      const h = fill(j - i - 1, without);
-      if (h / target < target / height) {
-        j--;
-        sum = without;
-        height = h;
-      }
-    }
-    // A lone image too wide for the view shrinks; otherwise never stretch past 2×.
-    height = Math.min(height, target * 2);
-    full = full && height < target * 2;
-    // Snap edges to whole pixels so full rows end exactly at the right margin.
-    const scale = full ? (inner - GAP * (j - i - 1)) / sum : height;
-    const xs: number[] = [];
-    const widths: number[] = [];
-    let acc = 0;
-    for (let k = i; k < j; k++) {
-      const x0 = Math.round(acc);
-      acc += aspect(items[k]) * scale;
-      xs.push(PAD + x0 + GAP * (k - i));
-      widths.push(Math.max(1, Math.round(acc) - x0));
-    }
-    const h = Math.round(height);
-    rows.push({ start: i, top, height: h, xs, widths, header });
-    top += h + LABEL + GAP;
-    i = j;
-  }
-  return rows;
+function onItemPointerDown(e: React.PointerEvent, item: Item) {
+  if (e.button !== 0) return;
+  e.stopPropagation();
+  const s = useStore.getState();
+  const mod = e.metaKey || e.ctrlKey;
+  if (e.shiftKey) s.select(item.id, "range");
+  else if (mod) s.select(item.id, "toggle");
+  else if (!s.selected.has(item.id)) s.select(item.id, "only");
+  startPointerDrag(
+    e,
+    () => ({ kind: "items", ids: [...useStore.getState().selected] }),
+    // Plain click on an already-selected item narrows the selection to it.
+    () => !e.shiftKey && !mod && useStore.getState().select(item.id, "only"),
+  );
 }
+
+function Thumb({ item, fit }: { item: Item; fit: "cover" | "contain" }) {
+  return (
+    <img
+      src={convertFileSrc(item.thumbPath)}
+      loading="lazy"
+      decoding="async"
+      draggable={false}
+      alt=""
+      ref={(img) => {
+        if (img?.complete) img.classList.add("loaded");
+      }}
+      onLoad={(e) => e.currentTarget.classList.add("loaded")}
+      // Cover when the box already has the image's shape (hides sub-pixel
+      // rounding); clamped panoramas / strips and the grid layout show it whole.
+      className={`thumb h-full w-full ${
+        fit === "cover" && clampedAspect(item) === rawAspect(item) ? "object-cover" : "object-contain"
+      }`}
+    />
+  );
+}
+
+type CellProps = {
+  item: Item;
+  index: number;
+  selected: boolean;
+  dimmed: boolean;
+  width: number;
+  height: number;
+  label: number;
+  fit: "cover" | "contain";
+  info: ShowInfo;
+  /** Manual-order folder view: the cell is a drop target for reordering. */
+  reorderable: boolean;
+  /** Where the reorder drop indicator is shown, if here. */
+  insert: "before" | "after" | null;
+  /** Similar view: this is the copy that would be kept. */
+  best?: boolean;
+};
 
 const Cell = memo(function Cell({
   item,
@@ -114,46 +105,21 @@ const Cell = memo(function Cell({
   dimmed,
   width,
   height,
+  label,
+  fit,
+  info,
   reorderable,
   insert,
   best,
-}: {
-  item: Item;
-  index: number;
-  selected: boolean;
-  dimmed: boolean;
-  width: number;
-  height: number;
-  /** Manual-order folder view: the cell is a drop target for reordering. */
-  reorderable: boolean;
-  /** Where the reorder drop indicator is shown, if here. */
-  insert: "before" | "after" | null;
-  /** Similar view: this is the copy that would be kept. */
-  best?: boolean;
-}) {
-  const onPointerDown = (e: React.PointerEvent) => {
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    const s = useStore.getState();
-    const mod = e.metaKey || e.ctrlKey;
-    if (e.shiftKey) s.select(item.id, "range");
-    else if (mod) s.select(item.id, "toggle");
-    else if (!s.selected.has(item.id)) s.select(item.id, "only");
-    startPointerDrag(
-      e,
-      () => ({ kind: "items", ids: [...useStore.getState().selected] }),
-      // Plain click on an already-selected item narrows the selection to it.
-      () => !e.shiftKey && !mod && useStore.getState().select(item.id, "only"),
-    );
-  };
-
+}: CellProps) {
+  const detail = info.dims || info.rating || info.meta;
   return (
     <div
       className={`relative flex flex-col items-center transition-[opacity,transform] duration-200 ${
         dimmed ? "scale-95 opacity-35" : ""
       }`}
       style={{ width }}
-      onPointerDown={onPointerDown}
+      onPointerDown={(e) => onItemPointerDown(e, item)}
       onDoubleClick={() => useStore.getState().openViewer(index)}
       onContextMenu={(e) => showItemMenu(e, item, index)}
       data-drop={reorderable ? `item:${item.id}` : undefined}
@@ -164,22 +130,7 @@ const Cell = memo(function Cell({
         }`}
         style={{ width, height }}
       >
-        <img
-          src={convertFileSrc(item.thumbPath)}
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-          alt=""
-          ref={(img) => {
-            if (img?.complete) img.classList.add("loaded");
-          }}
-          onLoad={(e) => e.currentTarget.classList.add("loaded")}
-          // The cell already has the image's shape; cover hides sub-pixel rounding.
-          // Extreme panoramas / strips are clamped, so show those whole.
-          className={`thumb h-full w-full ${
-            aspect(item) === rawAspect(item) ? "object-cover" : "object-contain"
-          }`}
-        />
+        <Thumb item={item} fit={fit} />
         {best && (
           <span className="absolute top-1.5 left-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
             最高画質
@@ -192,15 +143,77 @@ const Cell = memo(function Cell({
           style={{ height, [insert === "before" ? "left" : "right"]: -GAP / 2 - 2 }}
         />
       )}
-      <div className="mt-1.5 w-full text-center">
-        <div className={`truncate text-xs ${selected ? "text-white" : ""}`}>{item.name}</div>
-        <div className="flex items-center justify-center gap-1.5 text-[11px] text-dim tabular-nums">
-          {item.rating > 0 && <Stars n={item.rating} />}
-          <span>
-            {item.width} × {item.height}
-          </span>
+      {label > 0 && (
+        <div className="mt-1.5 w-full text-center leading-[15px]">
+          {info.name && <div className={`truncate text-xs ${selected ? "text-white" : ""}`}>{item.name}</div>}
+          {detail && (
+            <div className="flex items-center justify-center gap-1.5 overflow-hidden text-[11px] whitespace-nowrap text-dim tabular-nums">
+              {info.rating && item.rating > 0 && <Stars n={item.rating} />}
+              {info.dims && (
+                <span>
+                  {item.width} × {item.height}
+                </span>
+              )}
+              {info.meta && (
+                <span className="truncate">
+                  {item.ext.toUpperCase()} · {formatBytes(item.size)}
+                </span>
+              )}
+            </div>
+          )}
         </div>
+      )}
+    </div>
+  );
+});
+
+/** List layout row: thumbnail plus the details as columns. */
+const ListRow = memo(function ListRow({
+  item,
+  index,
+  selected,
+  dimmed,
+  width,
+  height,
+  reorderable,
+  insert,
+  best,
+}: CellProps) {
+  return (
+    <div
+      className={`relative flex items-center gap-3 rounded-md px-2 text-xs transition-opacity duration-200 ${
+        selected ? "bg-accent/25 text-white" : "hover:bg-white/5"
+      } ${dimmed ? "opacity-35" : ""}`}
+      style={{ width, height }}
+      onPointerDown={(e) => onItemPointerDown(e, item)}
+      onDoubleClick={() => useStore.getState().openViewer(index)}
+      onContextMenu={(e) => showItemMenu(e, item, index)}
+      data-drop={reorderable ? `item:${item.id}` : undefined}
+      data-axis="y"
+    >
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-raised">
+        <Thumb item={item} fit="contain" />
       </div>
+      <span className="min-w-0 flex-1 truncate text-[13px]">
+        {item.name}
+        {best && <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-[10px]">最高画質</span>}
+      </span>
+      <span className="w-24 shrink-0">{item.rating > 0 && <Stars n={item.rating} />}</span>
+      <span className="w-28 shrink-0 text-right text-dim tabular-nums">
+        {item.width} × {item.height}
+      </span>
+      <span className="w-12 shrink-0 text-dim uppercase">{item.ext}</span>
+      <span className="w-20 shrink-0 text-right text-dim tabular-nums">{formatBytes(item.size)}</span>
+      <span className="w-24 shrink-0 text-right text-dim tabular-nums @max-3xl:hidden">
+        {new Date(item.importedAt).toLocaleDateString("ja-JP")}
+      </span>
+      {insert && (
+        <span
+          className={`pointer-events-none absolute right-2 left-2 h-0.5 rounded-full bg-accent shadow-[0_0_6px] shadow-accent ${
+            insert === "before" ? "-top-px" : "-bottom-px"
+          }`}
+        />
+      )}
     </div>
   );
 });
@@ -261,6 +274,8 @@ export function Grid() {
   const items = useStore((s) => s.items);
   const selected = useStore((s) => s.selected);
   const thumbSize = useStore((s) => s.thumbSize);
+  const kind = useStore((s) => s.layout);
+  const info = useStore((s) => s.showInfo);
   const viewKind = useStore((s) => s.view.kind);
   const analyzing = useStore((s) => s.analyzing);
   const filtering = useStore((s) => s.search !== "" || s.tagFilter.length > 0);
@@ -272,54 +287,79 @@ export function Grid() {
   const dropTarget = useStore((s) => (s.drag?.kind === "items" ? s.dropTarget : null));
   const scrollRef = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+  const [viewport, setViewport] = useState({ top: 0, height: 800 });
   const [marquee, setMarquee] = useState<Rect | null>(null);
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const ro = new ResizeObserver(() => setWidth(el.clientWidth));
+    const measure = () => {
+      setWidth(el.clientWidth);
+      setViewport({ top: el.scrollTop, height: el.clientHeight });
+    };
+    const ro = new ResizeObserver(measure);
     ro.observe(el);
-    setWidth(el.clientWidth);
+    measure();
     return () => ro.disconnect();
   }, []);
 
   const inner = Math.max(0, width - PAD * 2);
-  const rows = useMemo(() => (inner > 0 ? justify(items, inner, thumbSize) : []), [items, inner, thumbSize]);
-  /** Row index of each item, for ↑/↓ navigation. */
-  const rowOf = useMemo(() => {
-    const a = new Int32Array(items.length);
-    rows.forEach((r, ri) => a.fill(ri, r.start, r.start + r.xs.length));
-    return a;
-  }, [rows, items.length]);
+  const placement = useMemo<Placement>(
+    () =>
+      inner > 0
+        ? computeLayout(kind, items, inner, thumbSize, info)
+        : { boxes: [], headers: [], height: 0, label: 0, fit: "cover" },
+    [kind, items, inner, thumbSize, info],
+  );
+  const visible = useMemo(
+    () => visibleRange(placement, viewport.top - OVERSCAN, viewport.top + viewport.height + OVERSCAN),
+    [placement, viewport],
+  );
 
-  const virt = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: (i) => (rows[i].header ? HEADER : 0) + rows[i].height + LABEL + GAP,
-    overscan: 3,
-    paddingStart: PAD,
-    paddingEnd: PAD,
-  });
-  useEffect(() => virt.measure(), [rows, virt]);
+  const layout = useRef({ placement, items });
+  layout.current = { placement, items };
 
-  const layout = useRef({ rows, rowOf, items });
-  layout.current = { rows, rowOf, items };
+  // Re-render on scroll, at most once per frame.
+  const frame = useRef(0);
+  const onScroll = () => {
+    if (frame.current) return;
+    frame.current = requestAnimationFrame(() => {
+      frame.current = 0;
+      const el = scrollRef.current;
+      if (el) setViewport({ top: el.scrollTop, height: el.clientHeight });
+    });
+  };
+
+  /** Scrolls item `i` into view. */
+  const reveal = (i: number) => {
+    const el = scrollRef.current;
+    const b = layout.current.placement.boxes[i];
+    if (!el || !b) return;
+    const bottom = b.y + b.h + layout.current.placement.label;
+    if (b.y - PAD < el.scrollTop) el.scrollTop = b.y - PAD;
+    else if (bottom + PAD > el.scrollTop + el.clientHeight) el.scrollTop = bottom + PAD - el.clientHeight;
+  };
+
+  // Keep the focused item on screen when the layout changes (e.g. switching layouts).
+  useEffect(() => {
+    const s = useStore.getState();
+    const i = s.items.findIndex((it) => it.id === s.focus);
+    if (i >= 0) reveal(i);
+  }, [kind]);
 
   /** Ids of cells intersecting a rectangle in content coordinates. */
   const hitTest = (r: Rect): string[] => {
-    const { rows, items } = layout.current;
+    const { placement, items } = layout.current;
     const top = Math.min(r.y1, r.y2);
     const bottom = Math.max(r.y1, r.y2);
     const left = Math.min(r.x1, r.x2);
     const right = Math.max(r.x1, r.x2);
     const hits: string[] = [];
-    for (const row of rows) {
-      if (row.top > bottom) break;
-      if (row.top + row.height + LABEL < top) continue;
-      row.xs.forEach((x0, k) => {
-        if (x0 <= right && x0 + row.widths[k] >= left) hits.push(items[row.start + k].id);
-      });
-    }
+    placement.boxes.forEach((b, i) => {
+      if (b.x <= right && b.x + b.w >= left && b.y <= bottom && b.y + b.h + placement.label >= top) {
+        hits.push(items[i].id);
+      }
+    });
     return hits;
   };
 
@@ -401,12 +441,22 @@ export function Grid() {
 
       // Selection / navigation
       if (mod && e.code === "KeyA") return handled(), s.setSelection(s.items.map((i) => i.id));
+      if (mod && e.shiftKey && e.code === "KeyF") return handled(), s.toggleFilterOpen();
       if (mod && e.code === "KeyF") return handled(), document.getElementById("search")?.focus();
       if (mod && !e.shiftKey && e.code === "KeyJ") return handled(), s.setPicker("goto");
 
       // Organizing
       if (mod && e.shiftKey && e.code === "KeyJ") return handled(), s.selected.size && s.setPicker("add");
+      if (mod && e.shiftKey && e.altKey && e.code === "KeyN") return handled(), void createSmartFolder();
       if (mod && e.shiftKey && e.code === "KeyN") return handled(), void createFolderHere();
+      // Folder order: ⌘[ / ⌘] one step, with Shift to the top / bottom.
+      if (mod && (e.code === "BracketLeft" || e.code === "BracketRight") && s.view.kind === "folder") {
+        handled();
+        void shiftFolder(s.view.id, e.code === "BracketLeft" ? -1 : 1, e.shiftKey);
+        return;
+      }
+      if (mod && e.shiftKey && e.code === "KeyC") return handled(), void copyTags(sel());
+      if (mod && e.shiftKey && e.code === "KeyV") return handled(), void pasteTags(sel());
       if (!mod && e.shiftKey && e.code === "KeyD") return handled(), void addToLastFolder(sel());
       if (mod && !e.shiftKey && e.code === "KeyC") return handled(), void copySelection(sel());
       if (e.key === "F2" || (mod && e.code === "KeyR")) {
@@ -451,49 +501,35 @@ export function Grid() {
         s.setSelection([]);
       }
     };
-    /** ±1 = previous/next item, ±2 = the cell above/below nearest horizontally. */
+    /** ±1 = previous/next item, ±2 = the box above/below (layout-aware). */
     const move = (d: number, extend: boolean) => {
       const s = useStore.getState();
-      const { rows, rowOf } = layout.current;
-      if (!s.items.length || !rows.length) return;
+      const { placement } = layout.current;
+      if (!s.items.length || !placement.boxes.length) return;
       const cur = s.items.findIndex((i) => i.id === s.focus);
       let next: number;
       if (cur < 0) next = 0;
       else if (Math.abs(d) === 1) next = Math.min(s.items.length - 1, Math.max(0, cur + d));
-      else {
-        const ri = rowOf[cur];
-        const target = rows[ri + Math.sign(d)];
-        if (!target) next = d < 0 ? 0 : s.items.length - 1;
-        else {
-          const row = rows[ri];
-          const k = cur - row.start;
-          const mid = row.xs[k] + row.widths[k] / 2;
-          let best = 0;
-          target.xs.forEach((x, j) => {
-            const m = x + target.widths[j] / 2;
-            const b = target.xs[best] + target.widths[best] / 2;
-            if (Math.abs(m - mid) < Math.abs(b - mid)) best = j;
-          });
-          next = target.start + best;
-        }
-      }
+      else next = neighbour(placement, cur, d < 0 ? "up" : "down");
       s.select(s.items[next].id, extend ? "range" : "only");
-      virt.scrollToIndex(layout.current.rowOf[next]);
+      reveal(next);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [virt]);
+  }, []);
 
+  const Comp = kind === "list" ? ListRow : Cell;
   return (
     <div
       ref={scrollRef}
-      className="relative min-h-0 flex-1 overflow-y-auto"
+      className="@container relative min-h-0 flex-1 overflow-y-auto"
+      onScroll={onScroll}
       onPointerDown={onBackgroundPointerDown}
     >
       {items.length === 0 ? (
         <Empty kind={viewKind} filtering={filtering} analyzing={analyzing} />
       ) : (
-        <div style={{ height: virt.getTotalSize(), position: "relative" }}>
+        <div style={{ height: placement.height, position: "relative" }}>
           {marquee && (
             <div
               className="pointer-events-none absolute z-10 rounded-sm border border-accent bg-accent/15"
@@ -505,33 +541,36 @@ export function Grid() {
               }}
             />
           )}
-          {virt.getVirtualItems().map((v) => {
-            const row = rows[v.index];
+          {placement.headers.map((h) => (
+            <div key={`h${h.start}`} className="absolute left-0" style={{ top: h.y, width }}>
+              <GroupHeader items={items} start={h.start} selected={selected} />
+            </div>
+          ))}
+          {visible.map((i) => {
+            const item = items[i];
+            const b = placement.boxes[i];
             return (
-              <div key={v.key} className="absolute left-0" style={{ top: v.start, width }}>
-                {row.header && (
-                  <GroupHeader items={items} start={row.start} selected={selected} />
-                )}
-                <div className="flex" style={{ gap: GAP, paddingLeft: PAD, height: row.height + LABEL }}>
-                  {items.slice(row.start, row.start + row.xs.length).map((item, j) => (
-                    <Cell
-                      key={item.id}
-                      item={item}
-                      index={row.start + j}
-                      selected={selected.has(item.id)}
-                      dimmed={dragging.has(item.id)}
-                      width={row.widths[j]}
-                      height={row.height}
-                      reorderable={reorderable}
-                      insert={
-                        dropTarget?.startsWith(`item:${item.id}:`)
-                          ? (dropTarget.slice(-6) === "before" ? "before" : "after")
-                          : null
-                      }
-                      best={item.group !== undefined && row.header && j === 0}
-                    />
-                  ))}
-                </div>
+              <div key={item.id} className="absolute" style={{ left: b.x, top: b.y }}>
+                <Comp
+                  item={item}
+                  index={i}
+                  selected={selected.has(item.id)}
+                  dimmed={dragging.has(item.id)}
+                  width={b.w}
+                  height={b.h}
+                  label={placement.label}
+                  fit={placement.fit}
+                  info={info}
+                  reorderable={reorderable}
+                  insert={
+                    dropTarget?.startsWith(`item:${item.id}:`)
+                      ? dropTarget.endsWith("before")
+                        ? "before"
+                        : "after"
+                      : null
+                  }
+                  best={item.group !== undefined && (i === 0 || items[i - 1].group !== item.group)}
+                />
               </div>
             );
           })}

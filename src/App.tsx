@@ -102,7 +102,7 @@ export default function App() {
             <Grid />
           </main>
           <div
-            className={`shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
+            className={`flex shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
               inspectorOpen ? "w-72" : "w-0"
             }`}
           >

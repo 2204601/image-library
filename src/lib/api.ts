@@ -19,8 +19,12 @@ export interface Item {
   rating: number;
   importedAt: number;
   deletedAt: number | null;
+  /** JPEG display copy for HEIC / TIFF. */
+  preview: string | null;
   filePath: string;
   thumbPath: string;
+  /** What the viewer shows: the display copy if any, else the original. */
+  displayPath: string;
   /** Similar view only: items with the same number look alike. Best copy first. */
   group?: number;
 }
@@ -31,7 +35,55 @@ export type View =
   | { kind: "untagged" }
   | { kind: "trash" }
   | { kind: "similar" }
-  | { kind: "folder"; id: string };
+  | { kind: "folder"; id: string }
+  | { kind: "smart"; id: string };
+
+export type Shape = "landscape" | "portrait" | "square";
+
+/** Attribute filters (the filter bar). Empty / null = no restriction. */
+export interface Filter {
+  exts: string[];
+  shapes: Shape[];
+  minWidth: number | null;
+  maxWidth: number | null;
+  minHeight: number | null;
+  maxHeight: number | null;
+  /** ms; after inclusive, before exclusive. */
+  importedAfter: number | null;
+  importedBefore: number | null;
+  /** bytes */
+  minSize: number | null;
+  maxSize: number | null;
+}
+
+export const EMPTY_FILTER: Filter = {
+  exts: [],
+  shapes: [],
+  minWidth: null,
+  maxWidth: null,
+  minHeight: null,
+  maxHeight: null,
+  importedAfter: null,
+  importedBefore: null,
+  minSize: null,
+  maxSize: null,
+};
+
+/** Saved conditions of a smart folder (same shape as the ad-hoc ones). */
+export interface Rule {
+  search: string;
+  tagIds: number[];
+  tagMatchAll: boolean;
+  minRating: number;
+  filter: Filter;
+}
+
+export interface SmartFolder {
+  id: string;
+  name: string;
+  rule: Rule;
+  count: number;
+}
 
 export type SortKey = "importedAt" | "name" | "size" | "dimensions" | "rating" | "manual";
 
@@ -43,6 +95,7 @@ export interface ItemQuery {
   tagMatchAll: boolean;
   includeSubfolders: boolean;
   minRating: number;
+  filter: Filter;
   sort: SortKey;
   desc: boolean;
 }
@@ -120,6 +173,17 @@ export const api = {
   addToFolder: (ids: string[], folderId: string) => invoke<void>("add_to_folder", { ids, folderId }),
   reorderInFolder: (folderId: string, ids: string[], before: string | null) =>
     invoke<void>("reorder_in_folder", { folderId, ids, before }),
+  placeFolder: (id: string, parentId: string | null, before: string | null) =>
+    invoke<boolean>("place_folder", { id, parentId, before }),
+  /** -1 / +1 = up / down one; very large values move to the top / bottom. */
+  shiftFolder: (id: string, by: number) => invoke<void>("shift_folder", { id, by }),
+  sortFoldersByName: (parentId: string | null) => invoke<void>("sort_folders_by_name", { parentId }),
+  listSmartFolders: () => invoke<SmartFolder[]>("list_smart_folders"),
+  createSmartFolder: (name: string, rule: Rule) => invoke<string>("create_smart_folder", { name, rule }),
+  updateSmartFolder: (id: string, patch: { name?: string; rule?: Rule }) =>
+    invoke<void>("update_smart_folder", { id, name: patch.name ?? null, rule: patch.rule ?? null }),
+  deleteSmartFolder: (id: string) => invoke<void>("delete_smart_folder", { id }),
+  listExts: () => invoke<[string, number][]>("list_exts"),
   removeFromFolder: (ids: string[], folderId: string) =>
     invoke<void>("remove_from_folder", { ids, folderId }),
 

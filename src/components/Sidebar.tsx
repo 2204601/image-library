@@ -4,6 +4,7 @@ import {
   Copy,
   Folder as FolderIcon,
   FolderPlus,
+  FolderSearch,
   Images,
   Inbox,
   Library,
@@ -15,14 +16,19 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   confirmDeleteFolder,
+  confirmDeleteSmartFolder,
   confirmDeleteTag,
   createFolder,
   createLibraryDialog,
+  createSmartFolder,
   emptyTrash,
   openLibraryDialog,
+  renameSmartFolder,
+  shiftFolder,
+  sortFoldersByName,
 } from "../lib/actions";
 import { api, type Folder, type View } from "../lib/api";
-import { useStore } from "../store";
+import { activeConditions, useStore } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 
@@ -43,7 +49,7 @@ function saveCollapsed(root: string, c: Set<string>) {
 }
 
 const sameView = (a: View, b: View) =>
-  a.kind === b.kind && (a.kind !== "folder" || (b.kind === "folder" && a.id === b.id));
+  a.kind === b.kind && (!("id" in a) || ("id" in b && a.id === b.id));
 
 /** Drop highlight + post-drop pulse for a sidebar row with `data-drop={dropId}`. */
 function useDropState(dropId: string | undefined) {
@@ -72,6 +78,10 @@ function Row({
   count?: number;
 } & React.HTMLAttributes<HTMLDivElement>) {
   const { over, flash } = useDropState(dropId);
+  // Folder reordering: a line above / below the row.
+  const insert = useStore((s) =>
+    dropId && s.drag && s.dropTarget?.startsWith(`pos:${dropId}:`) ? s.dropTarget.slice(-6) : null,
+  );
   return (
     <div
       {...rest}
@@ -89,6 +99,14 @@ function Row({
         <span
           key={`pulse-${flash}`}
           className="pointer-events-none absolute inset-0 animate-drop-pulse rounded-md"
+        />
+      )}
+      {insert && (
+        <span
+          className={`pointer-events-none absolute right-1 h-0.5 rounded-full bg-accent shadow-[0_0_6px] shadow-accent ${
+            insert === "before" ? "-top-px" : "-bottom-px"
+          }`}
+          style={{ left: 4 + depth * 14 }}
         />
       )}
       {children}
@@ -250,6 +268,12 @@ function FolderTree() {
                   ? [{ label: "最上位へ移動", onClick: () => run(() => api.moveFolder(f.id, null)) }]
                   : []),
                 { separator: true },
+                { label: "上へ", hint: "⌘[", onClick: () => shiftFolder(f.id, -1) },
+                { label: "下へ", hint: "⌘]", onClick: () => shiftFolder(f.id, 1) },
+                ...(kids
+                  ? [{ label: "サブフォルダを名前順に並べ替え", onClick: () => sortFoldersByName(f.id) }]
+                  : []),
+                { separator: true },
                 { label: "削除", danger: true, onClick: () => confirmDeleteFolder(f.id, f.name) },
               ])
             }
@@ -275,6 +299,12 @@ function FolderTree() {
   return (
     <Section
       title="フォルダ"
+      onContextMenu={(e) =>
+        showMenu(e, [
+          { label: "フォルダを作成", hint: "⌘⇧N", onClick: () => create(null) },
+          { label: "最上位のフォルダを名前順に並べ替え", onClick: () => sortFoldersByName(null) },
+        ])
+      }
       action={
         <button title="フォルダを作成（⌘⇧N）" className="text-dim hover:text-fg" onClick={() => create(null)}>
           <FolderPlus size={15} />
@@ -303,20 +333,88 @@ function FolderTree() {
 function Section({
   title,
   action,
+  onContextMenu,
   children,
 }: {
   title: string;
   action?: React.ReactNode;
+  onContextMenu?: (e: React.MouseEvent) => void;
   children: React.ReactNode;
 }) {
   return (
     <div className="mt-4">
-      <div className="mb-1 flex items-center justify-between px-2 text-xs font-semibold tracking-wide text-dim">
+      <div
+        onContextMenu={onContextMenu}
+        className="mb-1 flex items-center justify-between px-2 text-xs font-semibold tracking-wide text-dim"
+      >
         <span>{title}</span>
         {action}
       </div>
       {children}
     </div>
+  );
+}
+
+function SmartFolderList() {
+  const smartFolders = useStore((s) => s.smartFolders);
+  const view = useStore((s) => s.view);
+  const setView = useStore((s) => s.setView);
+  const editing = useStore((s) => s.renamingFolder);
+  const setEditing = useStore((s) => s.setRenamingFolder);
+  const startEditSmart = useStore((s) => s.startEditSmart);
+  const hasConditions = useStore((s) => activeConditions(s) > 0);
+  const showMenu = useMenu((s) => s.show);
+
+  return (
+    <Section
+      title="スマートフォルダ"
+      action={
+        <button
+          title={hasConditions ? "今の条件をスマートフォルダとして保存（⌘⇧⌥N）" : "スマートフォルダを作成（⌘⇧⌥N）"}
+          className="text-dim hover:text-fg"
+          onClick={() => createSmartFolder()}
+        >
+          <FolderPlus size={15} />
+        </button>
+      }
+    >
+      {smartFolders.length === 0 && (
+        <p className="px-2 py-1 text-xs leading-relaxed text-dim">
+          絞り込み（⌘⇧F）の条件を保存すると、当てはまる画像が自動で集まります
+        </p>
+      )}
+      {smartFolders.map((sf) => (
+        <Row
+          key={sf.id}
+          active={sameView(view, { kind: "smart", id: sf.id })}
+          icon={<FolderSearch size={15} />}
+          label={
+            editing === sf.id ? (
+              <InlineEdit
+                value={sf.name}
+                onDone={(v) => {
+                  setEditing(null);
+                  if (v && v.trim() && v !== sf.name) renameSmartFolder(sf.id, v);
+                }}
+              />
+            ) : (
+              sf.name
+            )
+          }
+          count={sf.count}
+          onClick={() => setView({ kind: "smart", id: sf.id })}
+          onDoubleClick={() => setEditing(sf.id)}
+          onContextMenu={(e) =>
+            showMenu(e, [
+              { label: "条件を編集", onClick: () => startEditSmart(sf) },
+              { label: "名前を変更", hint: "F2", onClick: () => setEditing(sf.id) },
+              { separator: true },
+              { label: "削除", danger: true, onClick: () => confirmDeleteSmartFolder(sf.id, sf.name) },
+            ])
+          }
+        />
+      ))}
+    </Section>
   );
 }
 
@@ -444,6 +542,7 @@ export function Sidebar() {
           />
         ))}
         <FolderTree />
+        <SmartFolderList />
         <TagList />
       </nav>
     </aside>

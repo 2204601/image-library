@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 3;
+const SCHEMA_VERSION: i32 = 4;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -30,12 +30,49 @@ pub fn open(path: &std::path::Path) -> DbResult<Connection> {
     Ok(conn)
 }
 
+fn has_column(conn: &Connection, table: &str, column: &str) -> DbResult<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let names = stmt.query_map([], |r| r.get::<_, String>(1))?;
+    for name in names {
+        if name? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Adds a column unless it already exists. Returns whether it was added, so
+/// one-time seeding can be skipped when a step runs again.
+fn add_column(conn: &Connection, table: &str, column: &str, decl: &str) -> DbResult<bool> {
+    if has_column(conn, table, column)? {
+        return Ok(false);
+    }
+    conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {decl}"))?;
+    Ok(true)
+}
+
+/// Brings the schema up to `SCHEMA_VERSION`.
+///
+/// Every step is safe to run again: an older build of the app that opens a
+/// newer library leaves the extra columns in place but may lower
+/// `user_version`, so the steps check what exists instead of trusting the
+/// number. Each step runs in its own transaction and records its version, and
+/// the version is never lowered here.
 pub fn migrate(conn: &Connection) -> DbResult<()> {
     let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version < 1 {
-        conn.execute_batch(
-            "BEGIN;
-             CREATE TABLE items (
+    let step = |target: i32, f: &dyn Fn(&Connection) -> DbResult<()>| -> DbResult<()> {
+        if version >= target {
+            return Ok(());
+        }
+        let tx = conn.unchecked_transaction()?; // rolled back on error (drop)
+        f(&tx)?;
+        tx.pragma_update(None, "user_version", target)?;
+        tx.commit()
+    };
+
+    step(1, &|c| {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS items (
                id          TEXT PRIMARY KEY,
                name        TEXT NOT NULL,
                file_name   TEXT NOT NULL,
@@ -49,58 +86,82 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
                imported_at INTEGER NOT NULL,
                deleted_at  INTEGER
              );
-             CREATE INDEX idx_items_hash ON items(hash);
-             CREATE INDEX idx_items_deleted ON items(deleted_at, imported_at);
+             CREATE INDEX IF NOT EXISTS idx_items_hash ON items(hash);
+             CREATE INDEX IF NOT EXISTS idx_items_deleted ON items(deleted_at, imported_at);
 
-             CREATE TABLE folders (
+             CREATE TABLE IF NOT EXISTS folders (
                id        TEXT PRIMARY KEY,
                parent_id TEXT REFERENCES folders(id) ON DELETE CASCADE,
                name      TEXT NOT NULL
              );
-             CREATE INDEX idx_folders_parent ON folders(parent_id);
+             CREATE INDEX IF NOT EXISTS idx_folders_parent ON folders(parent_id);
 
-             CREATE TABLE item_folders (
+             CREATE TABLE IF NOT EXISTS item_folders (
                item_id   TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
                folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
                PRIMARY KEY (item_id, folder_id)
              );
-             CREATE INDEX idx_item_folders_folder ON item_folders(folder_id);
+             CREATE INDEX IF NOT EXISTS idx_item_folders_folder ON item_folders(folder_id);
 
-             CREATE TABLE tags (
+             CREATE TABLE IF NOT EXISTS tags (
                id   INTEGER PRIMARY KEY,
                name TEXT NOT NULL UNIQUE COLLATE NOCASE
              );
 
-             CREATE TABLE item_tags (
+             CREATE TABLE IF NOT EXISTS item_tags (
                item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
                tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
                PRIMARY KEY (item_id, tag_id)
              );
-             CREATE INDEX idx_item_tags_tag ON item_tags(tag_id);
-             COMMIT;",
-        )?;
-    }
-    if version < 2 {
-        // Star ratings, and a per-folder position for manual ordering.
-        conn.execute_batch(
-            "BEGIN;
-             ALTER TABLE items ADD COLUMN rating INTEGER NOT NULL DEFAULT 0;
-             ALTER TABLE item_folders ADD COLUMN position REAL;
-             UPDATE item_folders SET position = rowid;
-             COMMIT;",
-        )?;
-    }
-    if version < 3 {
-        // Perceptual hash for near-duplicate detection; NULL = not computed yet.
-        // pcolor = average colour 0xRRGGBB (see similar.rs).
-        conn.execute_batch(
-            "BEGIN;
-             ALTER TABLE items ADD COLUMN phash INTEGER;
-             ALTER TABLE items ADD COLUMN pcolor INTEGER;
-             COMMIT;",
-        )?;
-    }
-    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+             CREATE INDEX IF NOT EXISTS idx_item_tags_tag ON item_tags(tag_id);",
+        )
+    })?;
+
+    // Star ratings, and a per-folder position for manual ordering.
+    step(2, &|c| {
+        add_column(c, "items", "rating", "INTEGER NOT NULL DEFAULT 0")?;
+        if add_column(c, "item_folders", "position", "REAL")? {
+            c.execute_batch("UPDATE item_folders SET position = rowid")?;
+        }
+        Ok(())
+    })?;
+
+    // Perceptual hash for near-duplicate detection; NULL = not computed yet.
+    // pcolor = average colour 0xRRGGBB (see similar.rs).
+    step(3, &|c| {
+        add_column(c, "items", "phash", "INTEGER")?;
+        add_column(c, "items", "pcolor", "INTEGER")?;
+        Ok(())
+    })?;
+
+    // - items.preview: JPEG display copy for formats the web view can't show.
+    // - folders.sort_order: user-defined order among siblings (seeded A→Z).
+    // - smart_folders: saved conditions (`rule` is a JSON-encoded `Rule`).
+    step(4, &|c| {
+        add_column(c, "items", "preview", "TEXT")?;
+        if add_column(c, "folders", "sort_order", "REAL")? {
+            c.execute_batch(
+                "UPDATE folders SET sort_order = (
+                   SELECT COUNT(*) FROM folders o
+                   WHERE o.parent_id IS folders.parent_id
+                     AND (o.name < folders.name COLLATE NOCASE
+                          OR (o.name = folders.name COLLATE NOCASE AND o.id < folders.id)))",
+            )?;
+        }
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS smart_folders (
+               id         TEXT PRIMARY KEY,
+               name       TEXT NOT NULL,
+               rule       TEXT NOT NULL,
+               sort_order REAL NOT NULL
+             )",
+        )
+    })?;
+    // New steps go above; the last one must be SCHEMA_VERSION.
+    debug_assert!(
+        conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
+        "add a migrate() step for SCHEMA_VERSION"
+    );
     Ok(())
 }
 
@@ -121,6 +182,9 @@ pub struct Item {
     pub rating: u8,
     pub imported_at: i64,
     pub deleted_at: Option<i64>,
+    /// File name in `previews/` of a JPEG display copy, if the original
+    /// format can't be shown by the web view.
+    pub preview: Option<String>,
     /// Similar view only: which group of look-alikes the item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<u32>,
@@ -139,6 +203,7 @@ pub struct NewItem {
     pub thumb: String,
     /// Perceptual hash and average colour (see similar.rs).
     pub phash: Option<(u64, u32)>,
+    pub preview: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -152,6 +217,48 @@ pub enum View {
     Folder { id: String },
     /// Groups of images that look alike (likely duplicates).
     Similar,
+    /// Items matching a smart folder's saved rule.
+    Smart { id: String },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub enum Shape {
+    Landscape,
+    Portrait,
+    Square,
+}
+
+/// Attribute filters (the filter bar). Empty / None = no restriction.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Filter {
+    /// File types, e.g. "jpg" (also matches .jpeg), "png".
+    pub exts: Vec<String>,
+    /// Any of these shapes. Square = sides within 5% of each other.
+    pub shapes: Vec<Shape>,
+    pub min_width: Option<u32>,
+    pub max_width: Option<u32>,
+    pub min_height: Option<u32>,
+    pub max_height: Option<u32>,
+    /// Import time range in ms; `after` inclusive, `before` exclusive.
+    pub imported_after: Option<i64>,
+    pub imported_before: Option<i64>,
+    /// File size range in bytes (inclusive).
+    pub min_size: Option<i64>,
+    pub max_size: Option<i64>,
+}
+
+/// A set of conditions. Ad-hoc queries are built from the toolbar state;
+/// smart folders store one as JSON.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Rule {
+    pub search: String,
+    pub tag_ids: Vec<i64>,
+    pub tag_match_all: bool,
+    pub min_rating: u8,
+    pub filter: Filter,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -184,12 +291,26 @@ pub struct ItemQuery {
     pub include_subfolders: bool,
     #[serde(default)]
     pub min_rating: u8,
+    #[serde(default)]
+    pub filter: Filter,
     pub sort: SortKey,
     pub desc: bool,
 }
 
+impl ItemQuery {
+    fn rule(&self) -> Rule {
+        Rule {
+            search: self.search.clone(),
+            tag_ids: self.tag_ids.clone(),
+            tag_match_all: self.tag_match_all,
+            min_rating: self.min_rating,
+            filter: self.filter.clone(),
+        }
+    }
+}
+
 const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items.width, items.height, \
-     items.size, items.thumb, items.note, items.rating, items.imported_at, items.deleted_at";
+     items.size, items.thumb, items.note, items.rating, items.imported_at, items.deleted_at, items.preview";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     Ok(Item {
@@ -205,6 +326,7 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         rating: r.get(9)?,
         imported_at: r.get(10)?,
         deleted_at: r.get(11)?,
+        preview: r.get(12)?,
         group: None,
     })
 }
@@ -224,6 +346,91 @@ fn escape_like(s: &str) -> String {
 
 fn placeholders(n: usize) -> String {
     vec!["?"; n].join(",")
+}
+
+/// Spellings that count as the same file type.
+fn ext_aliases(ext: &str) -> Vec<String> {
+    let e = ext.trim().trim_start_matches('.').to_ascii_lowercase();
+    match e.as_str() {
+        "jpg" | "jpeg" => vec!["jpg".into(), "jpeg".into()],
+        "tif" | "tiff" => vec!["tif".into(), "tiff".into()],
+        "heic" | "heif" => vec!["heic".into(), "heif".into()],
+        _ => vec![e],
+    }
+}
+
+/// Canonical name of a file type for display / filters ("jpeg" -> "jpg").
+pub fn canonical_ext(ext: &str) -> String {
+    ext_aliases(ext).swap_remove(0)
+}
+
+/// Adds the WHERE clauses for `rule`.
+fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql>>) {
+    if let Some(expr) = search::parse(&rule.search) {
+        let sql = search::to_sql(&expr, &mut |word| {
+            let pat = escape_like(word);
+            args.push(Box::new(pat.clone()));
+            args.push(Box::new(pat.clone()));
+            args.push(Box::new(pat));
+            "(items.name LIKE ? ESCAPE '\\' OR items.note LIKE ? ESCAPE '\\' OR EXISTS (
+               SELECT 1 FROM item_tags it JOIN tags t ON t.id = it.tag_id
+               WHERE it.item_id = items.id AND t.name LIKE ? ESCAPE '\\'))"
+                .into()
+        });
+        wheres.push(sql);
+    }
+
+    if rule.min_rating > 0 {
+        wheres.push("items.rating >= ?".into());
+        args.push(Box::new(rule.min_rating));
+    }
+
+    if !rule.tag_ids.is_empty() {
+        let marks = placeholders(rule.tag_ids.len());
+        // AND: the item carries every selected tag; OR: at least one of them.
+        let need = if rule.tag_match_all { rule.tag_ids.len() } else { 1 };
+        wheres.push(format!(
+            "(SELECT COUNT(*) FROM item_tags t WHERE t.item_id = items.id AND t.tag_id IN ({marks})) >= {need}"
+        ));
+        for tag_id in &rule.tag_ids {
+            args.push(Box::new(*tag_id));
+        }
+    }
+
+    let f = &rule.filter;
+    if !f.exts.is_empty() {
+        let exts: Vec<String> = f.exts.iter().flat_map(|e| ext_aliases(e)).collect();
+        wheres.push(format!("lower(items.ext) IN ({})", placeholders(exts.len())));
+        args.extend(exts.into_iter().map(|e| Box::new(e) as Box<dyn ToSql>));
+    }
+    if !f.shapes.is_empty() {
+        let parts: Vec<&str> = f
+            .shapes
+            .iter()
+            .map(|s| match s {
+                Shape::Landscape => "items.width > items.height * 1.05",
+                Shape::Portrait => "items.height > items.width * 1.05",
+                Shape::Square => {
+                    "(items.width <= items.height * 1.05 AND items.height <= items.width * 1.05)"
+                }
+            })
+            .collect();
+        wheres.push(format!("({})", parts.join(" OR ")));
+    }
+    let mut range = |col: &str, op: &str, v: Option<i64>| {
+        if let Some(v) = v {
+            wheres.push(format!("{col} {op} ?"));
+            args.push(Box::new(v));
+        }
+    };
+    range("items.width", ">=", f.min_width.map(i64::from));
+    range("items.width", "<=", f.max_width.map(i64::from));
+    range("items.height", ">=", f.min_height.map(i64::from));
+    range("items.height", "<=", f.max_height.map(i64::from));
+    range("items.imported_at", ">=", f.imported_after);
+    range("items.imported_at", "<", f.imported_before);
+    range("items.size", ">=", f.min_size);
+    range("items.size", "<=", f.max_size);
 }
 
 const SUBFOLDERS_CTE: &str = "WITH RECURSIVE sub(id) AS (
@@ -271,37 +478,14 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
             );
             args.push(Box::new(id.clone()));
         }
-        View::All | View::Trash | View::Similar => {}
+        View::All | View::Trash | View::Similar | View::Smart { .. } => {}
     }
 
-    if let Some(expr) = search::parse(&q.search) {
-        let sql = search::to_sql(&expr, &mut |word| {
-            let pat = escape_like(word);
-            args.push(Box::new(pat.clone()));
-            args.push(Box::new(pat.clone()));
-            args.push(Box::new(pat));
-            "(items.name LIKE ? ESCAPE '\\' OR items.note LIKE ? ESCAPE '\\' OR EXISTS (
-               SELECT 1 FROM item_tags it JOIN tags t ON t.id = it.tag_id
-               WHERE it.item_id = items.id AND t.name LIKE ? ESCAPE '\\'))"
-                .into()
-        });
-        wheres.push(sql);
-    }
-
-    if q.min_rating > 0 {
-        wheres.push("items.rating >= ?".into());
-        args.push(Box::new(q.min_rating));
-    }
-
-    if !q.tag_ids.is_empty() {
-        let marks = vec!["?"; q.tag_ids.len()].join(", ");
-        // AND: the item carries every selected tag; OR: at least one of them.
-        let need = if q.tag_match_all { q.tag_ids.len() } else { 1 };
-        wheres.push(format!(
-            "(SELECT COUNT(*) FROM item_tags t WHERE t.item_id = items.id AND t.tag_id IN ({marks})) >= {need}"
-        ));
-        for tag_id in &q.tag_ids {
-            args.push(Box::new(*tag_id));
+    push_rule(&q.rule(), &mut wheres, &mut args);
+    if let View::Smart { id } = &q.view {
+        match load_rule(conn, id)? {
+            Some(rule) => push_rule(&rule, &mut wheres, &mut args),
+            None => wheres.push("0".into()), // folder was deleted
         }
     }
 
@@ -408,8 +592,8 @@ pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
 
 pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
     tx.execute(
-        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             it.id,
             it.name,
@@ -422,7 +606,8 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
             it.thumb,
             imported_at,
             it.phash.map(|(h, _)| h as i64),
-            it.phash.map(|(_, c)| c)
+            it.phash.map(|(_, c)| c),
+            it.preview
         ],
     )?;
     Ok(())
@@ -566,7 +751,7 @@ pub fn list_folders(conn: &Connection) -> DbResult<Vec<Folder>> {
         "SELECT f.id, f.parent_id, f.name,
            (SELECT COUNT(*) FROM item_folders x JOIN items i ON i.id = x.item_id
             WHERE x.folder_id = f.id AND i.deleted_at IS NULL)
-         FROM folders f ORDER BY f.name COLLATE NOCASE",
+         FROM folders f ORDER BY f.sort_order IS NULL, f.sort_order, f.name COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(Folder {
@@ -579,10 +764,12 @@ pub fn list_folders(conn: &Connection) -> DbResult<Vec<Folder>> {
     rows.collect()
 }
 
+/// Creates a folder at the end of its siblings.
 pub fn create_folder(conn: &Connection, name: &str, parent_id: Option<&str>) -> DbResult<String> {
     let id = uuid::Uuid::new_v4().simple().to_string();
     conn.execute(
-        "INSERT INTO folders (id, parent_id, name) VALUES (?1, ?2, ?3)",
+        "INSERT INTO folders (id, parent_id, name, sort_order) VALUES (?1, ?2, ?3,
+           (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM folders WHERE parent_id IS ?2))",
         params![id, parent_id, name],
     )?;
     Ok(id)
@@ -599,12 +786,17 @@ pub fn delete_folder(conn: &Connection, id: &str) -> DbResult<()> {
     Ok(())
 }
 
-/// Re-parents a folder. Returns false (and does nothing) if that would create a cycle.
-pub fn move_folder(conn: &Connection, id: &str, new_parent: Option<&str>) -> DbResult<bool> {
+/// Re-parents a folder (to the end of its new siblings). Returns false (and
+/// does nothing) if that would create a cycle.
+pub fn move_folder(conn: &mut Connection, id: &str, new_parent: Option<&str>) -> DbResult<bool> {
+    place_folder(conn, id, new_parent, None)
+}
+
+fn would_cycle(conn: &Connection, id: &str, new_parent: Option<&str>) -> DbResult<bool> {
     let mut cur = new_parent.map(str::to_owned);
     while let Some(c) = cur {
         if c == id {
-            return Ok(false);
+            return Ok(true);
         }
         cur = conn
             .query_row("SELECT parent_id FROM folders WHERE id = ?1", [&c], |r| {
@@ -613,11 +805,187 @@ pub fn move_folder(conn: &Connection, id: &str, new_parent: Option<&str>) -> DbR
             .optional()?
             .flatten();
     }
-    conn.execute(
-        "UPDATE folders SET parent_id = ?2 WHERE id = ?1",
-        params![id, new_parent],
+    Ok(false)
+}
+
+fn sibling_ids(conn: &Connection, parent: Option<&str>) -> DbResult<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM folders WHERE parent_id IS ?1
+         ORDER BY sort_order IS NULL, sort_order, name COLLATE NOCASE",
     )?;
+    let rows = stmt.query_map([parent], |r| r.get(0))?;
+    rows.collect()
+}
+
+fn renumber(conn: &Connection, ids: &[String]) -> DbResult<()> {
+    let mut stmt = conn.prepare("UPDATE folders SET sort_order = ?2 WHERE id = ?1")?;
+    for (i, id) in ids.iter().enumerate() {
+        stmt.execute(params![id, (i + 1) as f64])?;
+    }
+    Ok(())
+}
+
+/// Puts a folder under `parent`, in front of sibling `before` (None = last).
+/// Returns false (and does nothing) if that would create a cycle.
+pub fn place_folder(
+    conn: &mut Connection,
+    id: &str,
+    parent: Option<&str>,
+    before: Option<&str>,
+) -> DbResult<bool> {
+    if would_cycle(conn, id, parent)? {
+        return Ok(false);
+    }
+    let tx = conn.transaction()?;
+    tx.execute("UPDATE folders SET parent_id = ?2 WHERE id = ?1", params![id, parent])?;
+    let mut order = sibling_ids(&tx, parent)?;
+    order.retain(|x| x != id);
+    let at = before
+        .and_then(|b| order.iter().position(|x| x == b))
+        .unwrap_or(order.len());
+    order.insert(at, id.to_owned());
+    renumber(&tx, &order)?;
+    tx.commit()?;
     Ok(true)
+}
+
+/// Moves a folder up (-1) / down (+1) among its siblings, or to the
+/// top (`i32::MIN`) / bottom (`i32::MAX`).
+pub fn shift_folder(conn: &mut Connection, id: &str, by: i32) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    let parent: Option<String> =
+        tx.query_row("SELECT parent_id FROM folders WHERE id = ?1", [id], |r| r.get(0))?;
+    let mut order = sibling_ids(&tx, parent.as_deref())?;
+    if let Some(from) = order.iter().position(|x| x == id) {
+        let item = order.remove(from);
+        let to = (from as i64 + by as i64).clamp(0, order.len() as i64) as usize;
+        order.insert(to, item);
+        renumber(&tx, &order)?;
+    }
+    tx.commit()
+}
+
+/// Resets the children of `parent` to A→Z order.
+pub fn sort_folders_by_name(conn: &mut Connection, parent: Option<&str>) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    let ids: Vec<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT id FROM folders WHERE parent_id IS ?1 ORDER BY name COLLATE NOCASE, id",
+        )?;
+        let rows = stmt.query_map([parent], |r| r.get(0))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    renumber(&tx, &ids)?;
+    tx.commit()
+}
+
+// -------------------------------------------------------- smart folders
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SmartFolder {
+    pub id: String,
+    pub name: String,
+    pub rule: Rule,
+    pub count: i64,
+}
+
+fn load_rule(conn: &Connection, id: &str) -> DbResult<Option<Rule>> {
+    let json: Option<String> = conn
+        .query_row("SELECT rule FROM smart_folders WHERE id = ?1", [id], |r| r.get(0))
+        .optional()?;
+    Ok(json.map(|j| clean_rule(conn, serde_json::from_str(&j).unwrap_or_default())))
+}
+
+/// Drops references to tags that have since been deleted.
+fn clean_rule(conn: &Connection, mut rule: Rule) -> Rule {
+    rule.tag_ids.retain(|t| {
+        conn.query_row("SELECT 1 FROM tags WHERE id = ?1", [t], |_| Ok(()))
+            .optional()
+            .ok()
+            .flatten()
+            .is_some()
+    });
+    rule
+}
+
+fn count_rule(conn: &Connection, rule: &Rule) -> DbResult<i64> {
+    let mut wheres = vec!["items.deleted_at IS NULL".to_string()];
+    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+    push_rule(rule, &mut wheres, &mut args);
+    conn.query_row(
+        &format!("SELECT COUNT(*) FROM items WHERE {}", wheres.join(" AND ")),
+        params_from_iter(args.iter().map(|b| b.as_ref())),
+        |r| r.get(0),
+    )
+}
+
+pub fn list_smart_folders(conn: &Connection) -> DbResult<Vec<SmartFolder>> {
+    let rows: Vec<(String, String, String)> = {
+        let mut stmt =
+            conn.prepare("SELECT id, name, rule FROM smart_folders ORDER BY sort_order, name")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    rows.into_iter()
+        .map(|(id, name, json)| {
+            let rule = clean_rule(conn, serde_json::from_str(&json).unwrap_or_default());
+            let count = count_rule(conn, &rule)?;
+            Ok(SmartFolder { id, name, rule, count })
+        })
+        .collect()
+}
+
+pub fn create_smart_folder(conn: &Connection, name: &str, rule: &Rule) -> DbResult<String> {
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    conn.execute(
+        "INSERT INTO smart_folders (id, name, rule, sort_order)
+         VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM smart_folders))",
+        params![id, name, serde_json::to_string(rule).unwrap_or_default()],
+    )?;
+    Ok(id)
+}
+
+pub fn update_smart_folder(
+    conn: &Connection,
+    id: &str,
+    name: Option<&str>,
+    rule: Option<&Rule>,
+) -> DbResult<()> {
+    if let Some(n) = name {
+        conn.execute("UPDATE smart_folders SET name = ?2 WHERE id = ?1", params![id, n])?;
+    }
+    if let Some(r) = rule {
+        conn.execute(
+            "UPDATE smart_folders SET rule = ?2 WHERE id = ?1",
+            params![id, serde_json::to_string(r).unwrap_or_default()],
+        )?;
+    }
+    Ok(())
+}
+
+pub fn delete_smart_folder(conn: &Connection, id: &str) -> DbResult<()> {
+    conn.execute("DELETE FROM smart_folders WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// File types in the library with counts (live items), for the filter bar.
+pub fn list_exts(conn: &Connection) -> DbResult<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare(
+        "SELECT lower(ext), COUNT(*) FROM items WHERE deleted_at IS NULL GROUP BY lower(ext)",
+    )?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+    let mut merged: Vec<(String, i64)> = Vec::new();
+    for row in rows {
+        let (ext, n) = row?;
+        let ext = canonical_ext(&ext);
+        match merged.iter_mut().find(|(e, _)| *e == ext) {
+            Some((_, c)) => *c += n,
+            None => merged.push((ext, n)),
+        }
+    }
+    merged.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    Ok(merged)
 }
 
 /// Adds items to a folder; new members go to the end of its manual order.
@@ -852,6 +1220,7 @@ mod tests {
                 hash: format!("h-{id}"),
                 thumb: format!("{id}.jpg"),
                 phash: None,
+                preview: None,
             },
             at,
         )
@@ -867,6 +1236,7 @@ mod tests {
             tag_match_all: false,
             include_subfolders: false,
             min_rating: 0,
+            filter: Filter::default(),
             sort: SortKey::ImportedAt,
             desc: false,
         }
@@ -1013,10 +1383,10 @@ mod tests {
         let c = create_folder(&conn, "Child", Some(&p)).unwrap();
         add_to_folder(&conn, &s(&["a"]), &c).unwrap();
 
-        assert!(!move_folder(&conn, &p, Some(&c)).unwrap(), "cycle must be rejected");
-        assert!(!move_folder(&conn, &p, Some(&p)).unwrap());
-        assert!(move_folder(&conn, &c, None).unwrap());
-        assert!(move_folder(&conn, &c, Some(&p)).unwrap());
+        assert!(!move_folder(&mut conn, &p, Some(&c)).unwrap(), "cycle must be rejected");
+        assert!(!move_folder(&mut conn, &p, Some(&p)).unwrap());
+        assert!(move_folder(&mut conn, &c, None).unwrap());
+        assert!(move_folder(&mut conn, &c, Some(&p)).unwrap());
 
         let info = selection_info(&conn, &s(&["a"])).unwrap();
         assert_eq!(info.folders, vec![FolderRef { id: c.clone(), count: 1 }]);
@@ -1142,5 +1512,251 @@ mod tests {
         let child = find_or_create_folder(&conn, Some(&a), "Photos").unwrap();
         assert_ne!(child, a, "same name under a different parent is a different folder");
         assert_eq!(find_or_create_folder(&conn, Some(&a), "Photos").unwrap(), child);
+    }
+
+    #[test]
+    fn attribute_filters() {
+        let mut conn = mem();
+        // add() makes 10x10 png items; adjust per item.
+        for (id, ext, w, h, size, at) in [
+            ("a", "JPEG", 1200, 800, 500_000, 1_000),
+            ("b", "png", 600, 900, 50_000, 2_000),
+            ("c", "png", 500, 510, 5_000_000, 3_000),
+            ("d", "tif", 100, 100, 10, 4_000),
+        ] {
+            add(&mut conn, id, &format!("{id}.{ext}"), at);
+            conn.execute(
+                "UPDATE items SET ext = ?2, width = ?3, height = ?4, size = ?5 WHERE id = ?1",
+                params![id, ext, w, h, size],
+            )
+            .unwrap();
+        }
+        let find = |conn: &Connection, f: Filter| {
+            let mut query = q(View::All);
+            query.filter = f;
+            ids(query_items(conn, &query).unwrap())
+        };
+        let f = |set: fn(&mut Filter)| {
+            let mut f = Filter::default();
+            set(&mut f);
+            f
+        };
+        assert_eq!(find(&conn, f(|f| f.exts = vec!["jpg".into()])), s(&["a"]), "jpg matches .JPEG");
+        assert_eq!(find(&conn, f(|f| f.exts = vec!["tiff".into(), "png".into()])), s(&["b", "c", "d"]));
+        assert_eq!(find(&conn, f(|f| f.shapes = vec![Shape::Landscape])), s(&["a"]));
+        assert_eq!(find(&conn, f(|f| f.shapes = vec![Shape::Portrait])), s(&["b"]));
+        assert_eq!(find(&conn, f(|f| f.shapes = vec![Shape::Square])), s(&["c", "d"]), "within 5%");
+        assert_eq!(find(&conn, f(|f| f.min_width = Some(600))), s(&["a", "b"]));
+        assert_eq!(find(&conn, f(|f| { f.min_height = Some(500); f.max_height = Some(850) })), s(&["a", "c"]));
+        assert_eq!(find(&conn, f(|f| { f.imported_after = Some(2_000); f.imported_before = Some(4_000) })), s(&["b", "c"]));
+        assert_eq!(find(&conn, f(|f| f.max_size = Some(50_000))), s(&["b", "d"]));
+        assert_eq!(find(&conn, f(|f| f.min_size = Some(1_000_000))), s(&["c"]));
+        assert_eq!(
+            list_exts(&conn).unwrap(),
+            vec![("png".to_string(), 2), ("jpg".to_string(), 1), ("tif".to_string(), 1)]
+        );
+    }
+
+    #[test]
+    fn smart_folders() {
+        let mut conn = mem();
+        add(&mut conn, "a", "cat.png", 1);
+        add(&mut conn, "b", "dog.png", 2);
+        add(&mut conn, "c", "cat2.png", 3);
+        set_rating(&conn, &s(&["a", "b"]), 4).unwrap();
+        add_tags(&mut conn, &s(&["a", "c"]), &s(&["pet"])).unwrap();
+        let pet = list_tags(&conn).unwrap()[0].id;
+
+        let rule = Rule { min_rating: 3, ..Default::default() };
+        let id = create_smart_folder(&conn, "Good", &rule).unwrap();
+        let list = list_smart_folders(&conn).unwrap();
+        assert_eq!((list[0].name.as_str(), list[0].count), ("Good", 2));
+        assert_eq!(list[0].rule, rule);
+
+        // The smart rule is combined with the ad-hoc search.
+        let mut query = q(View::Smart { id: id.clone() });
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["a", "b"]));
+        query.search = "cat".into();
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["a"]));
+
+        let rule = Rule { tag_ids: vec![pet], search: "cat".into(), ..Default::default() };
+        update_smart_folder(&conn, &id, Some("Cats"), Some(&rule)).unwrap();
+        assert_eq!(list_smart_folders(&conn).unwrap()[0].count, 2);
+        // Trashed items don't count.
+        trash_items(&conn, &s(&["c"])).unwrap();
+        assert_eq!(list_smart_folders(&conn).unwrap()[0].count, 1);
+        // A deleted tag drops out of the rule instead of matching nothing.
+        delete_tag(&conn, pet).unwrap();
+        let sf = &list_smart_folders(&conn).unwrap()[0];
+        assert!(sf.rule.tag_ids.is_empty());
+        assert_eq!(sf.count, 1); // just "cat" now (c is trashed)
+
+        delete_smart_folder(&conn, &id).unwrap();
+        assert!(list_smart_folders(&conn).unwrap().is_empty());
+        let query = q(View::Smart { id });
+        assert!(query_items(&conn, &query).unwrap().is_empty(), "deleted smart folder shows nothing");
+    }
+
+    #[test]
+    fn folder_order() {
+        let mut conn = mem();
+        let names = |conn: &Connection, parent: Option<&str>| -> Vec<String> {
+            list_folders(conn)
+                .unwrap()
+                .into_iter()
+                .filter(|f| f.parent_id.as_deref() == parent)
+                .map(|f| f.name)
+                .collect()
+        };
+        let b = create_folder(&conn, "B", None).unwrap();
+        let a = create_folder(&conn, "A", None).unwrap();
+        let c = create_folder(&conn, "C", None).unwrap();
+        assert_eq!(names(&conn, None), ["B", "A", "C"], "new folders go last");
+
+        shift_folder(&mut conn, &c, -1).unwrap();
+        assert_eq!(names(&conn, None), ["B", "C", "A"]);
+        shift_folder(&mut conn, &a, i32::MIN).unwrap();
+        assert_eq!(names(&conn, None), ["A", "B", "C"]);
+        shift_folder(&mut conn, &a, i32::MAX).unwrap();
+        assert_eq!(names(&conn, None), ["B", "C", "A"]);
+
+        assert!(place_folder(&mut conn, &a, None, Some(&b)).unwrap());
+        assert_eq!(names(&conn, None), ["A", "B", "C"]);
+        // Into another folder, in front of an existing child.
+        let x = create_folder(&conn, "X", Some(&b)).unwrap();
+        assert!(place_folder(&mut conn, &c, Some(&b), Some(&x)).unwrap());
+        assert_eq!(names(&conn, Some(&b)), ["C", "X"]);
+        assert!(!place_folder(&mut conn, &b, Some(&x), None).unwrap(), "no cycles");
+
+        place_folder(&mut conn, &x, Some(&b), Some(&c)).unwrap();
+        assert_eq!(names(&conn, Some(&b)), ["X", "C"]);
+        sort_folders_by_name(&mut conn, Some(&b)).unwrap();
+        assert_eq!(names(&conn, Some(&b)), ["C", "X"]);
+    }
+
+    #[test]
+    fn v4_seeds_folder_order_alphabetically() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL, file_name TEXT NOT NULL,
+               ext TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL,
+               hash TEXT NOT NULL, thumb TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+               imported_at INTEGER NOT NULL, deleted_at INTEGER,
+               rating INTEGER NOT NULL DEFAULT 0, phash INTEGER, pcolor INTEGER);
+             CREATE TABLE folders (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL);
+             CREATE TABLE item_folders (item_id TEXT NOT NULL, folder_id TEXT NOT NULL,
+               position REAL, PRIMARY KEY (item_id, folder_id));
+             CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE);
+             CREATE TABLE item_tags (item_id TEXT NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY (item_id, tag_id));
+             INSERT INTO folders VALUES ('1', NULL, 'zebra'), ('2', NULL, 'Apple'), ('3', '1', 'b'), ('4', '1', 'a');
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let folders = list_folders(&conn).unwrap();
+        let under = |p: Option<&str>| -> Vec<&str> {
+            folders.iter().filter(|f| f.parent_id.as_deref() == p).map(|f| f.name.as_str()).collect()
+        };
+        assert_eq!(under(None), ["Apple", "zebra"]); // A→Z within each parent
+        assert_eq!(under(Some("1")), ["a", "b"]);
+    }
+
+    /// An older build that opens a newer library lowers `user_version` but
+    /// keeps the new columns. Opening it with this build again must work and
+    /// must not reset anything the user arranged in the meantime.
+    #[test]
+    fn reopening_after_older_build_lowered_the_version() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.png", 2);
+        let f = create_folder(&conn, "Zeta", None).unwrap();
+        let g = create_folder(&conn, "Alpha", None).unwrap();
+        add_to_folder(&conn, &s(&["a", "b"]), &f).unwrap();
+        reorder_in_folder(&mut conn, &f, &s(&["b"]), Some("a")).unwrap(); // b before a
+        create_smart_folder(&conn, "Saved", &Rule { min_rating: 2, ..Default::default() }).unwrap();
+        set_rating(&conn, &s(&["a"]), 5).unwrap();
+
+        for older in [0, 1, 2, 3] {
+            conn.pragma_update(None, "user_version", older).unwrap();
+            migrate(&conn).unwrap_or_else(|e| panic!("from user_version {older}: {e}"));
+            let v: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+            assert_eq!(v, SCHEMA_VERSION);
+        }
+
+        // Folder order (Zeta before Alpha, not re-seeded A→Z), manual item
+        // order, smart folders and ratings all survive.
+        let names: Vec<String> = list_folders(&conn).unwrap().into_iter().map(|x| x.name).collect();
+        assert_eq!(names, ["Zeta", "Alpha"]);
+        let _ = g;
+        let mut query = q(View::Folder { id: f });
+        query.sort = SortKey::Manual;
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "a"]));
+        assert_eq!(list_smart_folders(&conn).unwrap().len(), 1);
+        assert_eq!(get_items(&conn, &s(&["a"])).unwrap()[0].rating, 5);
+    }
+
+    #[test]
+    fn never_lowers_a_newer_version() {
+        let conn = mem();
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION + 5).unwrap();
+        migrate(&conn).unwrap();
+        let v: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION + 5);
+    }
+
+    #[test]
+    fn failed_step_leaves_no_open_transaction() {
+        // A broken library (items missing) makes step 2 fail; the connection
+        // must not be left inside the half-done transaction.
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE item_folders (item_id TEXT, folder_id TEXT);
+             CREATE TABLE items_x (id TEXT);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        assert!(migrate(&conn).is_err());
+        assert!(conn.is_autocommit(), "transaction was rolled back");
+        let v: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 1, "version not bumped past the failed step");
+        assert!(!has_column(&conn, "item_folders", "position").unwrap(), "partial step undone");
+    }
+
+    /// The reported case: a library made by v0.3.0 (schema 3), then opened by
+    /// an older build that wrote user_version back to 2.
+    #[test]
+    fn v3_library_with_version_written_back_to_2() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL, file_name TEXT NOT NULL,
+               ext TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL,
+               hash TEXT NOT NULL, thumb TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+               imported_at INTEGER NOT NULL, deleted_at INTEGER,
+               rating INTEGER NOT NULL DEFAULT 0, phash INTEGER, pcolor INTEGER);
+             CREATE TABLE folders (id TEXT PRIMARY KEY, parent_id TEXT, name TEXT NOT NULL);
+             CREATE TABLE item_folders (item_id TEXT NOT NULL, folder_id TEXT NOT NULL,
+               position REAL, PRIMARY KEY (item_id, folder_id));
+             CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE);
+             CREATE TABLE item_tags (item_id TEXT NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY (item_id, tag_id));
+             INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor)
+               VALUES ('a', 'a.png', 'a.png', 'png', 1, 1, 1, 'h', 'a.jpg', 1, 42, 7);
+             INSERT INTO folders VALUES ('f', NULL, 'F');
+             INSERT INTO item_folders VALUES ('a', 'f', 9);
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let v: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+        assert!(has_column(&conn, "items", "preview").unwrap());
+        assert!(list_smart_folders(&conn).unwrap().is_empty());
+        let (phash, pos): (i64, f64) = conn
+            .query_row(
+                "SELECT phash, position FROM items JOIN item_folders ON item_id = id",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((phash, pos), (42, 9.0), "existing hashes / positions untouched");
     }
 }
