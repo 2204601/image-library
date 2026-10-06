@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::search;
+use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -90,6 +90,16 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
              COMMIT;",
         )?;
     }
+    if version < 3 {
+        // Perceptual hash for near-duplicate detection; NULL = not computed yet.
+        // pcolor = average colour 0xRRGGBB (see similar.rs).
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE items ADD COLUMN phash INTEGER;
+             ALTER TABLE items ADD COLUMN pcolor INTEGER;
+             COMMIT;",
+        )?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -111,6 +121,9 @@ pub struct Item {
     pub rating: u8,
     pub imported_at: i64,
     pub deleted_at: Option<i64>,
+    /// Similar view only: which group of look-alikes the item belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -124,6 +137,8 @@ pub struct NewItem {
     pub size: i64,
     pub hash: String,
     pub thumb: String,
+    /// Perceptual hash and average colour (see similar.rs).
+    pub phash: Option<(u64, u32)>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -135,6 +150,8 @@ pub enum View {
     Untagged,
     Trash,
     Folder { id: String },
+    /// Groups of images that look alike (likely duplicates).
+    Similar,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]
@@ -159,6 +176,9 @@ pub struct ItemQuery {
     pub search: String,
     #[serde(default)]
     pub tag_ids: Vec<i64>,
+    /// `tag_ids` must all be present (AND); otherwise any one of them (OR).
+    #[serde(default)]
+    pub tag_match_all: bool,
     /// Folder view also shows items of all subfolders.
     #[serde(default)]
     pub include_subfolders: bool,
@@ -185,6 +205,7 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         rating: r.get(9)?,
         imported_at: r.get(10)?,
         deleted_at: r.get(11)?,
+        group: None,
     })
 }
 
@@ -250,7 +271,7 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
             );
             args.push(Box::new(id.clone()));
         }
-        View::All | View::Trash => {}
+        View::All | View::Trash | View::Similar => {}
     }
 
     if let Some(expr) = search::parse(&q.search) {
@@ -272,11 +293,16 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
         args.push(Box::new(q.min_rating));
     }
 
-    for tag_id in &q.tag_ids {
-        wheres.push(
-            "EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id AND t.tag_id = ?)".into(),
-        );
-        args.push(Box::new(*tag_id));
+    if !q.tag_ids.is_empty() {
+        let marks = vec!["?"; q.tag_ids.len()].join(", ");
+        // AND: the item carries every selected tag; OR: at least one of them.
+        let need = if q.tag_match_all { q.tag_ids.len() } else { 1 };
+        wheres.push(format!(
+            "(SELECT COUNT(*) FROM item_tags t WHERE t.item_id = items.id AND t.tag_id IN ({marks})) >= {need}"
+        ));
+        for tag_id in &q.tag_ids {
+            args.push(Box::new(*tag_id));
+        }
     }
 
     let dir = if q.desc { "DESC" } else { "ASC" };
@@ -298,7 +324,66 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter().map(|b| b.as_ref())), row_to_item)?;
+    let items = rows.collect::<DbResult<Vec<_>>>()?;
+    if q.view == View::Similar {
+        return similar_groups(conn, items);
+    }
+    Ok(items)
+}
+
+/// Keeps only items that have look-alikes among `items`, grouped together.
+/// Groups follow the query's sort order; inside a group the best copy
+/// (most pixels, then largest file, then oldest) comes first.
+fn similar_groups(conn: &Connection, items: Vec<Item>) -> DbResult<Vec<Item>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, phash, pcolor FROM items WHERE deleted_at IS NULL AND phash IS NOT NULL",
+    )?;
+    let hashes: HashMap<String, (i64, u32)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get::<_, Option<u32>>(2)?.unwrap_or(0)))))?
+        .collect::<DbResult<_>>()?;
+    let mut items: Vec<Option<Item>> = items
+        .into_iter()
+        .filter(|i| hashes.contains_key(&i.id))
+        .map(Some)
+        .collect();
+    let entries: Vec<similar::Entry> = items
+        .iter()
+        .flatten()
+        .map(|i| {
+            let (hash, color) = hashes[&i.id];
+            similar::Entry { hash: hash as u64, color, width: i.width, height: i.height }
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (n, group) in similar::groups(&entries).into_iter().enumerate() {
+        let mut members: Vec<Item> = group.into_iter().filter_map(|k| items[k].take()).collect();
+        members.sort_by_key(|i| {
+            (std::cmp::Reverse(i.width as u64 * i.height as u64), std::cmp::Reverse(i.size), i.imported_at)
+        });
+        for mut m in members {
+            m.group = Some(n as u32);
+            out.push(m);
+        }
+    }
+    Ok(out)
+}
+
+/// Live items whose perceptual hash hasn't been computed: (id, thumbnail file).
+pub fn missing_phashes(conn: &Connection) -> DbResult<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT id, thumb FROM items WHERE phash IS NULL AND deleted_at IS NULL")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
     rows.collect()
+}
+
+pub fn set_phashes(conn: &mut Connection, hashes: &[(String, (u64, u32))]) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare("UPDATE items SET phash = ?2, pcolor = ?3 WHERE id = ?1")?;
+        for (id, (h, c)) in hashes {
+            stmt.execute(params![id, *h as i64, c])?;
+        }
+    }
+    tx.commit()
 }
 
 pub fn get_items(conn: &Connection, ids: &[String]) -> DbResult<Vec<Item>> {
@@ -323,8 +408,8 @@ pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
 
 pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
     tx.execute(
-        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             it.id,
             it.name,
@@ -335,7 +420,9 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
             it.size,
             it.hash,
             it.thumb,
-            imported_at
+            imported_at,
+            it.phash.map(|(h, _)| h as i64),
+            it.phash.map(|(_, c)| c)
         ],
     )?;
     Ok(())
@@ -368,6 +455,47 @@ pub fn trash_items(conn: &Connection, ids: &[String]) -> DbResult<()> {
     );
     conn.execute(&sql, params_from_iter(args.iter().map(|b| b.as_ref())))?;
     Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DuplicateGroup {
+    pub keep: String,
+    pub remove: Vec<String>,
+}
+
+/// Trashes duplicates after copying their tags, folders and best rating onto
+/// the copy that is kept, so no organizing work is lost.
+pub fn resolve_duplicates(conn: &mut Connection, groups: &[DuplicateGroup]) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    for g in groups.iter().filter(|g| !g.remove.is_empty()) {
+        let marks = placeholders(g.remove.len());
+        let mut args: Vec<&dyn ToSql> = vec![&g.keep];
+        args.extend(g.remove.iter().map(|s| s as &dyn ToSql));
+        tx.execute(
+            &format!(
+                "INSERT OR IGNORE INTO item_tags (item_id, tag_id)
+                 SELECT ?, tag_id FROM item_tags WHERE item_id IN ({marks})"
+            ),
+            params_from_iter(&args),
+        )?;
+        let mut stmt = tx.prepare(&format!(
+            "SELECT DISTINCT folder_id FROM item_folders WHERE item_id IN ({marks})"
+        ))?;
+        let folders: Vec<String> =
+            stmt.query_map(params_from_iter(&g.remove), |r| r.get(0))?.collect::<DbResult<_>>()?;
+        for f in &folders {
+            add_to_folder(&tx, std::slice::from_ref(&g.keep), f)?;
+        }
+        tx.execute(
+            &format!(
+                "UPDATE items SET rating = MAX(rating, (SELECT MAX(rating) FROM items WHERE id IN ({marks})))
+                 WHERE id = ?"
+            ),
+            params_from_iter(g.remove.iter().map(|s| s as &dyn ToSql).chain([&g.keep as &dyn ToSql])),
+        )?;
+        trash_items(&tx, &g.remove)?;
+    }
+    tx.commit()
 }
 
 pub fn restore_items(conn: &Connection, ids: &[String]) -> DbResult<()> {
@@ -723,6 +851,7 @@ mod tests {
                 size: at,
                 hash: format!("h-{id}"),
                 thumb: format!("{id}.jpg"),
+                phash: None,
             },
             at,
         )
@@ -735,6 +864,7 @@ mod tests {
             view,
             search: String::new(),
             tag_ids: vec![],
+            tag_match_all: false,
             include_subfolders: false,
             min_rating: 0,
             sort: SortKey::ImportedAt,
@@ -785,6 +915,47 @@ mod tests {
         restore_items(&conn, &s(&["c"])).unwrap();
         assert_eq!(counts(&conn).unwrap().trash, 0);
         assert_eq!(counts(&conn).unwrap().all, 3);
+    }
+
+    #[test]
+    fn resolve_duplicates_merges_into_keeper() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.png", 2);
+        add(&mut conn, "c", "c.png", 3);
+        let f = create_folder(&conn, "F", None).unwrap();
+        add_to_folder(&conn, &s(&["b"]), &f).unwrap();
+        add_tags(&mut conn, &s(&["b"]), &s(&["x"])).unwrap();
+        add_tags(&mut conn, &s(&["c"]), &s(&["y"])).unwrap();
+        set_rating(&conn, &s(&["c"]), 4).unwrap();
+
+        resolve_duplicates(&mut conn, &[DuplicateGroup { keep: "a".into(), remove: s(&["b", "c"]) }]).unwrap();
+        assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a"]));
+        assert_eq!(ids(query_items(&conn, &q(View::Folder { id: f })).unwrap()), s(&["a"]));
+        let info = selection_info(&conn, &s(&["a"])).unwrap();
+        let mut names: Vec<_> = info.tags.iter().map(|t| t.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["x", "y"]);
+        assert_eq!(get_items(&conn, &s(&["a"])).unwrap()[0].rating, 4);
+        assert_eq!(counts(&conn).unwrap().trash, 2);
+    }
+
+    #[test]
+    fn tag_filter_any_or_all() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.png", 2);
+        add(&mut conn, "c", "c.png", 3);
+        add_tags(&mut conn, &s(&["a", "b"]), &s(&["red"])).unwrap();
+        add_tags(&mut conn, &s(&["b", "c"]), &s(&["blue"])).unwrap();
+        let tags = list_tags(&conn).unwrap();
+        let id = |n: &str| tags.iter().find(|t| t.name == n).unwrap().id;
+
+        let mut query = q(View::All);
+        query.tag_ids = vec![id("red"), id("blue")];
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["a", "b", "c"]));
+        query.tag_match_all = true;
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b"]));
     }
 
     #[test]

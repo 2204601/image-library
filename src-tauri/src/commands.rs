@@ -166,6 +166,11 @@ pub fn trash_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
 }
 
 #[tauri::command]
+pub fn resolve_duplicates(state: State<AppState>, groups: Vec<db::DuplicateGroup>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::resolve_duplicates(&mut lib.conn, &groups).map_err(err))
+}
+
+#[tauri::command]
 pub fn restore_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
     with_lib(&state, |lib| db::restore_items(&lib.conn, &ids).map_err(err))
 }
@@ -301,6 +306,17 @@ pub async fn import_paths(
             folder_id,
             emit_progress(&app),
         )
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Prepares the similar-images view: hashes items that predate the feature.
+/// Returns how many were hashed.
+#[tauri::command]
+pub async fn index_similar(app: AppHandle) -> CmdResult<usize> {
+    tauri::async_runtime::spawn_blocking(move || {
+        import::compute_missing_phashes(&app.state::<AppState>().lib)
     })
     .await
     .map_err(err)?

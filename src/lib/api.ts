@@ -21,6 +21,8 @@ export interface Item {
   deletedAt: number | null;
   filePath: string;
   thumbPath: string;
+  /** Similar view only: items with the same number look alike. Best copy first. */
+  group?: number;
 }
 
 export type View =
@@ -28,6 +30,7 @@ export type View =
   | { kind: "unfiled" }
   | { kind: "untagged" }
   | { kind: "trash" }
+  | { kind: "similar" }
   | { kind: "folder"; id: string };
 
 export type SortKey = "importedAt" | "name" | "size" | "dimensions" | "rating" | "manual";
@@ -36,6 +39,8 @@ export interface ItemQuery {
   view: View;
   search: string;
   tagIds: number[];
+  /** true: items must carry every tag in `tagIds`; false: any one of them. */
+  tagMatchAll: boolean;
   includeSubfolders: boolean;
   minRating: number;
   sort: SortKey;
@@ -100,6 +105,10 @@ export const api = {
       headers: { "x-name": encodeURIComponent(name), "x-folder": folderId ?? "" },
     }),
   supportedExts: () => invoke<string[]>("supported_exts"),
+  indexSimilar: () => invoke<number>("index_similar"),
+  /** Trashes `remove`, first copying their tags, folders and rating onto `keep`. */
+  resolveDuplicates: (groups: { keep: string; remove: string[] }[]) =>
+    invoke<void>("resolve_duplicates", { groups }),
 
   listFolders: () => invoke<Folder[]>("list_folders"),
   createFolder: (name: string, parentId: string | null) =>

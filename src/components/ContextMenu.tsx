@@ -48,7 +48,7 @@ export function ContextMenu() {
       }}
     >
       <div
-        className="absolute min-w-44 animate-slide-down rounded-md border border-line bg-raised py-1 shadow-xl"
+        className="absolute min-w-44 animate-slide-down rounded-lg border border-line bg-raised p-1 shadow-xl"
         style={{ left: x, top: y }}
         onPointerDown={(e) => e.stopPropagation()}
       >
@@ -56,7 +56,7 @@ export function ContextMenu() {
           "label" in it ? (
             <button
               key={i}
-              className={`flex w-full items-center gap-6 px-3 py-1.5 text-left hover:bg-accent hover:text-white ${
+              className={`flex w-full items-center gap-6 rounded px-2.5 py-1.5 text-left hover:bg-accent hover:text-white ${
                 it.danger ? "text-danger" : ""
               }`}
               onClick={() => {
@@ -68,7 +68,7 @@ export function ContextMenu() {
               {it.hint && <span className="text-xs opacity-50">{it.hint}</span>}
             </button>
           ) : (
-            <div key={i} className="my-1 border-t border-line" />
+            <div key={i} className="mx-1.5 my-1 border-t border-line" />
           ),
         )}
       </div>

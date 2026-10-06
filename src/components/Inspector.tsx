@@ -8,7 +8,7 @@ import {
   openSelection,
   setRating,
 } from "../lib/actions";
-import { api, formatBytes, type Folder, type SelectionInfo } from "../lib/api";
+import { api, formatBytes, type Folder, type SelectionInfo, type Tag } from "../lib/api";
 import { useStore } from "../store";
 
 function folderPath(folders: Folder[], id: string): string {
@@ -22,23 +22,36 @@ function folderPath(folders: Folder[], id: string): string {
 
 function TagInput({ onAdd, exclude }: { onAdd: (names: string[]) => void; exclude: Set<number> }) {
   const tags = useStore((s) => s.tags);
+  const recentTags = useStore((s) => s.recentTags);
   const [text, setText] = useState("");
-  const [hi, setHi] = useState(0);
+  const [open, setOpen] = useState(false);
+  // -1 = nothing highlighted (Enter with empty text then does nothing).
+  const [hi, setHi] = useState(-1);
   const q = text.trim().toLowerCase();
-  const suggestions = useMemo(
-    () =>
-      q
-        ? tags.filter((t) => !exclude.has(t.id) && t.name.toLowerCase().includes(q)).slice(0, 8)
-        : [],
-    [q, tags, exclude],
-  );
+  const suggestions = useMemo(() => {
+    const usable = tags.filter((t) => !exclude.has(t.id));
+    if (q) {
+      // Prefix matches first, then other substring matches.
+      const hits = usable.filter((t) => t.name.toLowerCase().includes(q));
+      const starts = (t: Tag) => (t.name.toLowerCase().startsWith(q) ? 0 : 1);
+      return hits.sort((a, b) => starts(a) - starts(b) || b.count - a.count).slice(0, 8);
+    }
+    // Empty input: recently assigned tags, then the most used ones.
+    const byId = new Map(usable.map((t) => [t.id, t]));
+    const recent = recentTags.flatMap((id) => byId.get(id) ?? []);
+    const popular = usable
+      .filter((t) => !recentTags.includes(t.id))
+      .sort((a, b) => b.count - a.count);
+    return [...recent, ...popular].slice(0, 10);
+  }, [q, tags, exclude, recentTags]);
+  const recentCount = q ? 0 : suggestions.filter((t) => recentTags.includes(t.id)).length;
 
   const commit = (name: string) => {
     // Comma-separated input adds several tags at once.
     const names = name.split(/[,、]/).map((s) => s.trim()).filter(Boolean);
     if (names.length) onAdd(names);
     setText("");
-    setHi(0);
+    setHi(-1);
   };
 
   return (
@@ -47,41 +60,57 @@ function TagInput({ onAdd, exclude }: { onAdd: (names: string[]) => void; exclud
         value={text}
         onChange={(e) => {
           setText(e.target.value);
-          setHi(0);
+          setHi(e.target.value.trim() ? 0 : -1);
+          setOpen(true);
         }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => setOpen(false)}
         onKeyDown={(e) => {
           if (e.nativeEvent.isComposing) return; // IME conversion in progress
           if (e.key === "Enter") {
             e.preventDefault();
-            commit(suggestions[hi] && !text.includes(",") ? suggestions[hi].name : text);
+            const pick = open && !text.includes(",") ? suggestions[hi] : undefined;
+            commit(pick ? pick.name : text);
           } else if (e.key === "ArrowDown") {
             e.preventDefault();
+            setOpen(true);
             setHi((h) => Math.min(h + 1, suggestions.length - 1));
           } else if (e.key === "ArrowUp") {
             e.preventDefault();
-            setHi((h) => Math.max(h - 1, 0));
+            setHi((h) => Math.max(h - 1, q ? 0 : -1));
           } else if (e.key === "Escape") {
-            setText("");
-            e.currentTarget.blur();
+            if (open && suggestions.length) {
+              setOpen(false);
+            } else {
+              setText("");
+              e.currentTarget.blur();
+            }
           }
         }}
         placeholder="タグを追加（Enter）"
         className="h-8 w-full rounded-md border border-line bg-bg px-2 outline-none focus:border-accent"
       />
-      {suggestions.length > 0 && (
-        <div className="absolute z-10 mt-1 w-full rounded-md border border-line bg-raised py-1 shadow-xl">
+      {open && suggestions.length > 0 && (
+        <div className="absolute z-10 mt-1 max-h-72 w-full overflow-y-auto rounded-lg border border-line bg-raised p-1 shadow-xl">
           {suggestions.map((t, i) => (
-            <button
-              key={t.id}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                commit(t.name);
-              }}
-              className={`flex w-full justify-between px-2 py-1 text-left ${i === hi ? "bg-accent text-white" : ""}`}
-            >
-              <span className="truncate">{t.name}</span>
-              <span className="text-xs opacity-70">{t.count}</span>
-            </button>
+            <div key={t.id}>
+              {!q && (i === 0 || i === recentCount) && (
+                <div className="px-2 pt-1 pb-0.5 text-[11px] text-dim">
+                  {i < recentCount ? "最近使ったタグ" : "よく使うタグ"}
+                </div>
+              )}
+              <button
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  commit(t.name);
+                }}
+                onMouseEnter={() => setHi(i)}
+                className={`flex w-full justify-between rounded px-2 py-1 text-left ${i === hi ? "bg-accent text-white" : ""}`}
+              >
+                <span className="truncate">{t.name}</span>
+                <span className="text-xs opacity-70">{t.count}</span>
+              </button>
+            </div>
           ))}
         </div>
       )}
@@ -297,7 +326,13 @@ export function Inspector() {
             </Chip>
           ))}
         </div>
-        <TagInput exclude={tagIds} onAdd={(names) => run(() => api.addTags(ids, names))} />
+        <TagInput
+          exclude={tagIds}
+          onAdd={(names) => {
+            useStore.getState().rememberTags(names);
+            run(() => api.addTags(ids, names));
+          }}
+        />
       </Field>
 
       <Field label="フォルダ">
