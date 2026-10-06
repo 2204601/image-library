@@ -21,13 +21,82 @@ import { startPointerDrag } from "./DragLayer";
 const PAD = 16;
 const GAP = 12;
 const LABEL = 34;
+/** Aspect ratios outside this range are letterboxed instead of making absurd cells. */
+const MIN_AR = 0.4;
+const MAX_AR = 3;
+
+const rawAspect = (item: Item) => (item.width > 0 && item.height > 0 ? item.width / item.height : 1);
+const aspect = (item: Item) => Math.min(MAX_AR, Math.max(MIN_AR, rawAspect(item)));
+
+type Row = {
+  /** Index of the first item in the row. */
+  start: number;
+  /** Top edge in content coordinates. */
+  top: number;
+  height: number;
+  /** Left edge of each cell (content coordinates); `xs[k + 1] - GAP` is its right edge. */
+  xs: number[];
+  widths: number[];
+};
+
+/**
+ * Justified layout: each row is filled edge to edge with cells in the images' own
+ * aspect ratios, so there's no letterboxing. `target` (the slider) is the row height
+ * the rows stay close to; the last row keeps it instead of stretching.
+ */
+function justify(items: Item[], inner: number, target: number): Row[] {
+  const rows: Row[] = [];
+  let top = PAD;
+  let i = 0;
+  while (i < items.length) {
+    let sum = 0;
+    let j = i;
+    while (j < items.length) {
+      sum += aspect(items[j++]);
+      if (sum * target + GAP * (j - i - 1) >= inner) break;
+    }
+    const fill = (n: number, s: number) => (inner - GAP * (n - 1)) / s;
+    let full = sum * target + GAP * (j - i - 1) >= inner;
+    let height = full ? fill(j - i, sum) : target;
+    // Ending the row one image earlier may land closer to the target height.
+    if (full && j - i > 1) {
+      const without = sum - aspect(items[j - 1]);
+      const h = fill(j - i - 1, without);
+      if (h / target < target / height) {
+        j--;
+        sum = without;
+        height = h;
+      }
+    }
+    // A lone image too wide for the view shrinks; otherwise never stretch past 2×.
+    height = Math.min(height, target * 2);
+    full = full && height < target * 2;
+    // Snap edges to whole pixels so full rows end exactly at the right margin.
+    const scale = full ? (inner - GAP * (j - i - 1)) / sum : height;
+    const xs: number[] = [];
+    const widths: number[] = [];
+    let acc = 0;
+    for (let k = i; k < j; k++) {
+      const x0 = Math.round(acc);
+      acc += aspect(items[k]) * scale;
+      xs.push(PAD + x0 + GAP * (k - i));
+      widths.push(Math.max(1, Math.round(acc) - x0));
+    }
+    const h = Math.round(height);
+    rows.push({ start: i, top, height: h, xs, widths });
+    top += h + LABEL + GAP;
+    i = j;
+  }
+  return rows;
+}
 
 const Cell = memo(function Cell({
   item,
   index,
   selected,
   dimmed,
-  size,
+  width,
+  height,
   reorderable,
   insert,
 }: {
@@ -35,7 +104,8 @@ const Cell = memo(function Cell({
   index: number;
   selected: boolean;
   dimmed: boolean;
-  size: number;
+  width: number;
+  height: number;
   /** Manual-order folder view: the cell is a drop target for reordering. */
   reorderable: boolean;
   /** Where the reorder drop indicator is shown, if here. */
@@ -62,7 +132,7 @@ const Cell = memo(function Cell({
       className={`relative flex flex-col items-center transition-[opacity,transform] duration-200 ${
         dimmed ? "scale-95 opacity-35" : ""
       }`}
-      style={{ width: size }}
+      style={{ width }}
       onPointerDown={onPointerDown}
       onDoubleClick={() => useStore.getState().openViewer(index)}
       onContextMenu={(e) => showItemMenu(e, item, index)}
@@ -72,7 +142,7 @@ const Cell = memo(function Cell({
         className={`relative flex items-center justify-center overflow-hidden rounded-lg bg-raised transition-shadow duration-150 ${
           selected ? "ring-3 ring-accent" : "hover:ring-2 hover:ring-white/15"
         }`}
-        style={{ width: size, height: size }}
+        style={{ width, height }}
       >
         <img
           src={convertFileSrc(item.thumbPath)}
@@ -84,13 +154,17 @@ const Cell = memo(function Cell({
             if (img?.complete) img.classList.add("loaded");
           }}
           onLoad={(e) => e.currentTarget.classList.add("loaded")}
-          className="thumb max-h-full max-w-full object-contain"
+          // The cell already has the image's shape; cover hides sub-pixel rounding.
+          // Extreme panoramas / strips are clamped, so show those whole.
+          className={`thumb h-full w-full ${
+            aspect(item) === rawAspect(item) ? "object-cover" : "object-contain"
+          }`}
         />
       </div>
       {insert && (
         <span
           className="pointer-events-none absolute top-0 w-1 animate-fade-in rounded-full bg-accent shadow-[0_0_8px] shadow-accent"
-          style={{ height: size, [insert === "before" ? "left" : "right"]: -GAP / 2 - 2 }}
+          style={{ height, [insert === "before" ? "left" : "right"]: -GAP / 2 - 2 }}
         />
       )}
       <div className="mt-1.5 w-full text-center">
@@ -184,43 +258,41 @@ export function Grid() {
   }, []);
 
   const inner = Math.max(0, width - PAD * 2);
-  const cols = Math.max(1, Math.floor((inner + GAP) / (thumbSize + GAP)));
-  const size = Math.max(40, Math.floor((inner - GAP * (cols - 1)) / cols));
-  const rowH = size + LABEL + GAP;
-  const rows = Math.ceil(items.length / cols);
+  const rows = useMemo(() => (inner > 0 ? justify(items, inner, thumbSize) : []), [items, inner, thumbSize]);
+  /** Row index of each item, for ↑/↓ navigation. */
+  const rowOf = useMemo(() => {
+    const a = new Int32Array(items.length);
+    rows.forEach((r, ri) => a.fill(ri, r.start, r.start + r.xs.length));
+    return a;
+  }, [rows, items.length]);
 
   const virt = useVirtualizer({
-    count: rows,
+    count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: () => rowH,
+    estimateSize: (i) => rows[i].height + LABEL + GAP,
     overscan: 3,
     paddingStart: PAD,
     paddingEnd: PAD,
   });
-  useEffect(() => virt.measure(), [rowH, virt]);
+  useEffect(() => virt.measure(), [rows, virt]);
 
-  const layout = useRef({ cols, size, rowH, items });
-  layout.current = { cols, size, rowH, items };
+  const layout = useRef({ rows, rowOf, items });
+  layout.current = { rows, rowOf, items };
 
   /** Ids of cells intersecting a rectangle in content coordinates. */
   const hitTest = (r: Rect): string[] => {
-    const { cols, size, rowH, items } = layout.current;
+    const { rows, items } = layout.current;
     const top = Math.min(r.y1, r.y2);
     const bottom = Math.max(r.y1, r.y2);
     const left = Math.min(r.x1, r.x2);
     const right = Math.max(r.x1, r.x2);
     const hits: string[] = [];
-    const r0 = Math.max(0, Math.floor((top - PAD) / rowH));
-    const r1 = Math.floor((bottom - PAD) / rowH);
-    for (let row = r0; row <= r1; row++) {
-      const y0 = PAD + row * rowH;
-      if (y0 > bottom || y0 + size + LABEL < top) continue;
-      for (let c = 0; c < cols; c++) {
-        const x0 = PAD + c * (size + GAP);
-        const i = row * cols + c;
-        if (i >= items.length) break;
-        if (x0 <= right && x0 + size >= left) hits.push(items[i].id);
-      }
+    for (const row of rows) {
+      if (row.top > bottom) break;
+      if (row.top + row.height + LABEL < top) continue;
+      row.xs.forEach((x0, k) => {
+        if (x0 <= right && x0 + row.widths[k] >= left) hits.push(items[row.start + k].id);
+      });
     }
     return hits;
   };
@@ -336,12 +408,7 @@ export function Grid() {
       }
 
       const cur = s.items.findIndex((i) => i.id === s.focus);
-      const delta: Record<string, number> = {
-        ArrowLeft: -1,
-        ArrowRight: 1,
-        ArrowUp: -cols,
-        ArrowDown: cols,
-      };
+      const delta: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 };
       // A / D act like ← / → (Shift+D is "add to last folder" above).
       const key = !mod && !e.shiftKey && e.code === "KeyA" ? "ArrowLeft" : !mod && !e.shiftKey && e.code === "KeyD" ? "ArrowRight" : e.key;
       if (key in delta && !mod) {
@@ -358,17 +425,38 @@ export function Grid() {
         s.setSelection([]);
       }
     };
+    /** ±1 = previous/next item, ±2 = the cell above/below nearest horizontally. */
     const move = (d: number, extend: boolean) => {
       const s = useStore.getState();
-      if (!s.items.length) return;
+      const { rows, rowOf } = layout.current;
+      if (!s.items.length || !rows.length) return;
       const cur = s.items.findIndex((i) => i.id === s.focus);
-      const next = cur < 0 ? 0 : Math.min(s.items.length - 1, Math.max(0, cur + d));
+      let next: number;
+      if (cur < 0) next = 0;
+      else if (Math.abs(d) === 1) next = Math.min(s.items.length - 1, Math.max(0, cur + d));
+      else {
+        const ri = rowOf[cur];
+        const target = rows[ri + Math.sign(d)];
+        if (!target) next = d < 0 ? 0 : s.items.length - 1;
+        else {
+          const row = rows[ri];
+          const k = cur - row.start;
+          const mid = row.xs[k] + row.widths[k] / 2;
+          let best = 0;
+          target.xs.forEach((x, j) => {
+            const m = x + target.widths[j] / 2;
+            const b = target.xs[best] + target.widths[best] / 2;
+            if (Math.abs(m - mid) < Math.abs(b - mid)) best = j;
+          });
+          next = target.start + best;
+        }
+      }
       s.select(s.items[next].id, extend ? "range" : "only");
-      virt.scrollToIndex(Math.floor(next / cols));
+      virt.scrollToIndex(layout.current.rowOf[next]);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [cols, virt]);
+  }, [virt]);
 
   return (
     <div
@@ -391,30 +479,34 @@ export function Grid() {
               }}
             />
           )}
-          {virt.getVirtualItems().map((row) => (
-            <div
-              key={row.key}
-              className="absolute left-0 flex"
-              style={{ top: row.start, gap: GAP, paddingLeft: PAD, height: rowH }}
-            >
-              {items.slice(row.index * cols, row.index * cols + cols).map((item, j) => (
-                <Cell
-                  key={item.id}
-                  item={item}
-                  index={row.index * cols + j}
-                  selected={selected.has(item.id)}
-                  dimmed={dragging.has(item.id)}
-                  size={size}
-                  reorderable={reorderable}
-                  insert={
-                    dropTarget?.startsWith(`item:${item.id}:`)
-                      ? (dropTarget.slice(-6) === "before" ? "before" : "after")
-                      : null
-                  }
-                />
-              ))}
-            </div>
-          ))}
+          {virt.getVirtualItems().map((v) => {
+            const row = rows[v.index];
+            return (
+              <div
+                key={v.key}
+                className="absolute left-0 flex"
+                style={{ top: v.start, gap: GAP, paddingLeft: PAD, height: row.height + LABEL }}
+              >
+                {items.slice(row.start, row.start + row.xs.length).map((item, j) => (
+                  <Cell
+                    key={item.id}
+                    item={item}
+                    index={row.start + j}
+                    selected={selected.has(item.id)}
+                    dimmed={dragging.has(item.id)}
+                    width={row.widths[j]}
+                    height={row.height}
+                    reorderable={reorderable}
+                    insert={
+                      dropTarget?.startsWith(`item:${item.id}:`)
+                        ? (dropTarget.slice(-6) === "before" ? "before" : "after")
+                        : null
+                    }
+                  />
+                ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
