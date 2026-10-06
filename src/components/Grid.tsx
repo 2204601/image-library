@@ -1,8 +1,8 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ImagePlus, Star } from "lucide-react";
+import { Check, ImagePlus, Star, Trash2 } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  addToLastFolder,
+  moveToLastFolder,
   copySelection,
   copyTags,
   createFolder,
@@ -13,7 +13,10 @@ import {
   importFilesDialog,
   openSelection,
   pasteTags,
-  resolveDuplicates,
+  keepPlan,
+  keeperOf,
+  reviewDuplicates,
+  similarGroups,
   setRating,
   shiftFolder,
 } from "../lib/actions";
@@ -29,7 +32,7 @@ import {
   visibleRange,
   type Placement,
 } from "../lib/layouts";
-import { currentFolderId, useStore, type ShowInfo } from "../store";
+import { activeConditions, currentFolderId, useStore, type ShowInfo } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 
@@ -94,9 +97,47 @@ type CellProps = {
   reorderable: boolean;
   /** Where the reorder drop indicator is shown, if here. */
   insert: "before" | "after" | null;
-  /** Similar view: this is the copy that would be kept. */
-  best?: boolean;
+  /** Similar view: what the tidy-up would do with this copy. */
+  similar?: SimilarMark;
 };
+
+type SimilarMark = {
+  /** This copy would be kept (otherwise trashed). */
+  keep: boolean;
+  /** Highest quality of its group. */
+  best: boolean;
+  /** Percent match with the best copy. */
+  match: number;
+};
+
+/** Badges on a thumbnail in the similar view. */
+function SimilarOverlay({ item, mark }: { item: Item; mark: SimilarMark }) {
+  return (
+    <>
+      {!mark.keep && <div className="pointer-events-none absolute inset-0 bg-black/40" />}
+      <span
+        className={`absolute top-1.5 left-1.5 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-white ${
+          mark.keep ? "bg-emerald-600/90" : "bg-danger/85"
+        }`}
+      >
+        {mark.keep ? <Check size={11} strokeWidth={3} /> : <Trash2 size={11} />}
+        {mark.keep ? "残す" : "ゴミ箱へ"}
+      </span>
+      <span className="absolute bottom-1.5 left-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] text-white">
+        {mark.best ? "最高画質" : `一致 ${mark.match}%`}
+      </span>
+      {!mark.keep && (
+        <button
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => useStore.getState().pickKeeper(item.id)}
+          className="absolute top-1.5 right-1.5 hidden rounded bg-white px-1.5 py-0.5 text-[10px] font-medium text-black shadow group-hover:block hover:bg-white/90"
+        >
+          これを残す
+        </button>
+      )}
+    </>
+  );
+}
 
 const Cell = memo(function Cell({
   item,
@@ -110,12 +151,12 @@ const Cell = memo(function Cell({
   info,
   reorderable,
   insert,
-  best,
+  similar,
 }: CellProps) {
   const detail = info.dims || info.rating || info.meta;
   return (
     <div
-      className={`relative flex flex-col items-center transition-[opacity,transform] duration-200 ${
+      className={`group relative flex flex-col items-center transition-[opacity,transform] duration-200 ${
         dimmed ? "scale-95 opacity-35" : ""
       }`}
       style={{ width }}
@@ -131,11 +172,7 @@ const Cell = memo(function Cell({
         style={{ width, height }}
       >
         <Thumb item={item} fit={fit} />
-        {best && (
-          <span className="absolute top-1.5 left-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
-            最高画質
-          </span>
-        )}
+        {similar && <SimilarOverlay item={item} mark={similar} />}
       </div>
       {insert && (
         <span
@@ -177,7 +214,7 @@ const ListRow = memo(function ListRow({
   height,
   reorderable,
   insert,
-  best,
+  similar,
 }: CellProps) {
   return (
     <div
@@ -196,7 +233,29 @@ const ListRow = memo(function ListRow({
       </div>
       <span className="min-w-0 flex-1 truncate text-[13px]">
         {item.name}
-        {best && <span className="ml-2 rounded bg-white/10 px-1.5 py-0.5 text-[10px]">最高画質</span>}
+        {similar && (
+          <span
+            className={`ml-2 rounded px-1.5 py-0.5 text-[10px] text-white ${
+              similar.keep ? "bg-emerald-600/90" : "bg-danger/85"
+            }`}
+          >
+            {similar.keep ? "残す" : "ゴミ箱へ"}
+          </span>
+        )}
+        {similar && (
+          <span className="ml-1 rounded bg-white/10 px-1.5 py-0.5 text-[10px]">
+            {similar.best ? "最高画質" : `一致 ${similar.match}%`}
+          </span>
+        )}
+        {similar && !similar.keep && (
+          <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => useStore.getState().pickKeeper(item.id)}
+            className="ml-2 rounded border border-line px-1.5 py-0.5 text-[10px] hover:bg-white/10"
+          >
+            これを残す
+          </button>
+        )}
       </span>
       <span className="w-24 shrink-0">{item.rating > 0 && <Stars n={item.rating} />}</span>
       <span className="w-28 shrink-0 text-right text-dim tabular-nums">
@@ -249,19 +308,19 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
     { label: `コピー${many}`, hint: "⌘C", onClick: () => copySelection(ids) },
     { label: `書き出し…${many}`, onClick: () => exportSelection(ids) },
     { separator: true },
-    { label: "フォルダに追加…", hint: "⌘⇧J", onClick: () => s.setPicker("add") },
+    { label: "フォルダへ移動…", hint: "⌘⇧J", onClick: () => s.setPicker("move") },
     ...(s.recentFolders[0]
       ? [
           {
-            label: `「${s.folders.find((f) => f.id === s.recentFolders[0])?.name}」に追加`,
+            label: `「${s.folders.find((f) => f.id === s.recentFolders[0])?.name}」へ移動`,
             hint: "⇧D",
-            onClick: () => addToLastFolder(ids),
+            onClick: () => moveToLastFolder(ids),
           },
         ]
       : []),
     { label: "選択から新規フォルダ", onClick: () => createFolder(null, ids) },
     ...(folder
-      ? [{ label: "このフォルダから外す", onClick: () => s.run(() => api.removeFromFolder(ids, folder)) }]
+      ? [{ label: "未分類に戻す", onClick: () => s.run(() => api.removeFromFolder(ids, folder)) }]
       : []),
     { separator: true },
     { label: `ゴミ箱へ移動${many}`, hint: "⌘⌫", danger: true, onClick: () => deleteSelection(ids) },
@@ -275,10 +334,20 @@ export function Grid() {
   const selected = useStore((s) => s.selected);
   const thumbSize = useStore((s) => s.thumbSize);
   const kind = useStore((s) => s.layout);
-  const info = useStore((s) => s.showInfo);
+  const showInfo = useStore((s) => s.showInfo);
   const viewKind = useStore((s) => s.view.kind);
+  const keepPick = useStore((s) => s.keepPick);
+  // Comparing copies needs their size and format at a glance.
+  const info = useMemo(
+    () => (viewKind === "similar" ? { ...showInfo, name: true, dims: true, meta: true } : showInfo),
+    [viewKind, showInfo],
+  );
+  const keepIds = useMemo(
+    () => new Set(viewKind === "similar" ? similarGroups(items).map((g) => keeperOf(g, keepPick).id) : []),
+    [viewKind, items, keepPick],
+  );
   const analyzing = useStore((s) => s.analyzing);
-  const filtering = useStore((s) => s.search !== "" || s.tagFilter.length > 0);
+  const filtering = useStore((s) => activeConditions(s) > 0);
   const dragIds = useStore((s) => (s.drag?.kind === "items" ? s.drag.ids : null));
   const dragging = useMemo(() => new Set(dragIds ?? []), [dragIds]);
   const reorderable = useStore(
@@ -446,7 +515,7 @@ export function Grid() {
       if (mod && !e.shiftKey && e.code === "KeyJ") return handled(), s.setPicker("goto");
 
       // Organizing
-      if (mod && e.shiftKey && e.code === "KeyJ") return handled(), s.selected.size && s.setPicker("add");
+      if (mod && e.shiftKey && e.code === "KeyJ") return handled(), s.selected.size && s.setPicker("move");
       if (mod && e.shiftKey && e.altKey && e.code === "KeyN") return handled(), void createSmartFolder();
       if (mod && e.shiftKey && e.code === "KeyN") return handled(), void createFolderHere();
       // Folder order: ⌘[ / ⌘] one step, with Shift to the top / bottom.
@@ -457,7 +526,7 @@ export function Grid() {
       }
       if (mod && e.shiftKey && e.code === "KeyC") return handled(), void copyTags(sel());
       if (mod && e.shiftKey && e.code === "KeyV") return handled(), void pasteTags(sel());
-      if (!mod && e.shiftKey && e.code === "KeyD") return handled(), void addToLastFolder(sel());
+      if (!mod && e.shiftKey && e.code === "KeyD") return handled(), void moveToLastFolder(sel());
       if (mod && !e.shiftKey && e.code === "KeyC") return handled(), void copySelection(sel());
       if (e.key === "F2" || (mod && e.code === "KeyR")) {
         handled();
@@ -543,7 +612,7 @@ export function Grid() {
           )}
           {placement.headers.map((h) => (
             <div key={`h${h.start}`} className="absolute left-0" style={{ top: h.y, width }}>
-              <GroupHeader items={items} start={h.start} selected={selected} />
+              <GroupHeader items={items} start={h.start} keepPick={keepPick} />
             </div>
           ))}
           {visible.map((i) => {
@@ -569,7 +638,15 @@ export function Grid() {
                         : "after"
                       : null
                   }
-                  best={item.group !== undefined && (i === 0 || items[i - 1].group !== item.group)}
+                  similar={
+                    item.group === undefined
+                      ? undefined
+                      : {
+                          keep: keepIds.has(item.id),
+                          best: i === 0 || items[i - 1].group !== item.group,
+                          match: Math.round((1 - (item.distance ?? 0) / 64) * 100),
+                        }
+                  }
                 />
               </div>
             );
@@ -580,27 +657,27 @@ export function Grid() {
   );
 }
 
-/** Similar view: names the group and offers to keep one copy. */
-function GroupHeader({ items, start, selected }: { items: Item[]; start: number; selected: Set<string> }) {
+/** Similar view: names the group and offers to tidy it up. */
+function GroupHeader({ items, start, keepPick }: { items: Item[]; start: number; keepPick: Set<string> }) {
   const group = items.slice(start, groupEnd(items, start));
-  // Keep the copy the user picked, if exactly one in this group is selected.
-  const picked = group.filter((i) => selected.has(i.id));
-  const keep = picked.length === 1 ? picked[0] : group[0];
-  const ids = [keep.id, ...group.filter((i) => i !== keep).map((i) => i.id)];
+  const keep = keeperOf(group, keepPick);
+  const freed = group.filter((i) => i !== keep).reduce((n, i) => n + i.size, 0);
   return (
     <div
       className={`flex items-center gap-3 text-xs ${start > 0 ? "border-t border-line" : ""}`}
       style={{ height: HEADER - 8, marginLeft: PAD, marginRight: PAD, marginBottom: 8 }}
     >
       <span className="font-semibold">グループ {(group[0].group ?? 0) + 1}</span>
-      <span className="text-dim">{group.length} 件</span>
+      <span className="text-dim">
+        {group.length} 枚 · 整理すると {formatBytes(freed)} 減ります
+      </span>
       <button
         onPointerDown={(e) => e.stopPropagation()}
-        onClick={() => resolveDuplicates([ids])}
-        title="残す1枚にタグ・フォルダ・評価を引き継ぎ、他はゴミ箱へ移動します"
+        onClick={() => reviewDuplicates(keepPlan([group], keepPick))}
+        title="残す1枚を確認してから、他をゴミ箱へ移動します"
         className="ml-auto rounded-md border border-line px-2 py-0.5 hover:bg-white/5"
       >
-        {picked.length === 1 ? "選択中の1枚を残して整理" : "最高画質の1枚を残して整理"}
+        このグループを整理…
       </button>
     </div>
   );
@@ -614,7 +691,18 @@ function Empty({ kind, filtering, analyzing }: { kind: string; filtering: boolea
         {analyzing ? "画像を解析しています…" : "似ている画像は見つかりませんでした"}
       </p>
     );
-  if (filtering) return <p className="mt-24 text-center text-dim">条件に一致する画像はありません</p>;
+  if (filtering)
+    return (
+      <div className="mt-24 flex flex-col items-center gap-3 text-dim">
+        <p>条件に一致する画像はありません</p>
+        <button
+          onClick={() => useStore.getState().clearConditions()}
+          className="rounded-md bg-accent px-3 py-1.5 font-medium text-white hover:brightness-110"
+        >
+          絞り込みを解除
+        </button>
+      </div>
+    );
   if (kind === "unfiled" || kind === "untagged")
     return <p className="mt-24 text-center text-dim">該当する画像はありません</p>;
   if (kind === "folder")

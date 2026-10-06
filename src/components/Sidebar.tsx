@@ -31,6 +31,7 @@ import { api, type Folder, type View } from "../lib/api";
 import { activeConditions, useStore } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
+import { colorHex } from "../lib/colors";
 
 const collapsedKey = (root: string) => `collapsed:${root}`;
 function loadCollapsed(root: string): Set<string> {
@@ -230,7 +231,7 @@ function FolderTree() {
             depth={depth}
             dropId={`folder:${f.id}`}
             active={sameView(view, { kind: "folder", id: f.id })}
-            icon={<FolderIcon size={15} />}
+            icon={<FolderIcon size={15} style={{ color: colorHex(f.color) }} fill={colorHex(f.color) ?? "none"} fillOpacity={0.3} />}
             label={
               editing === f.id ? (
                 <InlineEdit
@@ -267,6 +268,8 @@ function FolderTree() {
                 ...(f.parentId
                   ? [{ label: "最上位へ移動", onClick: () => run(() => api.moveFolder(f.id, null)) }]
                   : []),
+                { separator: true },
+                { colors: { current: f.color, onPick: (c) => run(() => api.setFolderColor(f.id, c)) } },
                 { separator: true },
                 { label: "上へ", hint: "⌘[", onClick: () => shiftFolder(f.id, -1) },
                 { label: "下へ", hint: "⌘]", onClick: () => shiftFolder(f.id, 1) },
@@ -362,6 +365,7 @@ function SmartFolderList() {
   const editing = useStore((s) => s.renamingFolder);
   const setEditing = useStore((s) => s.setRenamingFolder);
   const startEditSmart = useStore((s) => s.startEditSmart);
+  const run = useStore((s) => s.run);
   const hasConditions = useStore((s) => activeConditions(s) > 0);
   const showMenu = useMenu((s) => s.show);
 
@@ -387,7 +391,7 @@ function SmartFolderList() {
         <Row
           key={sf.id}
           active={sameView(view, { kind: "smart", id: sf.id })}
-          icon={<FolderSearch size={15} />}
+          icon={<FolderSearch size={15} style={{ color: colorHex(sf.color) }} />}
           label={
             editing === sf.id ? (
               <InlineEdit
@@ -408,6 +412,7 @@ function SmartFolderList() {
             showMenu(e, [
               { label: "条件を編集", onClick: () => startEditSmart(sf) },
               { label: "名前を変更", hint: "F2", onClick: () => setEditing(sf.id) },
+              { colors: { current: sf.color, onPick: (c) => run(() => api.setSmartFolderColor(sf.id, c)) } },
               { separator: true },
               { label: "削除", danger: true, onClick: () => confirmDeleteSmartFolder(sf.id, sf.name) },
             ])
@@ -465,7 +470,7 @@ function TagList() {
         <Row
           key={t.id}
           active={tagFilter.includes(t.id)}
-          icon={<TagIcon size={14} />}
+          icon={<TagIcon size={14} style={{ color: colorHex(t.color) }} fill={colorHex(t.color) ?? "none"} fillOpacity={0.3} />}
           label={
             editing === t.id ? (
               <InlineEdit
@@ -485,6 +490,8 @@ function TagList() {
           onContextMenu={(e) =>
             showMenu(e, [
               { label: "名前を変更", onClick: () => setEditing(t.id) },
+              { colors: { current: t.color, onPick: (c) => run(() => api.setTagColor(t.id, c)) } },
+              { separator: true },
               { label: "削除", danger: true, onClick: () => confirmDeleteTag(t.id, t.name) },
             ])
           }

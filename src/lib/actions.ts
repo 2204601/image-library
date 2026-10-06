@@ -108,39 +108,81 @@ export async function deleteSelection(ids: string[]) {
   }
 }
 
-/**
- * Keeps the first (best) image of each similar group and trashes the rest,
- * moving their tags, folders and rating onto the one kept.
- */
-export async function resolveDuplicates(groups: string[][], confirm = false) {
-  const plan = groups
-    .filter((g) => g.length > 1)
-    .map(([keep, ...remove]) => ({ keep, remove }));
-  const removed = plan.flatMap((p) => p.remove);
-  if (!removed.length) return;
-  if (confirm) {
-    const ok = await ask(
-      `${plan.length} グループの重複 ${removed.length} 件をゴミ箱へ移動します。\n` +
-        "各グループで解像度が最も高い1枚が残り、タグ・フォルダ・評価はその1枚に引き継がれます。",
-      { title: "重複を整理", kind: "warning", okLabel: "整理する", cancelLabel: "キャンセル" },
-    );
-    if (!ok) return;
+/** Splits the similar view's list into its groups (best copy first in each). */
+export function similarGroups(items: Item[]): Item[][] {
+  const out: Item[][] = [];
+  for (const i of items) {
+    if (i.group === undefined) continue;
+    if (out.length && out[out.length - 1][0].group === i.group) out[out.length - 1].push(i);
+    else out.push([i]);
   }
-  await st().run(() => api.resolveDuplicates(plan));
-  st().toast(`${removed.length} 件の重複をゴミ箱へ移動しました`, false, {
-    label: "元に戻す",
-    onClick: () => st().run(() => api.restoreItems(removed)),
+  return out;
+}
+
+/** The copy to keep: the one the user picked, else the best (first). */
+export function keeperOf(group: Item[], picked: Set<string>): Item {
+  return group.find((i) => picked.has(i.id)) ?? group[0];
+}
+
+/** Per group: the id to keep first, then the ids to trash. */
+export function keepPlan(groups: Item[][], picked: Set<string>): string[][] {
+  return groups.map((g) => {
+    const keep = keeperOf(g, picked);
+    return [keep.id, ...g.filter((i) => i !== keep).map((i) => i.id)];
   });
 }
 
-/** Item ids of the similar view, split into its groups. */
-export function similarGroups(items: Item[]): string[][] {
-  const out: string[][] = [];
-  items.forEach((it, i) => {
-    if (i === 0 || it.group !== items[i - 1].group) out.push([]);
-    out[out.length - 1].push(it.id);
-  });
-  return out;
+/**
+ * Opens the tidy-up review for `groups` (each: the copy to keep, then the
+ * copies to trash). Nothing changes until the user confirms there.
+ */
+export async function reviewDuplicates(groups: string[][]) {
+  const byId = new Map(st().items.map((i) => [i.id, i]));
+  const review = groups
+    .filter((g) => g.length > 1 && g.every((id) => byId.has(id)))
+    .map(([keep, ...remove]) => ({ keep: byId.get(keep)!, remove: remove.map((id) => byId.get(id)!) }));
+  if (!review.length) return;
+  st().setReview({ groups: review, effects: null });
+  try {
+    const effects = await api.previewDuplicates(review.map(planOf));
+    if (st().review) st().setReview({ groups: review, effects });
+  } catch (e) {
+    st().setReview(null);
+    st().toast(String(e), true);
+  }
+}
+
+const planOf = (g: { keep: Item; remove: Item[] }) => ({ keep: g.keep.id, remove: g.remove.map((i) => i.id) });
+
+/** Runs the tidy-up that the review dialog showed. */
+export async function confirmDuplicates() {
+  const review = st().review;
+  if (!review) return;
+  st().setReview(null);
+  const plan = review.groups.map(planOf);
+  const removed = plan.flatMap((p) => p.remove);
+  try {
+    const effects = await api.resolveDuplicates(plan);
+    const tags = new Set(effects.flatMap((e) => e.addedTags)).size;
+    const carried = [
+      tags ? `タグ ${tags} 種` : "",
+      effects.some((e) => e.rating != null) ? "評価" : "",
+      effects.some((e) => e.folderId) ? "フォルダ" : "",
+    ].filter(Boolean);
+    st().toast(
+      `${plan.length} グループの重複 ${removed.length} 枚をゴミ箱へ移動しました` +
+        (carried.length ? `（${carried.join("・")}を残す1枚へ引き継ぎ）` : ""),
+      false,
+      {
+        label: "元に戻す",
+        onClick: () => st().run(() => api.restoreItems(removed)),
+      },
+    );
+  } catch (e) {
+    st().toast(String(e), true);
+  }
+  useStore.setState({ keepPick: new Set() });
+  await st().refresh();
 }
 
 export async function emptyTrash() {
@@ -177,37 +219,30 @@ export async function confirmDeleteTag(id: number, name: string) {
 
 const folderName = (id: string) => st().folders.find((f) => f.id === id)?.name ?? "";
 
-/** Adds items to one or more folders, optionally taking them out of the open folder. */
-export async function addToFolders(ids: string[], folderIds: string[], removeFromCurrent = false) {
-  if (!ids.length || !folderIds.length) return;
-  const current = currentFolderId();
-  await st().run(async () => {
-    for (const f of folderIds) await api.addToFolder(ids, f);
-    if (removeFromCurrent && current && !folderIds.includes(current)) {
-      await api.removeFromFolder(ids, current);
-    }
-  });
-  st().rememberFolders(folderIds);
-  folderIds.forEach((f) => st().flashTarget(`folder:${f}`));
-  const where = folderIds.length === 1 ? `「${folderName(folderIds[0])}」` : `${folderIds.length} 個のフォルダ`;
-  st().toast(`${ids.length} 件を${where}に追加しました`);
+/** Moves items into a folder (an item is in one folder at most). */
+export async function moveToFolder(ids: string[], folderId: string) {
+  if (!ids.length) return;
+  await st().run(() => api.moveToFolder(ids, folderId));
+  st().rememberFolders([folderId]);
+  st().flashTarget(`folder:${folderId}`);
+  st().toast(`${ids.length} 件を「${folderName(folderId)}」へ移動しました`);
 }
 
-/** Shift+D: repeat the last "add to folder". */
-export function addToLastFolder(ids: string[]) {
+/** Shift+D: repeat the last "move to folder". */
+export function moveToLastFolder(ids: string[]) {
   const last = st().recentFolders[0];
   if (!last) {
-    st().setPicker("add");
+    st().setPicker("move");
     return;
   }
-  return addToFolders(ids, [last]);
+  return moveToFolder(ids, last);
 }
 
 /** Creates a folder and starts renaming it in the sidebar. */
 export async function createFolder(parentId: string | null, itemIds: string[] = []) {
   try {
     const id = await api.createFolder("新しいフォルダ", parentId);
-    if (itemIds.length) await api.addToFolder(itemIds, id);
+    if (itemIds.length) await api.moveToFolder(itemIds, id);
     await st().refresh();
     if (!st().sidebarOpen) st().toggleSidebar();
     st().setRenamingFolder(id);
@@ -290,7 +325,7 @@ export async function createSmartFolder() {
     s.setView({ kind: "smart", id });
     if (!st().sidebarOpen) st().toggleSidebar();
     st().setRenamingFolder(id);
-    if (empty) st().startEditSmart({ id, name: "新しいスマートフォルダ", rule, count: 0 });
+    if (empty) st().startEditSmart({ id, name: "新しいスマートフォルダ", rule, count: 0, color: null });
   } catch (e) {
     s.toast(String(e), true);
   }

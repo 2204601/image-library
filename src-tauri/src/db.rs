@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 6;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -157,6 +157,22 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
              )",
         )
     })?;
+    // An item lives in at most one folder (tags are for cross-cutting groups).
+    // Items that were in several keep the folder they were added to first.
+    step(5, &|c| {
+        c.execute_batch(
+            "DELETE FROM item_folders
+             WHERE rowid NOT IN (SELECT MIN(rowid) FROM item_folders GROUP BY item_id);
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_item_folders_item ON item_folders(item_id);",
+        )
+    })?;
+    // Optional colour (a palette name, see `COLORS`) for folders, smart folders and tags.
+    step(6, &|c| {
+        add_column(c, "folders", "color", "TEXT")?;
+        add_column(c, "smart_folders", "color", "TEXT")?;
+        add_column(c, "tags", "color", "TEXT")?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -188,6 +204,10 @@ pub struct Item {
     /// Similar view only: which group of look-alikes the item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<u32>,
+    /// Similar view only: how many of the 64 hash bits differ from the best
+    /// copy of the group (0 for the best copy itself).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distance: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -293,6 +313,9 @@ pub struct ItemQuery {
     pub min_rating: u8,
     #[serde(default)]
     pub filter: Filter,
+    /// Similar view only: how alike images must be.
+    #[serde(default)]
+    pub similar_level: similar::Level,
     pub sort: SortKey,
     pub desc: bool,
 }
@@ -328,6 +351,7 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         deleted_at: r.get(11)?,
         preview: r.get(12)?,
         group: None,
+        distance: None,
     })
 }
 
@@ -510,7 +534,7 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
     let rows = stmt.query_map(params_from_iter(args.iter().map(|b| b.as_ref())), row_to_item)?;
     let items = rows.collect::<DbResult<Vec<_>>>()?;
     if q.view == View::Similar {
-        return similar_groups(conn, items);
+        return similar_groups(conn, items, q.similar_level);
     }
     Ok(items)
 }
@@ -518,7 +542,7 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
 /// Keeps only items that have look-alikes among `items`, grouped together.
 /// Groups follow the query's sort order; inside a group the best copy
 /// (most pixels, then largest file, then oldest) comes first.
-fn similar_groups(conn: &Connection, items: Vec<Item>) -> DbResult<Vec<Item>> {
+fn similar_groups(conn: &Connection, items: Vec<Item>, level: similar::Level) -> DbResult<Vec<Item>> {
     let mut stmt = conn.prepare(
         "SELECT id, phash, pcolor FROM items WHERE deleted_at IS NULL AND phash IS NOT NULL",
     )?;
@@ -539,13 +563,15 @@ fn similar_groups(conn: &Connection, items: Vec<Item>) -> DbResult<Vec<Item>> {
         })
         .collect();
     let mut out = Vec::new();
-    for (n, group) in similar::groups(&entries).into_iter().enumerate() {
+    for (n, group) in similar::groups(&entries, level).into_iter().enumerate() {
         let mut members: Vec<Item> = group.into_iter().filter_map(|k| items[k].take()).collect();
         members.sort_by_key(|i| {
             (std::cmp::Reverse(i.width as u64 * i.height as u64), std::cmp::Reverse(i.size), i.imported_at)
         });
+        let best = hashes[&members[0].id].0 as u64;
         for mut m in members {
             m.group = Some(n as u32);
+            m.distance = Some(similar::distance(best, hashes[&m.id].0 as u64));
             out.push(m);
         }
     }
@@ -648,14 +674,78 @@ pub struct DuplicateGroup {
     pub remove: Vec<String>,
 }
 
-/// Trashes duplicates after copying their tags, folders and best rating onto
-/// the copy that is kept, so no organizing work is lost.
-pub fn resolve_duplicates(conn: &mut Connection, groups: &[DuplicateGroup]) -> DbResult<()> {
-    let tx = conn.transaction()?;
+/// What tidying one duplicate group does to the copy that is kept.
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DuplicateEffect {
+    pub keep: String,
+    pub remove: Vec<String>,
+    /// Names of tags the kept copy gains.
+    pub added_tags: Vec<String>,
+    /// The kept copy's new rating, if it goes up.
+    pub rating: Option<u8>,
+    /// Folder the kept copy moves into (only when it has none of its own).
+    pub folder_id: Option<String>,
+}
+
+/// Works out what `resolve_duplicates` would carry over, without changing anything.
+pub fn plan_duplicates(conn: &Connection, groups: &[DuplicateGroup]) -> DbResult<Vec<DuplicateEffect>> {
+    let mut out = Vec::new();
     for g in groups.iter().filter(|g| !g.remove.is_empty()) {
         let marks = placeholders(g.remove.len());
-        let mut args: Vec<&dyn ToSql> = vec![&g.keep];
-        args.extend(g.remove.iter().map(|s| s as &dyn ToSql));
+        let mut args: Vec<&dyn ToSql> = g.remove.iter().map(|s| s as &dyn ToSql).collect();
+        args.push(&g.keep);
+        let mut stmt = conn.prepare(&format!(
+            "SELECT DISTINCT t.name FROM item_tags x JOIN tags t ON t.id = x.tag_id
+             WHERE x.item_id IN ({marks})
+               AND x.tag_id NOT IN (SELECT tag_id FROM item_tags WHERE item_id = ?)
+             ORDER BY t.name COLLATE NOCASE"
+        ))?;
+        let added_tags = stmt.query_map(params_from_iter(&args), |r| r.get(0))?.collect::<DbResult<_>>()?;
+
+        let best: Option<u8> = conn.query_row(
+            &format!("SELECT MAX(rating) FROM items WHERE id IN ({marks})"),
+            params_from_iter(g.remove.iter()),
+            |r| r.get(0),
+        )?;
+        let own: u8 = conn.query_row("SELECT rating FROM items WHERE id = ?", [&g.keep], |r| r.get(0))?;
+        let rating = best.filter(|&b| b > own);
+
+        let has_folder = conn
+            .query_row("SELECT 1 FROM item_folders WHERE item_id = ?", [&g.keep], |_| Ok(()))
+            .optional()?
+            .is_some();
+        let folder_id = if has_folder {
+            None
+        } else {
+            conn.query_row(
+                &format!("SELECT folder_id FROM item_folders WHERE item_id IN ({marks}) ORDER BY rowid LIMIT 1"),
+                params_from_iter(g.remove.iter()),
+                |r| r.get(0),
+            )
+            .optional()?
+        };
+        out.push(DuplicateEffect {
+            keep: g.keep.clone(),
+            remove: g.remove.clone(),
+            added_tags,
+            rating,
+            folder_id,
+        });
+    }
+    Ok(out)
+}
+
+/// Trashes duplicates after copying their tags and best rating onto the copy
+/// that is kept (and its folder, if it had none), so no organizing work is
+/// lost. Returns what was carried over.
+pub fn resolve_duplicates(conn: &mut Connection, groups: &[DuplicateGroup]) -> DbResult<Vec<DuplicateEffect>> {
+    let tx = conn.transaction()?;
+    let effects = plan_duplicates(&tx, groups)?;
+    for e in &effects {
+        let marks = placeholders(e.remove.len());
+        let mut args: Vec<&dyn ToSql> = vec![&e.keep];
+        args.extend(e.remove.iter().map(|s| s as &dyn ToSql));
         tx.execute(
             &format!(
                 "INSERT OR IGNORE INTO item_tags (item_id, tag_id)
@@ -663,24 +753,16 @@ pub fn resolve_duplicates(conn: &mut Connection, groups: &[DuplicateGroup]) -> D
             ),
             params_from_iter(&args),
         )?;
-        let mut stmt = tx.prepare(&format!(
-            "SELECT DISTINCT folder_id FROM item_folders WHERE item_id IN ({marks})"
-        ))?;
-        let folders: Vec<String> =
-            stmt.query_map(params_from_iter(&g.remove), |r| r.get(0))?.collect::<DbResult<_>>()?;
-        for f in &folders {
-            add_to_folder(&tx, std::slice::from_ref(&g.keep), f)?;
+        if let Some(r) = e.rating {
+            tx.execute("UPDATE items SET rating = ?2 WHERE id = ?1", params![e.keep, r])?;
         }
-        tx.execute(
-            &format!(
-                "UPDATE items SET rating = MAX(rating, (SELECT MAX(rating) FROM items WHERE id IN ({marks})))
-                 WHERE id = ?"
-            ),
-            params_from_iter(g.remove.iter().map(|s| s as &dyn ToSql).chain([&g.keep as &dyn ToSql])),
-        )?;
-        trash_items(&tx, &g.remove)?;
+        if let Some(f) = &e.folder_id {
+            file_unfiled(&tx, std::slice::from_ref(&e.keep), f)?;
+        }
+        trash_items(&tx, &e.remove)?;
     }
-    tx.commit()
+    tx.commit()?;
+    Ok(effects)
 }
 
 pub fn restore_items(conn: &Connection, ids: &[String]) -> DbResult<()> {
@@ -744,13 +826,15 @@ pub struct Folder {
     pub parent_id: Option<String>,
     pub name: String,
     pub count: i64,
+    pub color: Option<String>,
 }
 
 pub fn list_folders(conn: &Connection) -> DbResult<Vec<Folder>> {
     let mut stmt = conn.prepare(
         "SELECT f.id, f.parent_id, f.name,
            (SELECT COUNT(*) FROM item_folders x JOIN items i ON i.id = x.item_id
-            WHERE x.folder_id = f.id AND i.deleted_at IS NULL)
+            WHERE x.folder_id = f.id AND i.deleted_at IS NULL),
+           f.color
          FROM folders f ORDER BY f.sort_order IS NULL, f.sort_order, f.name COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -759,6 +843,7 @@ pub fn list_folders(conn: &Connection) -> DbResult<Vec<Folder>> {
             parent_id: r.get(1)?,
             name: r.get(2)?,
             count: r.get(3)?,
+            color: r.get(4)?,
         })
     })?;
     rows.collect()
@@ -888,6 +973,7 @@ pub struct SmartFolder {
     pub name: String,
     pub rule: Rule,
     pub count: i64,
+    pub color: Option<String>,
 }
 
 fn load_rule(conn: &Connection, id: &str) -> DbResult<Option<Rule>> {
@@ -921,17 +1007,17 @@ fn count_rule(conn: &Connection, rule: &Rule) -> DbResult<i64> {
 }
 
 pub fn list_smart_folders(conn: &Connection) -> DbResult<Vec<SmartFolder>> {
-    let rows: Vec<(String, String, String)> = {
+    let rows: Vec<(String, String, String, Option<String>)> = {
         let mut stmt =
-            conn.prepare("SELECT id, name, rule FROM smart_folders ORDER BY sort_order, name")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            conn.prepare("SELECT id, name, rule, color FROM smart_folders ORDER BY sort_order, name")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
         rows.collect::<DbResult<_>>()?
     };
     rows.into_iter()
-        .map(|(id, name, json)| {
+        .map(|(id, name, json, color)| {
             let rule = clean_rule(conn, serde_json::from_str(&json).unwrap_or_default());
             let count = count_rule(conn, &rule)?;
-            Ok(SmartFolder { id, name, rule, count })
+            Ok(SmartFolder { id, name, rule, count, color })
         })
         .collect()
 }
@@ -988,8 +1074,18 @@ pub fn list_exts(conn: &Connection) -> DbResult<Vec<(String, i64)>> {
     Ok(merged)
 }
 
-/// Adds items to a folder; new members go to the end of its manual order.
-pub fn add_to_folder(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
+/// Puts items into a folder (taking them out of the one they were in); they
+/// go to the end of its manual order. Items already there stay where they are.
+pub fn move_to_folder(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
+    let mut del = conn.prepare("DELETE FROM item_folders WHERE item_id = ?1 AND folder_id != ?2")?;
+    for id in item_ids {
+        del.execute(params![id, folder_id])?;
+    }
+    file_unfiled(conn, item_ids, folder_id)
+}
+
+/// Like `move_to_folder`, but leaves items that already have a folder alone.
+pub fn file_unfiled(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
     let mut stmt = conn.prepare(
         "INSERT OR IGNORE INTO item_folders (item_id, folder_id, position)
          VALUES (?1, ?2, (SELECT COALESCE(MAX(position), 0) + 1 FROM item_folders WHERE folder_id = ?2))",
@@ -1063,13 +1159,15 @@ pub struct Tag {
     pub id: i64,
     pub name: String,
     pub count: i64,
+    pub color: Option<String>,
 }
 
 pub fn list_tags(conn: &Connection) -> DbResult<Vec<Tag>> {
     let mut stmt = conn.prepare(
         "SELECT t.id, t.name,
            (SELECT COUNT(*) FROM item_tags x JOIN items i ON i.id = x.item_id
-            WHERE x.tag_id = t.id AND i.deleted_at IS NULL)
+            WHERE x.tag_id = t.id AND i.deleted_at IS NULL),
+           t.color
          FROM tags t ORDER BY t.name COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([], |r| {
@@ -1077,9 +1175,36 @@ pub fn list_tags(conn: &Connection) -> DbResult<Vec<Tag>> {
             id: r.get(0)?,
             name: r.get(1)?,
             count: r.get(2)?,
+            color: r.get(3)?,
         })
     })?;
     rows.collect()
+}
+
+/// Colours a folder, smart folder or tag can take (the UI maps them to shades).
+pub const COLORS: [&str; 9] = ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "gray"];
+
+#[derive(Debug, Clone, Copy)]
+pub enum ColorTarget {
+    Folder,
+    SmartFolder,
+    Tag,
+}
+
+/// Sets (or with `None`, clears) the colour of a folder, smart folder or tag.
+pub fn set_color(conn: &Connection, target: ColorTarget, id: &dyn ToSql, color: Option<&str>) -> DbResult<()> {
+    if let Some(c) = color {
+        if !COLORS.contains(&c) {
+            return Err(rusqlite::Error::InvalidParameterName(format!("unknown colour: {c}")));
+        }
+    }
+    let table = match target {
+        ColorTarget::Folder => "folders",
+        ColorTarget::SmartFolder => "smart_folders",
+        ColorTarget::Tag => "tags",
+    };
+    conn.execute(&format!("UPDATE {table} SET color = ?1 WHERE id = ?2"), params![color, id])?;
+    Ok(())
 }
 
 fn ensure_tag(conn: &Connection, name: &str) -> DbResult<i64> {
@@ -1166,7 +1291,7 @@ pub fn selection_info(conn: &Connection, ids: &[String]) -> DbResult<SelectionIn
     }
     let ph = placeholders(ids.len());
     let mut stmt = conn.prepare(&format!(
-        "SELECT t.id, t.name, COUNT(*) FROM item_tags x JOIN tags t ON t.id = x.tag_id
+        "SELECT t.id, t.name, COUNT(*), t.color FROM item_tags x JOIN tags t ON t.id = x.tag_id
          WHERE x.item_id IN ({ph}) GROUP BY t.id ORDER BY t.name COLLATE NOCASE"
     ))?;
     let tags = stmt
@@ -1175,6 +1300,7 @@ pub fn selection_info(conn: &Connection, ids: &[String]) -> DbResult<SelectionIn
                 id: r.get(0)?,
                 name: r.get(1)?,
                 count: r.get(2)?,
+                color: r.get(3)?,
             })
         })?
         .collect::<DbResult<Vec<_>>>()?;
@@ -1237,6 +1363,7 @@ mod tests {
             include_subfolders: false,
             min_rating: 0,
             filter: Filter::default(),
+            similar_level: similar::Level::Standard,
             sort: SortKey::ImportedAt,
             desc: false,
         }
@@ -1265,7 +1392,7 @@ mod tests {
         add(&mut conn, "b", "dog.png", 2);
         add(&mut conn, "c", "bird.png", 3);
         let f = create_folder(&conn, "Animals", None).unwrap();
-        add_to_folder(&conn, &s(&["a"]), &f).unwrap();
+        move_to_folder(&conn, &s(&["a"]), &f).unwrap();
         add_tags(&mut conn, &s(&["b"]), &s(&["cute"])).unwrap();
         trash_items(&conn, &s(&["c"])).unwrap();
 
@@ -1294,12 +1421,19 @@ mod tests {
         add(&mut conn, "b", "b.png", 2);
         add(&mut conn, "c", "c.png", 3);
         let f = create_folder(&conn, "F", None).unwrap();
-        add_to_folder(&conn, &s(&["b"]), &f).unwrap();
+        move_to_folder(&conn, &s(&["b"]), &f).unwrap();
         add_tags(&mut conn, &s(&["b"]), &s(&["x"])).unwrap();
         add_tags(&mut conn, &s(&["c"]), &s(&["y"])).unwrap();
         set_rating(&conn, &s(&["c"]), 4).unwrap();
 
-        resolve_duplicates(&mut conn, &[DuplicateGroup { keep: "a".into(), remove: s(&["b", "c"]) }]).unwrap();
+        let group = [DuplicateGroup { keep: "a".into(), remove: s(&["b", "c"]) }];
+        let planned = plan_duplicates(&conn, &group).unwrap();
+        assert_eq!(planned[0].added_tags, ["x", "y"]);
+        assert_eq!((planned[0].rating, planned[0].folder_id.as_deref()), (Some(4), Some(f.as_str())));
+        assert_eq!(counts(&conn).unwrap().all, 3, "planning changes nothing");
+
+        let done = resolve_duplicates(&mut conn, &group).unwrap();
+        assert_eq!(done, planned);
         assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a"]));
         assert_eq!(ids(query_items(&conn, &q(View::Folder { id: f })).unwrap()), s(&["a"]));
         let info = selection_info(&conn, &s(&["a"])).unwrap();
@@ -1308,6 +1442,71 @@ mod tests {
         assert_eq!(names, ["x", "y"]);
         assert_eq!(get_items(&conn, &s(&["a"])).unwrap()[0].rating, 4);
         assert_eq!(counts(&conn).unwrap().trash, 2);
+    }
+
+    #[test]
+    fn duplicates_keep_their_own_folder_and_rating() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.png", 2);
+        let (f, g) = (create_folder(&conn, "F", None).unwrap(), create_folder(&conn, "G", None).unwrap());
+        move_to_folder(&conn, &s(&["a"]), &f).unwrap();
+        move_to_folder(&conn, &s(&["b"]), &g).unwrap();
+        set_rating(&conn, &s(&["a"]), 5).unwrap();
+        set_rating(&conn, &s(&["b"]), 2).unwrap();
+        let e = &plan_duplicates(&conn, &[DuplicateGroup { keep: "a".into(), remove: s(&["b"]) }]).unwrap()[0];
+        assert_eq!((e.rating, e.folder_id.clone(), e.added_tags.len()), (None, None, 0));
+    }
+
+    #[test]
+    fn colours_folders_smart_folders_and_tags() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        let f = create_folder(&conn, "F", None).unwrap();
+        let sf = create_smart_folder(&conn, "S", &Rule::default()).unwrap();
+        add_tags(&mut conn, &s(&["a"]), &s(&["t"])).unwrap();
+        let tag = list_tags(&conn).unwrap()[0].id;
+        set_color(&conn, ColorTarget::Folder, &f, Some("red")).unwrap();
+        set_color(&conn, ColorTarget::SmartFolder, &sf, Some("blue")).unwrap();
+        set_color(&conn, ColorTarget::Tag, &tag, Some("green")).unwrap();
+        assert_eq!(list_folders(&conn).unwrap()[0].color.as_deref(), Some("red"));
+        assert_eq!(list_smart_folders(&conn).unwrap()[0].color.as_deref(), Some("blue"));
+        assert_eq!(list_tags(&conn).unwrap()[0].color.as_deref(), Some("green"));
+        assert_eq!(selection_info(&conn, &s(&["a"])).unwrap().tags[0].color.as_deref(), Some("green"));
+        set_color(&conn, ColorTarget::Folder, &f, None).unwrap();
+        assert_eq!(list_folders(&conn).unwrap()[0].color, None);
+        assert!(set_color(&conn, ColorTarget::Folder, &f, Some("chartreuse")).is_err());
+    }
+
+    #[test]
+    fn an_item_lives_in_one_folder() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        let (f, g) = (create_folder(&conn, "F", None).unwrap(), create_folder(&conn, "G", None).unwrap());
+        move_to_folder(&conn, &s(&["a"]), &f).unwrap();
+        move_to_folder(&conn, &s(&["a"]), &f).unwrap(); // same folder again: no-op
+        move_to_folder(&conn, &s(&["a"]), &g).unwrap();
+        assert_eq!(ids(query_items(&conn, &q(View::Folder { id: f.clone() })).unwrap()), Vec::<String>::new());
+        assert_eq!(ids(query_items(&conn, &q(View::Folder { id: g.clone() })).unwrap()), s(&["a"]));
+        file_unfiled(&conn, &s(&["a"]), &f).unwrap(); // already filed: stays in G
+        assert_eq!(ids(query_items(&conn, &q(View::Folder { id: g })).unwrap()), s(&["a"]));
+        remove_from_folder(&conn, &s(&["a"]), &f).unwrap(); // not in F: no-op
+        assert_eq!(counts(&conn).unwrap().unfiled, 0);
+    }
+
+    #[test]
+    fn migration_keeps_only_the_first_folder() {
+        let mut conn = mem();
+        conn.execute_batch("PRAGMA user_version = 4; DROP INDEX IF EXISTS idx_item_folders_item;").unwrap();
+        add(&mut conn, "a", "a.png", 1);
+        let (f, g) = (create_folder(&conn, "F", None).unwrap(), create_folder(&conn, "G", None).unwrap());
+        for folder in [&f, &g] {
+            conn.execute("INSERT INTO item_folders (item_id, folder_id, position) VALUES ('a', ?, 1)", [folder])
+                .unwrap();
+        }
+        migrate(&conn).unwrap();
+        assert_eq!(ids(query_items(&conn, &q(View::Folder { id: f })).unwrap()), s(&["a"]));
+        assert!(query_items(&conn, &q(View::Folder { id: g })).unwrap().is_empty());
     }
 
     #[test]
@@ -1381,7 +1580,7 @@ mod tests {
         add(&mut conn, "a", "a.png", 1);
         let p = create_folder(&conn, "Parent", None).unwrap();
         let c = create_folder(&conn, "Child", Some(&p)).unwrap();
-        add_to_folder(&conn, &s(&["a"]), &c).unwrap();
+        move_to_folder(&conn, &s(&["a"]), &c).unwrap();
 
         assert!(!move_folder(&mut conn, &p, Some(&c)).unwrap(), "cycle must be rejected");
         assert!(!move_folder(&mut conn, &p, Some(&p)).unwrap());
@@ -1485,8 +1684,8 @@ mod tests {
         let p = create_folder(&conn, "P", None).unwrap();
         let c = create_folder(&conn, "C", Some(&p)).unwrap();
         let g = create_folder(&conn, "G", Some(&c)).unwrap();
-        add_to_folder(&conn, &s(&["a", "b", "c"]), &p).unwrap();
-        add_to_folder(&conn, &s(&["d"]), &g).unwrap();
+        move_to_folder(&conn, &s(&["a", "b", "c"]), &p).unwrap();
+        move_to_folder(&conn, &s(&["d"]), &g).unwrap();
 
         let mut query = q(View::Folder { id: p.clone() });
         query.sort = SortKey::Manual;
@@ -1500,7 +1699,7 @@ mod tests {
         reorder_in_folder(&mut conn, &p, &s(&["c", "a"]), None).unwrap();
         assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "c", "a"]));
         // Newly added items go to the end.
-        add_to_folder(&conn, &s(&["d"]), &p).unwrap();
+        move_to_folder(&conn, &s(&["d"]), &p).unwrap();
         assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "c", "a", "d"]));
     }
 
@@ -1671,7 +1870,7 @@ mod tests {
         add(&mut conn, "b", "b.png", 2);
         let f = create_folder(&conn, "Zeta", None).unwrap();
         let g = create_folder(&conn, "Alpha", None).unwrap();
-        add_to_folder(&conn, &s(&["a", "b"]), &f).unwrap();
+        move_to_folder(&conn, &s(&["a", "b"]), &f).unwrap();
         reorder_in_folder(&mut conn, &f, &s(&["b"]), Some("a")).unwrap(); // b before a
         create_smart_folder(&conn, "Saved", &Rule { min_rating: 2, ..Default::default() }).unwrap();
         set_rating(&conn, &s(&["a"]), 5).unwrap();

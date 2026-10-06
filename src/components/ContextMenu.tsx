@@ -1,9 +1,12 @@
 import { useEffect } from "react";
 import { create } from "zustand";
+import { COLORS } from "../lib/colors";
 
 export type MenuItem =
-  | { label: string; onClick: () => void; danger?: boolean; hint?: string; separator?: never }
-  | { separator: true };
+  | { label: string; onClick: () => void; danger?: boolean; hint?: string; separator?: never; colors?: never }
+  | { separator: true; colors?: never }
+  /** A row of colour swatches; picking `null` clears the colour. */
+  | { colors: { current: string | null; onPick: (key: string | null) => void }; separator?: never; label?: never };
 
 interface MenuState {
   menu: { x: number; y: number; items: MenuItem[] } | null;
@@ -53,7 +56,34 @@ export function ContextMenu() {
         onPointerDown={(e) => e.stopPropagation()}
       >
         {menu.items.map((it, i) =>
-          "label" in it ? (
+          it.colors ? (
+            <div key={i} className="flex items-center gap-1.5 px-2.5 py-1.5">
+              {COLORS.map((c) => (
+                <button
+                  key={c.key}
+                  title={c.label}
+                  onClick={() => {
+                    close();
+                    it.colors.onPick(c.key);
+                  }}
+                  className={`h-4 w-4 rounded-full ring-offset-1 ring-offset-raised hover:scale-110 ${
+                    it.colors.current === c.key ? "ring-2 ring-fg" : ""
+                  }`}
+                  style={{ background: c.hex }}
+                />
+              ))}
+              <button
+                title="色をなしにする"
+                onClick={() => {
+                  close();
+                  it.colors.onPick(null);
+                }}
+                className="flex h-4 w-4 items-center justify-center rounded-full border border-dim text-[10px] leading-none text-dim hover:text-fg"
+              >
+                ×
+              </button>
+            </div>
+          ) : "label" in it ? (
             <button
               key={i}
               className={`flex w-full items-center gap-6 rounded px-2.5 py-1.5 text-left hover:bg-accent hover:text-white ${

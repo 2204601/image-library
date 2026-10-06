@@ -4,7 +4,7 @@
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
-import { addToFolders, reorder } from "../lib/actions";
+import { moveToFolder, reorder } from "../lib/actions";
 import { api, type Folder } from "../lib/api";
 import { useStore, type Drag } from "../store";
 
@@ -99,7 +99,7 @@ async function drop(drag: Drag, target: string) {
     }
     await reorder(moving, before);
   } else if (drag.kind === "items") {
-    await addToFolders(drag.ids, [target.slice(7)]);
+    await moveToFolder(drag.ids, target.slice(7));
   } else if (target.startsWith("pos:")) {
     // "pos:folder:<id>:before|after" → same parent as <id>, next to it.
     const [, , id, side] = target.split(":");

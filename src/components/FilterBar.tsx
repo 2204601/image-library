@@ -14,8 +14,8 @@ import {
   startOfToday,
 } from "../lib/rule";
 import { activeConditions, useStore } from "../store";
+import { RangeCalendar } from "./RangeCalendar";
 
-const DAY = 24 * 60 * 60 * 1000;
 
 /** A chip that opens a small panel underneath it. */
 function Popover({
@@ -117,12 +117,14 @@ function Option({ on, onClick, children }: { on: boolean; onClick: () => void; c
   );
 }
 
-const toInput = (ms: number | null) => {
-  if (ms == null) return "";
+const previousDay = (ms: number) => {
   const d = new Date(ms);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1).getTime();
 };
-const fromInput = (v: string) => (v ? new Date(`${v}T00:00:00`).getTime() : null);
+const nextDay = (ms: number) => {
+  const d = new Date(ms);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime();
+};
 
 export function FilterBar() {
   const filter = useStore((s) => s.filter);
@@ -228,23 +230,17 @@ export function FilterBar() {
                   {p.label}
                 </Option>
               ))}
-              <div className="mt-1 flex items-center gap-1.5 border-t border-line px-1 pt-2">
-                <input
-                  type="date"
-                  value={toInput(filter.importedAfter)}
-                  max={toInput(startOfToday())}
-                  onChange={(e) => setFilter({ importedAfter: fromInput(e.target.value) })}
-                  className="h-7 rounded border border-line bg-bg px-1 outline-none focus:border-accent"
-                />
-                <span className="text-dim">〜</span>
-                <input
-                  type="date"
-                  value={toInput(filter.importedBefore != null ? filter.importedBefore - DAY : null)}
-                  onChange={(e) => {
-                    const d = fromInput(e.target.value);
-                    setFilter({ importedBefore: d != null ? d + DAY : null }); // inclusive day
-                  }}
-                  className="h-7 rounded border border-line bg-bg px-1 outline-none focus:border-accent"
+              <div className="mt-1 border-t border-line pt-2">
+                <RangeCalendar
+                  from={filter.importedAfter}
+                  to={
+                    filter.importedBefore != null
+                      ? previousDay(filter.importedBefore)
+                      : filter.importedAfter != null
+                        ? startOfToday()
+                        : null
+                  }
+                  onChange={(from, to) => setFilter({ importedAfter: from, importedBefore: nextDay(to) })}
                 />
               </div>
             </div>

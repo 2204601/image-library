@@ -1,10 +1,10 @@
 // Folder picker dialog.
-//   "add"  (⌘⇧J / context menu): multi-select folders to add the selection to,
-//          create a new folder inline, optionally remove from the open folder.
+//   "move" (⌘⇧J / context menu): move the selection into a folder (an item is
+//          in one folder at most), or create a new folder inline.
 //   "goto" (⌘J): jump to a folder.
-import { Check, Clock, Folder as FolderIcon, FolderPlus, Search } from "lucide-react";
+import { Clock, Folder as FolderIcon, FolderPlus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { addToFolders } from "../lib/actions";
+import { moveToFolder } from "../lib/actions";
 import { api, type Folder } from "../lib/api";
 import { currentFolderId, useStore } from "../store";
 
@@ -38,15 +38,13 @@ export function FolderPicker() {
   return <PickerDialog mode={mode} />;
 }
 
-function PickerDialog({ mode }: { mode: "add" | "goto" }) {
+function PickerDialog({ mode }: { mode: "move" | "goto" }) {
   const folders = useStore((s) => s.folders);
   const recent = useStore((s) => s.recentFolders);
   const selectedCount = useStore((s) => s.selected.size);
   const close = () => useStore.getState().setPicker(null);
   const [query, setQuery] = useState("");
-  const [checked, setChecked] = useState<Set<string>>(new Set());
   const [cursor, setCursor] = useState(0);
-  const [removeFromCurrent, setRemoveFromCurrent] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const current = currentFolderId();
 
@@ -63,7 +61,7 @@ function PickerDialog({ mode }: { mode: "add" | "goto" }) {
   }, [folders, recent, query]);
 
   const exact = folders.some((f) => f.name === query.trim());
-  const canCreate = mode === "add" && query.trim() !== "" && !exact;
+  const canCreate = mode === "move" && query.trim() !== "" && !exact;
   const total = rows.length + (canCreate ? 1 : 0);
 
   useEffect(() => setCursor(0), [query]);
@@ -71,41 +69,29 @@ function PickerDialog({ mode }: { mode: "add" | "goto" }) {
     listRef.current?.querySelector(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
   }, [cursor]);
 
-  const toggle = (id: string) =>
-    setChecked((c) => {
-      const n = new Set(c);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-
   const ids = () => [...useStore.getState().selected];
 
-  const commit = async (extra: string[] = []) => {
-    const targets = [...new Set([...checked, ...extra])];
-    if (!targets.length) return;
+  const commit = async (folderId: string) => {
     close();
-    await addToFolders(ids(), targets, removeFromCurrent);
+    await moveToFolder(ids(), folderId);
   };
 
-  const createAndAdd = async () => {
+  const createAndMove = async () => {
     const id = await api.createFolder(query.trim(), null).catch((e) => {
       useStore.getState().toast(String(e), true);
       return null;
     });
-    if (id) await commit([id]);
+    if (id) await commit(id);
   };
 
   const activate = (i: number) => {
-    if (i >= rows.length) return createAndAdd();
+    if (i >= rows.length) return createAndMove();
     const f = rows[i].folder;
     if (mode === "goto") {
       close();
       useStore.getState().setView({ kind: "folder", id: f.id });
-    } else if (checked.size === 0) {
-      void commit([f.id]); // Enter on a single folder adds right away
     } else {
-      toggle(f.id);
+      void commit(f.id);
     }
   };
 
@@ -122,12 +108,7 @@ function PickerDialog({ mode }: { mode: "add" | "goto" }) {
       setCursor((c) => Math.max(0, c - 1));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if ((e.metaKey || e.ctrlKey) && mode === "add") void commit();
-      else void activate(cursor);
-    } else if (e.key === " " && mode === "add" && query === "" && cursor < rows.length) {
-      // With an empty search box, Space toggles instead of typing a space.
-      e.preventDefault();
-      toggle(rows[cursor].folder.id);
+      void activate(cursor);
     }
   };
 
@@ -139,7 +120,7 @@ function PickerDialog({ mode }: { mode: "add" | "goto" }) {
       >
         <div className="border-b border-line px-4 pt-3 pb-2">
           <div className="mb-2 text-xs font-semibold text-dim">
-            {mode === "add" ? `${selectedCount} 件をフォルダに追加` : "フォルダへ移動"}
+            {mode === "move" ? `${selectedCount} 件をフォルダへ移動` : "フォルダへ移動"}
           </div>
           <label className="flex h-9 items-center gap-2 rounded-md border border-line bg-bg px-2 focus-within:border-accent">
             <Search size={15} className="text-dim" />
@@ -148,7 +129,7 @@ function PickerDialog({ mode }: { mode: "add" | "goto" }) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={onKey}
-              placeholder={mode === "add" ? "フォルダを検索、または新しい名前を入力" : "フォルダを検索"}
+              placeholder={mode === "move" ? "フォルダを検索、または新しい名前を入力" : "フォルダを検索"}
               className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-dim"
             />
           </label>
@@ -161,7 +142,6 @@ function PickerDialog({ mode }: { mode: "add" | "goto" }) {
           )}
           {rows.map((r, i) => {
             const isRecent = "recent" in r;
-            const on = checked.has(r.folder.id);
             const firstTree = !query && i === rows.findIndex((x) => !("recent" in x));
             return (
               <div key={`${isRecent ? "r" : "t"}-${r.folder.id}`}>
@@ -170,22 +150,12 @@ function PickerDialog({ mode }: { mode: "add" | "goto" }) {
                 <button
                   data-index={i}
                   onMouseMove={() => setCursor(i)}
-                  onClick={() => (mode === "add" ? toggle(r.folder.id) : activate(i))}
-                  onDoubleClick={() => mode === "add" && commit([r.folder.id])}
+                  onClick={() => activate(i)}
                   className={`flex h-8 w-full items-center gap-2 rounded-md pr-2 text-left ${
                     i === cursor ? "bg-white/8" : ""
                   }`}
                   style={{ paddingLeft: 8 + r.depth * 14 }}
                 >
-                  {mode === "add" && (
-                    <span
-                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                        on ? "border-accent bg-accent text-white" : "border-line"
-                      }`}
-                    >
-                      {on && <Check size={12} strokeWidth={3} />}
-                    </span>
-                  )}
                   <FolderIcon size={15} className="shrink-0 text-dim" />
                   <span className="min-w-0 flex-1 truncate">{query || isRecent ? r.path : r.folder.name}</span>
                   {r.folder.id === current && <span className="text-[11px] text-dim">表示中</span>}
@@ -198,36 +168,18 @@ function PickerDialog({ mode }: { mode: "add" | "goto" }) {
             <button
               data-index={rows.length}
               onMouseMove={() => setCursor(rows.length)}
-              onClick={createAndAdd}
+              onClick={createAndMove}
               className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-accent ${
                 cursor === rows.length ? "bg-white/8" : ""
               }`}
             >
-              <FolderPlus size={15} /> 「{query.trim()}」を作成して追加
+              <FolderPlus size={15} /> 「{query.trim()}」を作成して移動
             </button>
           )}
         </div>
-        {mode === "add" && (
-          <div className="flex items-center gap-3 border-t border-line px-4 py-2.5">
-            {current && (
-              <label className="flex items-center gap-1.5 text-xs text-dim">
-                <input
-                  type="checkbox"
-                  checked={removeFromCurrent}
-                  onChange={(e) => setRemoveFromCurrent(e.target.checked)}
-                  className="accent-accent"
-                />
-                表示中のフォルダから外す
-              </label>
-            )}
-            <span className="flex-1 text-right text-[11px] text-dim">Enter で追加 / Space で複数選択</span>
-            <button
-              disabled={checked.size === 0}
-              onClick={() => commit()}
-              className="h-8 rounded-md bg-accent px-3 font-medium text-white enabled:hover:brightness-110 disabled:opacity-40"
-            >
-              追加{checked.size > 0 ? `（${checked.size}）` : ""}
-            </button>
+        {mode === "move" && (
+          <div className="border-t border-line px-4 py-2 text-right text-[11px] text-dim">
+            Enter で移動（1 枚につき 1 フォルダ。複数の分類にはタグを使います）
           </div>
         )}
       </div>

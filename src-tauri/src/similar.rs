@@ -6,15 +6,43 @@
 
 use image::imageops::FilterType;
 use image::DynamicImage;
+use serde::Deserialize;
 use std::collections::HashMap;
 
-/// Hashes at most this many bits apart count as the same picture.
-pub const MAX_DISTANCE: u32 = 6;
-/// Aspect ratios must agree within this factor (guards against unrelated
-/// images that merely share a similar brightness layout).
-const MAX_ASPECT_RATIO: f64 = 1.1;
-/// Largest per-channel difference of the average colours.
-const MAX_COLOR_DIFF: i32 = 24;
+/// How alike two images must be to land in the same group.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum Level {
+    /// Practically the same picture (re-saved, resized).
+    Strict,
+    #[default]
+    Standard,
+    /// Vaguely similar; expect some unrelated pairs.
+    Loose,
+}
+
+/// The thresholds a level stands for.
+#[derive(Debug, Clone, Copy)]
+pub struct Limits {
+    /// Hashes at most this many bits apart count as the same picture.
+    pub max_distance: u32,
+    /// Aspect ratios must agree within this factor (guards against unrelated
+    /// images that merely share a similar brightness layout).
+    pub max_aspect_ratio: f64,
+    /// Largest per-channel difference of the average colours.
+    pub max_color_diff: i32,
+}
+
+impl Level {
+    pub fn limits(self) -> Limits {
+        let (max_distance, max_aspect_ratio, max_color_diff) = match self {
+            Level::Strict => (2, 1.05, 12),
+            Level::Standard => (6, 1.1, 24),
+            Level::Loose => (12, 1.25, 48),
+        };
+        Limits { max_distance, max_aspect_ratio, max_color_diff }
+    }
+}
 
 /// Average colour packed as 0xRRGGBB.
 pub fn mean_color(img: &DynamicImage) -> u32 {
@@ -46,8 +74,12 @@ fn aspect(e: &Entry) -> f64 {
     e.width.max(1) as f64 / e.height.max(1) as f64
 }
 
-fn colors_close(a: u32, b: u32) -> bool {
-    (0..3).all(|k| ((a >> (k * 8) & 0xff) as i32 - (b >> (k * 8) & 0xff) as i32).abs() <= MAX_COLOR_DIFF)
+fn colors_close(a: u32, b: u32, max_diff: i32) -> bool {
+    (0..3).all(|k| ((a >> (k * 8) & 0xff) as i32 - (b >> (k * 8) & 0xff) as i32).abs() <= max_diff)
+}
+
+pub fn distance(a: u64, b: u64) -> u32 {
+    (a ^ b).count_ones()
 }
 
 fn find(parent: &mut [usize], mut i: usize) -> usize {
@@ -60,15 +92,21 @@ fn find(parent: &mut [usize], mut i: usize) -> usize {
 
 /// Groups of indices into `entries` (two or more each) that look alike.
 /// Groups and their members keep the order of `entries`.
-pub fn groups(entries: &[Entry]) -> Vec<Vec<usize>> {
+pub fn groups(entries: &[Entry], level: Level) -> Vec<Vec<usize>> {
+    let lim = level.limits();
     let n = entries.len();
     let mut parent: Vec<usize> = (0..n).collect();
-    // Two hashes within 7 bits agree on at least one of their 8 bytes
-    // (pigeonhole), so only pairs sharing a byte bucket need comparing.
-    let mut buckets: HashMap<(u8, u8), Vec<usize>> = HashMap::new();
+    // Split the hash into `max_distance + 1` chunks: two hashes within
+    // `max_distance` bits must agree on at least one whole chunk (pigeonhole),
+    // so only pairs sharing a chunk bucket need comparing.
+    let chunks = lim.max_distance + 1;
+    let span = |c: u32| (c * 64 / chunks, (c + 1) * 64 / chunks);
+    let mut buckets: HashMap<(u32, u64), Vec<usize>> = HashMap::new();
     for (i, e) in entries.iter().enumerate() {
-        for k in 0..8u8 {
-            buckets.entry((k, (e.hash >> (k * 8)) as u8)).or_default().push(i);
+        for c in 0..chunks {
+            let (lo, hi) = span(c);
+            let mask = if hi - lo >= 64 { u64::MAX } else { (1u64 << (hi - lo)) - 1 };
+            buckets.entry((c, (e.hash >> lo) & mask)).or_default().push(i);
         }
     }
     for members in buckets.values() {
@@ -76,10 +114,10 @@ pub fn groups(entries: &[Entry]) -> Vec<Vec<usize>> {
             for &j in &members[a + 1..] {
                 let (x, y) = (&entries[i], &entries[j]);
                 let ar = aspect(x) / aspect(y);
-                if (x.hash ^ y.hash).count_ones() <= MAX_DISTANCE
-                    && ar <= MAX_ASPECT_RATIO
-                    && ar >= 1.0 / MAX_ASPECT_RATIO
-                    && colors_close(x.color, y.color)
+                if distance(x.hash, y.hash) <= lim.max_distance
+                    && ar <= lim.max_aspect_ratio
+                    && ar >= 1.0 / lim.max_aspect_ratio
+                    && colors_close(x.color, y.color, lim.max_color_diff)
                 {
                     let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
                     if ri != rj {
@@ -123,8 +161,8 @@ mod tests {
         let b = a.resize(400, 300, FilterType::Lanczos3);
         let c = picture(800, 600, 9);
         assert!((dhash(&a) ^ dhash(&b)).count_ones() <= 2);
-        assert!((dhash(&a) ^ dhash(&c)).count_ones() > MAX_DISTANCE);
-        assert!(colors_close(mean_color(&a), mean_color(&b)));
+        assert!(distance(dhash(&a), dhash(&c)) > Level::Standard.limits().max_distance);
+        assert!(colors_close(mean_color(&a), mean_color(&b), Level::Standard.limits().max_color_diff));
     }
 
     #[test]
@@ -133,8 +171,8 @@ mod tests {
         let blue = DynamicImage::ImageRgb8(RgbImage::from_pixel(50, 50, Rgb([0, 0, 200])));
         let entry = |img: &DynamicImage| Entry { hash: dhash(img), color: mean_color(img), width: 50, height: 50 };
         assert_eq!(dhash(&red), dhash(&blue));
-        assert!(groups(&[entry(&red), entry(&blue)]).is_empty());
-        assert_eq!(groups(&[entry(&red), entry(&red)]), vec![vec![0, 1]]);
+        assert!(groups(&[entry(&red), entry(&blue)], Level::Standard).is_empty());
+        assert_eq!(groups(&[entry(&red), entry(&red)], Level::Standard), vec![vec![0, 1]]);
     }
 
     #[test]
@@ -148,13 +186,50 @@ mod tests {
             e(base ^ (0xff << 56) ^ (0xff << 8), 800, 600), // 16 bits off
             e(0xffff_0000_ffff_0001, 1600, 1200),
         ];
-        assert_eq!(groups(&entries), vec![vec![0, 2], vec![1, 5]]);
+        assert_eq!(groups(&entries, Level::Standard), vec![vec![0, 2], vec![1, 5]]);
     }
 
     #[test]
     fn groups_are_transitive() {
         // a~b and b~c join even though a and c are further apart.
         let entries = [e(0, 10, 10), e(0b11_1111, 10, 10), e(0b1111_1111_1111, 10, 10)];
-        assert_eq!(groups(&entries), vec![vec![0, 1, 2]]);
+        assert_eq!(groups(&entries, Level::Standard), vec![vec![0, 1, 2]]);
+    }
+
+    #[test]
+    fn levels_widen_the_net() {
+        let base = 0x0123_4567_89ab_cdefu64;
+        let entries = [
+            e(base, 800, 600),
+            e(base ^ 0b11, 800, 600),                 // 2 bits from the first
+            e(base ^ 0b11_1111_1111, 800, 600),       // 10 from the first, 8 from the second
+            e(base ^ (0xffff << 48), 800, 600),       // 16 bits away from everything
+        ];
+        assert_eq!(groups(&entries, Level::Strict), vec![vec![0, 1]]);
+        assert_eq!(groups(&entries, Level::Standard), vec![vec![0, 1]]);
+        // 1~2 is 8 bits: only the loose level joins it (and chains it to 0).
+        assert_eq!(groups(&entries, Level::Loose), vec![vec![0, 1, 2]]);
+    }
+
+    #[test]
+    fn chunk_buckets_find_every_pair_within_limit() {
+        // Brute-force check that the bucketing never misses a pair.
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for level in [Level::Strict, Level::Standard, Level::Loose] {
+            let max = level.limits().max_distance;
+            let a = next();
+            let mut b = a;
+            for _ in 0..max {
+                b ^= 1 << (next() % 64);
+            }
+            assert!(distance(a, b) <= max);
+            assert_eq!(groups(&[e(a, 10, 10), e(b, 10, 10)], level), vec![vec![0, 1]]);
+        }
     }
 }

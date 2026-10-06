@@ -3,6 +3,7 @@ import {
   api,
   EMPTY_FILTER,
   type Counts,
+  type DuplicateEffect,
   type Filter,
   type Folder,
   type Rule,
@@ -10,6 +11,7 @@ import {
   type ImportSummary,
   type Item,
   type LibraryInfo,
+  type SimilarLevel,
   type SortKey,
   type Tag,
   type View,
@@ -24,6 +26,12 @@ export type Drag =
 export interface ToastAction {
   label: string;
   onClick: () => void;
+}
+
+/** A duplicate tidy-up awaiting confirmation; `effects` fills in once previewed. */
+export interface DuplicateReview {
+  groups: { keep: Item; remove: Item[] }[];
+  effects: DuplicateEffect[] | null;
 }
 
 export type Layout = "justified" | "grid" | "waterfall" | "list";
@@ -78,7 +86,13 @@ interface State {
   renamingFolder: string | null;
   /** Bumped to ask the inspector to focus the item name field. */
   renameItemSeq: number;
-  picker: "add" | "goto" | null;
+  picker: "move" | "goto" | null;
+  /** Similar view: how alike images must be. */
+  similarLevel: SimilarLevel;
+  /** Similar view: copies the user chose to keep (at most one per group). */
+  keepPick: Set<string>;
+  /** Duplicate tidy-up waiting for confirmation. */
+  review: DuplicateReview | null;
 
   items: Item[];
   folders: Folder[];
@@ -137,6 +151,10 @@ interface State {
   setRenamingFolder: (id: string | null) => void;
   requestItemRename: () => void;
   setPicker: (p: State["picker"]) => void;
+  setSimilarLevel: (l: SimilarLevel) => void;
+  /** Marks `id` as the copy to keep in its group. */
+  pickKeeper: (id: string) => void;
+  setReview: (r: DuplicateReview | null) => void;
   refresh: () => Promise<void>;
 
   select: (id: string, mode: "only" | "toggle" | "range") => void;
@@ -244,6 +262,9 @@ export const useStore = create<State>((set, get) => ({
   renamingFolder: null,
   renameItemSeq: 0,
   picker: null,
+  similarLevel: (["strict", "standard", "loose"] as const).find((l) => l === load("similarLevel")) ?? "standard",
+  keepPick: new Set(),
+  review: null,
 
   items: [],
   folders: [],
@@ -286,7 +307,13 @@ export const useStore = create<State>((set, get) => ({
   setView: (view) => {
     // The similar view may take a moment to prepare; don't leave the old list up.
     const clear = view.kind === "similar" && get().view.kind !== "similar" ? { items: [] } : {};
-    set({ view, selected: new Set(), anchor: null, focus: null, ...clear });
+    // Conditions belong to the view they were set in: moving to another one
+    // starts clean (re-selecting the open view keeps them).
+    const moved = JSON.stringify(view) !== JSON.stringify(get().view);
+    const reset = moved
+      ? { search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER, editingSmart: null }
+      : {};
+    set({ view, selected: new Set(), anchor: null, focus: null, ...clear, ...reset });
     get().refresh();
   },
   setSearch: (search) => {
@@ -389,11 +416,23 @@ export const useStore = create<State>((set, get) => ({
   setRenamingFolder: (renamingFolder) => set({ renamingFolder }),
   requestItemRename: () => set({ renameItemSeq: get().renameItemSeq + 1, inspectorOpen: true }),
   setPicker: (picker) => set({ picker }),
+  setSimilarLevel: (similarLevel) => {
+    set({ similarLevel, keepPick: new Set(), selected: new Set(), anchor: null, focus: null });
+    persist("similarLevel", similarLevel);
+    get().refresh();
+  },
+  pickKeeper: (id) => {
+    const items = get().items;
+    const group = items.find((i) => i.id === id)?.group;
+    const rivals = new Set(items.filter((i) => i.group === group).map((i) => i.id));
+    set({ keepPick: new Set([...get().keepPick].filter((x) => !rivals.has(x)).concat(id)) });
+  },
+  setReview: (review) => set({ review }),
 
   refresh: async () => {
     if (!get().library) return;
     const seq = ++refreshSeq;
-    const { view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating, filter } = get();
+    const { view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating, filter, similarLevel } = get();
     try {
       if (view.kind === "similar") {
         set({ analyzing: true });
@@ -412,6 +451,7 @@ export const useStore = create<State>((set, get) => ({
           includeSubfolders: showSubfolders,
           minRating,
           filter,
+          similarLevel,
           sort,
           desc,
         }),
