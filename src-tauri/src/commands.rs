@@ -183,16 +183,93 @@ pub fn empty_trash(state: State<AppState>) -> CmdResult<()> {
     })
 }
 
+fn item_paths(state: &AppState, ids: &[String]) -> CmdResult<Vec<(Item, PathBuf)>> {
+    with_lib(state, |lib| {
+        let mut items = db::get_items(&lib.conn, ids).map_err(err)?;
+        // Keep the caller's order (e.g. grid order).
+        items.sort_by_key(|it| ids.iter().position(|x| *x == it.id));
+        Ok(items
+            .into_iter()
+            .map(|it| {
+                let p = lib.file_path(&it);
+                (it, p)
+            })
+            .collect())
+    })
+}
+
 #[tauri::command]
 pub fn reveal_item(state: State<AppState>, id: String) -> CmdResult<()> {
-    let path = with_lib(&state, |lib| {
-        let item = db::get_items(&lib.conn, &[id])
-            .map_err(err)?
-            .pop()
-            .ok_or("画像が見つかりません")?;
-        Ok(lib.file_path(&item))
-    })?;
+    let (_, path) = item_paths(&state, &[id])?.pop().ok_or("画像が見つかりません")?;
     tauri_plugin_opener::reveal_item_in_dir(path).map_err(err)
+}
+
+/// Opens items in the OS default app.
+#[tauri::command]
+pub fn open_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
+    for (_, path) in item_paths(&state, &ids)? {
+        tauri_plugin_opener::open_path(path, None::<&str>).map_err(err)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn set_rating(state: State<AppState>, ids: Vec<String>, rating: u8) -> CmdResult<()> {
+    with_lib(&state, |lib| db::set_rating(&lib.conn, &ids, rating).map_err(err))
+}
+
+/// Puts the files on the clipboard (paste into Finder / Explorer / chat apps).
+/// A single image is also put on as bitmap data for design tools.
+#[tauri::command]
+pub fn copy_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<usize> {
+    use clipboard_rs::{common::RustImage, Clipboard, ClipboardContent, ClipboardContext, RustImageData};
+    let paths: Vec<String> = item_paths(&state, &ids)?
+        .into_iter()
+        .map(|(_, p)| p.display().to_string())
+        .collect();
+    if paths.is_empty() {
+        return Ok(0);
+    }
+    let ctx = ClipboardContext::new().map_err(err)?;
+    let mut contents = vec![ClipboardContent::Files(paths.clone())];
+    if paths.len() == 1 {
+        if let Ok(img) = RustImageData::from_path(&paths[0]) {
+            contents.push(ClipboardContent::Image(img));
+        }
+    }
+    ctx.set(contents).map_err(err)?;
+    Ok(paths.len())
+}
+
+/// Copies the original files into `dest`, never overwriting existing files.
+#[tauri::command]
+pub fn export_items(state: State<AppState>, ids: Vec<String>, dest: PathBuf) -> CmdResult<usize> {
+    let items = item_paths(&state, &ids)?;
+    for (item, src) in &items {
+        let target = export_target(&dest, &item.name, &item.ext);
+        fs::copy(src, target).map_err(err)?;
+    }
+    Ok(items.len())
+}
+
+/// `dest/name.ext`, or `name (2).ext`… when taken. Keeps a renamed item's
+/// display name but makes sure the extension is there.
+fn export_target(dest: &std::path::Path, name: &str, ext: &str) -> PathBuf {
+    let has_ext = std::path::Path::new(name)
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case(ext));
+    let stem = if has_ext { &name[..name.len() - ext.len() - 1] } else { name };
+    let clean: String = stem
+        .chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    let mut candidate = dest.join(format!("{clean}.{ext}"));
+    let mut n = 2;
+    while candidate.exists() {
+        candidate = dest.join(format!("{clean} ({n}).{ext}"));
+        n += 1;
+    }
+    candidate
 }
 
 // --------------------------------------------------------------- import
@@ -220,7 +297,7 @@ pub async fn import_paths(
         let state = app.state::<AppState>();
         import::run(
             &state.lib,
-            files.into_iter().map(Source::Path).collect(),
+            files,
             folder_id,
             emit_progress(&app),
         )
@@ -317,6 +394,18 @@ pub fn add_to_folder(state: State<AppState>, ids: Vec<String>, folder_id: String
 }
 
 #[tauri::command]
+pub fn reorder_in_folder(
+    state: State<AppState>,
+    folder_id: String,
+    ids: Vec<String>,
+    before: Option<String>,
+) -> CmdResult<()> {
+    with_lib(&state, |lib| {
+        db::reorder_in_folder(&mut lib.conn, &folder_id, &ids, before.as_deref()).map_err(err)
+    })
+}
+
+#[tauri::command]
 pub fn remove_from_folder(state: State<AppState>, ids: Vec<String>, folder_id: String) -> CmdResult<()> {
     with_lib(&state, |lib| db::remove_from_folder(&lib.conn, &ids, &folder_id).map_err(err))
 }
@@ -350,6 +439,18 @@ pub fn delete_tag(state: State<AppState>, id: i64) -> CmdResult<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn export_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path();
+        assert_eq!(super::export_target(d, "cat.PNG", "png"), d.join("cat.png"));
+        assert_eq!(super::export_target(d, "renamed", "jpg"), d.join("renamed.jpg"));
+        assert_eq!(super::export_target(d, "a/b:c", "jpg"), d.join("a_b_c.jpg"));
+        std::fs::write(d.join("cat.png"), "x").unwrap();
+        std::fs::write(d.join("cat (2).png"), "x").unwrap();
+        assert_eq!(super::export_target(d, "cat.png", "png"), d.join("cat (3).png"));
+    }
+
     #[test]
     fn percent_decode_utf8() {
         assert_eq!(super::percent_decode("%E7%94%BB%E5%83%8F.png"), "画像.png");

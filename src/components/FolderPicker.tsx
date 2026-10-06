@@ -1,0 +1,245 @@
+// Folder picker dialog.
+//   "add"  (⌘⇧J / context menu): multi-select folders to add the selection to,
+//          create a new folder inline, optionally remove from the open folder.
+//   "goto" (⌘J): jump to a folder.
+import { Check, Clock, Folder as FolderIcon, FolderPlus, Search } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { addToFolders } from "../lib/actions";
+import { api, type Folder } from "../lib/api";
+import { currentFolderId, useStore } from "../store";
+
+interface Row {
+  folder: Folder;
+  depth: number;
+  path: string;
+}
+
+function flatten(folders: Folder[]): Row[] {
+  const kids = new Map<string | null, Folder[]>();
+  for (const f of folders) {
+    if (!kids.has(f.parentId)) kids.set(f.parentId, []);
+    kids.get(f.parentId)!.push(f);
+  }
+  const out: Row[] = [];
+  const walk = (parent: string | null, depth: number, prefix: string) => {
+    for (const f of kids.get(parent) ?? []) {
+      const path = prefix ? `${prefix} / ${f.name}` : f.name;
+      out.push({ folder: f, depth, path });
+      walk(f.id, depth + 1, path);
+    }
+  };
+  walk(null, 0, "");
+  return out;
+}
+
+export function FolderPicker() {
+  const mode = useStore((s) => s.picker);
+  if (!mode) return null;
+  return <PickerDialog mode={mode} />;
+}
+
+function PickerDialog({ mode }: { mode: "add" | "goto" }) {
+  const folders = useStore((s) => s.folders);
+  const recent = useStore((s) => s.recentFolders);
+  const selectedCount = useStore((s) => s.selected.size);
+  const close = () => useStore.getState().setPicker(null);
+  const [query, setQuery] = useState("");
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [cursor, setCursor] = useState(0);
+  const [removeFromCurrent, setRemoveFromCurrent] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const current = currentFolderId();
+
+  const rows = useMemo(() => {
+    const all = flatten(folders);
+    const q = query.trim().toLowerCase();
+    if (q) return all.filter((r) => r.path.toLowerCase().includes(q)).map((r) => ({ ...r, depth: 0 }));
+    // Recently used folders first, then the whole tree.
+    const recentRows = recent
+      .map((id) => all.find((r) => r.folder.id === id))
+      .filter(Boolean)
+      .map((r) => ({ ...r!, depth: 0, recent: true }));
+    return [...recentRows, ...all];
+  }, [folders, recent, query]);
+
+  const exact = folders.some((f) => f.name === query.trim());
+  const canCreate = mode === "add" && query.trim() !== "" && !exact;
+  const total = rows.length + (canCreate ? 1 : 0);
+
+  useEffect(() => setCursor(0), [query]);
+  useEffect(() => {
+    listRef.current?.querySelector(`[data-index="${cursor}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [cursor]);
+
+  const toggle = (id: string) =>
+    setChecked((c) => {
+      const n = new Set(c);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
+  const ids = () => [...useStore.getState().selected];
+
+  const commit = async (extra: string[] = []) => {
+    const targets = [...new Set([...checked, ...extra])];
+    if (!targets.length) return;
+    close();
+    await addToFolders(ids(), targets, removeFromCurrent);
+  };
+
+  const createAndAdd = async () => {
+    const id = await api.createFolder(query.trim(), null).catch((e) => {
+      useStore.getState().toast(String(e), true);
+      return null;
+    });
+    if (id) await commit([id]);
+  };
+
+  const activate = (i: number) => {
+    if (i >= rows.length) return createAndAdd();
+    const f = rows[i].folder;
+    if (mode === "goto") {
+      close();
+      useStore.getState().setView({ kind: "folder", id: f.id });
+    } else if (checked.size === 0) {
+      void commit([f.id]); // Enter on a single folder adds right away
+    } else {
+      toggle(f.id);
+    }
+  };
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setCursor((c) => Math.min(total - 1, c + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setCursor((c) => Math.max(0, c - 1));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if ((e.metaKey || e.ctrlKey) && mode === "add") void commit();
+      else void activate(cursor);
+    } else if (e.key === " " && mode === "add" && query === "" && cursor < rows.length) {
+      // With an empty search box, Space toggles instead of typing a space.
+      e.preventDefault();
+      toggle(rows[cursor].folder.id);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex animate-fade-in items-start justify-center bg-black/40 pt-[12vh]" onPointerDown={close}>
+      <div
+        className="flex max-h-[70vh] w-[460px] animate-zoom-in flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-2xl"
+        onPointerDown={(e) => e.stopPropagation()}
+      >
+        <div className="border-b border-line px-4 pt-3 pb-2">
+          <div className="mb-2 text-xs font-semibold text-dim">
+            {mode === "add" ? `${selectedCount} 件をフォルダに追加` : "フォルダへ移動"}
+          </div>
+          <label className="flex h-9 items-center gap-2 rounded-md border border-line bg-bg px-2 focus-within:border-accent">
+            <Search size={15} className="text-dim" />
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={onKey}
+              placeholder={mode === "add" ? "フォルダを検索、または新しい名前を入力" : "フォルダを検索"}
+              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-dim"
+            />
+          </label>
+        </div>
+        <div ref={listRef} className="min-h-24 flex-1 overflow-y-auto p-1.5">
+          {rows.length === 0 && !canCreate && (
+            <p className="px-3 py-6 text-center text-dim">
+              {folders.length ? "見つかりません" : "フォルダがありません"}
+            </p>
+          )}
+          {rows.map((r, i) => {
+            const isRecent = "recent" in r;
+            const on = checked.has(r.folder.id);
+            const firstTree = !query && i === rows.findIndex((x) => !("recent" in x));
+            return (
+              <div key={`${isRecent ? "r" : "t"}-${r.folder.id}`}>
+                {!query && i === 0 && isRecent && <Heading icon={<Clock size={12} />}>最近使ったフォルダ</Heading>}
+                {firstTree && recent.length > 0 && <Heading icon={<FolderIcon size={12} />}>すべてのフォルダ</Heading>}
+                <button
+                  data-index={i}
+                  onMouseMove={() => setCursor(i)}
+                  onClick={() => (mode === "add" ? toggle(r.folder.id) : activate(i))}
+                  onDoubleClick={() => mode === "add" && commit([r.folder.id])}
+                  className={`flex h-8 w-full items-center gap-2 rounded-md pr-2 text-left ${
+                    i === cursor ? "bg-white/8" : ""
+                  }`}
+                  style={{ paddingLeft: 8 + r.depth * 14 }}
+                >
+                  {mode === "add" && (
+                    <span
+                      className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                        on ? "border-accent bg-accent text-white" : "border-line"
+                      }`}
+                    >
+                      {on && <Check size={12} strokeWidth={3} />}
+                    </span>
+                  )}
+                  <FolderIcon size={15} className="shrink-0 text-dim" />
+                  <span className="min-w-0 flex-1 truncate">{query || isRecent ? r.path : r.folder.name}</span>
+                  {r.folder.id === current && <span className="text-[11px] text-dim">表示中</span>}
+                  <span className="text-xs text-dim tabular-nums">{r.folder.count}</span>
+                </button>
+              </div>
+            );
+          })}
+          {canCreate && (
+            <button
+              data-index={rows.length}
+              onMouseMove={() => setCursor(rows.length)}
+              onClick={createAndAdd}
+              className={`flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-accent ${
+                cursor === rows.length ? "bg-white/8" : ""
+              }`}
+            >
+              <FolderPlus size={15} /> 「{query.trim()}」を作成して追加
+            </button>
+          )}
+        </div>
+        {mode === "add" && (
+          <div className="flex items-center gap-3 border-t border-line px-4 py-2.5">
+            {current && (
+              <label className="flex items-center gap-1.5 text-xs text-dim">
+                <input
+                  type="checkbox"
+                  checked={removeFromCurrent}
+                  onChange={(e) => setRemoveFromCurrent(e.target.checked)}
+                  className="accent-accent"
+                />
+                表示中のフォルダから外す
+              </label>
+            )}
+            <span className="flex-1 text-right text-[11px] text-dim">Enter で追加 / Space で複数選択</span>
+            <button
+              disabled={checked.size === 0}
+              onClick={() => commit()}
+              className="h-8 rounded-md bg-accent px-3 font-medium text-white enabled:hover:brightness-110 disabled:opacity-40"
+            >
+              追加{checked.size > 0 ? `（${checked.size}）` : ""}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Heading({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-1.5 px-2 pt-2 pb-1 text-[11px] font-semibold text-dim">
+      {icon}
+      {children}
+    </div>
+  );
+}

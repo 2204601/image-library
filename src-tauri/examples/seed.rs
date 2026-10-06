@@ -35,7 +35,7 @@ fn main() {
     let t = Instant::now();
     let sum = import::run(
         &lib,
-        files.into_iter().map(import::Source::Path).collect(),
+        files.into_iter().map(import::Source::file).collect(),
         None,
         |_, _| {},
     )
@@ -47,7 +47,7 @@ fn main() {
     let l = guard.as_mut().unwrap();
     let all = db::query_items(
         &l.conn,
-        &db::ItemQuery { view: db::View::All, search: String::new(), tag_ids: vec![], sort: db::SortKey::ImportedAt, desc: true },
+        &db::ItemQuery { desc: true, ..Default::default() },
     )
     .unwrap();
     // A little structure so the sidebar has something to show.
@@ -63,7 +63,7 @@ fn main() {
     let t = Instant::now();
     let n = db::query_items(
         &l.conn,
-        &db::ItemQuery { view: db::View::All, search: "sample".into(), tag_ids: vec![], sort: db::SortKey::Name, desc: false },
+        &db::ItemQuery { search: "sample".into(), sort: db::SortKey::Name, ..Default::default() },
     )
     .unwrap()
     .len();

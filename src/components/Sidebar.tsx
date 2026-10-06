@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   confirmDeleteFolder,
   confirmDeleteTag,
+  createFolder,
   createLibraryDialog,
   emptyTrash,
   openLibraryDialog,
@@ -23,12 +24,37 @@ import { useStore } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 
+const collapsedKey = (root: string) => `collapsed:${root}`;
+function loadCollapsed(root: string): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(collapsedKey(root)) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
+function saveCollapsed(root: string, c: Set<string>) {
+  try {
+    localStorage.setItem(collapsedKey(root), JSON.stringify([...c]));
+  } catch {
+    /* ignore */
+  }
+}
+
 const sameView = (a: View, b: View) =>
   a.kind === b.kind && (a.kind !== "folder" || (b.kind === "folder" && a.id === b.id));
 
+/** Drop highlight + post-drop pulse for a sidebar row with `data-drop={dropId}`. */
+function useDropState(dropId: string | undefined) {
+  const over = useStore(
+    (s) => dropId !== undefined && (s.drag !== null || s.fileDrag) && s.dropTarget === dropId,
+  );
+  const flash = useStore((s) => (dropId !== undefined && s.flash?.target === dropId ? s.flash.n : null));
+  return { over, flash };
+}
+
 function Row({
   active,
-  dropHighlight,
+  dropId,
   depth = 0,
   icon,
   label,
@@ -37,24 +63,43 @@ function Row({
   ...rest
 }: {
   active?: boolean;
-  dropHighlight?: boolean;
+  dropId?: string;
   depth?: number;
   icon: React.ReactNode;
   label: React.ReactNode;
   count?: number;
-} & React.HTMLAttributes<HTMLDivElement> & { "data-drop"?: string }) {
+} & React.HTMLAttributes<HTMLDivElement>) {
+  const { over, flash } = useDropState(dropId);
   return (
     <div
       {...rest}
-      className={`group flex h-7 cursor-default items-center gap-1.5 rounded-md pr-2 ${
-        active ? "bg-accent/25 text-white" : "hover:bg-white/5"
-      } ${dropHighlight ? "ring-2 ring-accent ring-inset" : ""}`}
+      data-drop={dropId}
+      className={`group relative flex h-7 cursor-default items-center gap-1.5 rounded-md pr-2 transition-[background-color,transform,box-shadow] duration-150 ${
+        over
+          ? "scale-[1.03] bg-accent text-white shadow-lg shadow-accent/30"
+          : active
+            ? "bg-accent/25 text-white"
+            : "hover:bg-white/5"
+      }`}
       style={{ paddingLeft: 8 + depth * 14 }}
     >
+      {flash !== null && (
+        <span
+          key={`pulse-${flash}`}
+          className="pointer-events-none absolute inset-0 animate-drop-pulse rounded-md"
+        />
+      )}
       {children}
-      <span className="shrink-0 text-dim">{icon}</span>
+      <span className={`shrink-0 ${over ? "text-white" : "text-dim"}`}>{icon}</span>
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {count !== undefined && <span className="text-xs text-dim tabular-nums">{count}</span>}
+      {count !== undefined && (
+        <span
+          key={`count-${flash ?? ""}`}
+          className={`text-xs tabular-nums ${over ? "text-white" : "text-dim"} ${flash !== null ? "animate-pop" : ""}`}
+        >
+          {count}
+        </span>
+      )}
     </div>
   );
 }
@@ -94,9 +139,21 @@ function FolderTree() {
   const run = useStore((s) => s.run);
   const dropTarget = useStore((s) => s.dropTarget);
   const drag = useStore((s) => s.drag);
+  const root = useStore((s) => s.library?.root ?? "");
   const showMenu = useMenu((s) => s.show);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [editing, setEditing] = useState<string | null>(null);
+  const [collapsed, setCollapsedRaw] = useState<Set<string>>(() => loadCollapsed(root));
+  const editing = useStore((s) => s.renamingFolder);
+  const setEditing = useStore((s) => s.setRenamingFolder);
+  const showSubfolders = useStore((s) => s.showSubfolders);
+  const setShowSubfolders = useStore((s) => s.setShowSubfolders);
+  const setCollapsed = (fn: (c: Set<string>) => Set<string>) =>
+    setCollapsedRaw((c) => {
+      const n = fn(c);
+      saveCollapsed(root, n);
+      return n;
+    });
+
+  useEffect(() => setCollapsedRaw(loadCollapsed(root)), [root]);
 
   const children = useMemo(() => {
     const m = new Map<string | null, Folder[]>();
@@ -108,16 +165,32 @@ function FolderTree() {
     return m;
   }, [folders]);
 
-  const create = async (parentId: string | null) => {
-    try {
-      const id = await api.createFolder("新しいフォルダ", parentId);
-      if (parentId) setCollapsed((c) => new Set([...c].filter((x) => x !== parentId)));
-      await useStore.getState().refresh();
-      setEditing(id);
-    } catch (e) {
-      useStore.getState().toast(String(e), true);
+  const create = (parentId: string | null) => createFolder(parentId);
+
+  // A folder being renamed (e.g. just created via ⌘⇧N) must be visible.
+  useEffect(() => {
+    if (!editing) return;
+    const byId = new Map(folders.map((f) => [f.id, f]));
+    const ancestors: string[] = [];
+    for (let p = byId.get(editing)?.parentId; p; p = byId.get(p)?.parentId) ancestors.push(p);
+    if (ancestors.some((a) => collapsed.has(a))) {
+      setCollapsed((c) => new Set([...c].filter((x) => !ancestors.includes(x))));
     }
-  };
+    requestAnimationFrame(() =>
+      document
+        .querySelector(`[data-drop="folder:${CSS.escape(editing)}"]`)
+        ?.scrollIntoView({ block: "nearest" }),
+    );
+  }, [editing, folders]);
+
+  // Hovering a collapsed folder while dragging opens it after a moment.
+  useEffect(() => {
+    if (!dropTarget?.startsWith("folder:")) return;
+    const id = dropTarget.slice(7);
+    if (!collapsed.has(id)) return;
+    const t = setTimeout(() => setCollapsed((c) => new Set([...c].filter((x) => x !== id))), 600);
+    return () => clearTimeout(t);
+  }, [dropTarget, collapsed]);
 
   const toggle = (id: string) =>
     setCollapsed((c) => {
@@ -135,9 +208,8 @@ function FolderTree() {
         <div key={f.id}>
           <Row
             depth={depth}
-            data-drop={`folder:${f.id}`}
+            dropId={`folder:${f.id}`}
             active={sameView(view, { kind: "folder", id: f.id })}
-            dropHighlight={drag !== null && dropTarget === `folder:${f.id}`}
             icon={<FolderIcon size={15} />}
             label={
               editing === f.id ? (
@@ -156,7 +228,7 @@ function FolderTree() {
             onPointerDown={(e) =>
               startPointerDrag(
                 e,
-                (x, y) => ({ kind: "folder", id: f.id, x, y }),
+                () => ({ kind: "folder", id: f.id }),
                 () => setView({ kind: "folder", id: f.id }),
               )
             }
@@ -164,10 +236,18 @@ function FolderTree() {
             onContextMenu={(e) =>
               showMenu(e, [
                 { label: "サブフォルダを作成", onClick: () => create(f.id) },
-                { label: "名前を変更", onClick: () => setEditing(f.id) },
+                { label: "名前を変更", hint: "F2", onClick: () => setEditing(f.id) },
+                {
+                  label: `${showSubfolders ? "✓ " : ""}サブフォルダの内容を表示`,
+                  onClick: () => {
+                    setView({ kind: "folder", id: f.id });
+                    setShowSubfolders(!showSubfolders);
+                  },
+                },
                 ...(f.parentId
                   ? [{ label: "最上位へ移動", onClick: () => run(() => api.moveFolder(f.id, null)) }]
                   : []),
+                { separator: true },
                 { label: "削除", danger: true, onClick: () => confirmDeleteFolder(f.id, f.name) },
               ])
             }
@@ -187,17 +267,28 @@ function FolderTree() {
       );
     });
 
+  const draggingNested =
+    drag?.kind === "folder" && folders.find((f) => f.id === drag.id)?.parentId != null;
+
   return (
     <Section
       title="フォルダ"
-      drop={drag?.kind === "folder" ? "root" : undefined}
-      highlight={drag?.kind === "folder" && dropTarget === "root"}
       action={
-        <button title="フォルダを作成" className="text-dim hover:text-fg" onClick={() => create(null)}>
+        <button title="フォルダを作成（⌘⇧N）" className="text-dim hover:text-fg" onClick={() => create(null)}>
           <FolderPlus size={15} />
         </button>
       }
     >
+      {draggingNested && (
+        <div
+          data-drop="root"
+          className={`mb-1 animate-slide-down rounded-md border border-dashed px-2 py-1.5 text-center text-xs transition-colors ${
+            dropTarget === "root" ? "border-accent bg-accent text-white" : "border-line text-dim"
+          }`}
+        >
+          ここにドロップで最上位へ
+        </div>
+      )}
       {folders.length === 0 ? (
         <p className="px-2 py-1 text-xs text-dim">＋ でフォルダを作成</p>
       ) : (
@@ -210,24 +301,15 @@ function FolderTree() {
 function Section({
   title,
   action,
-  drop,
-  highlight,
   children,
 }: {
   title: string;
   action?: React.ReactNode;
-  drop?: string;
-  highlight?: boolean;
   children: React.ReactNode;
 }) {
   return (
     <div className="mt-4">
-      <div
-        data-drop={drop}
-        className={`mb-1 flex items-center justify-between rounded px-2 text-xs font-semibold tracking-wide text-dim ${
-          highlight ? "ring-2 ring-accent" : ""
-        }`}
-      >
+      <div className="mb-1 flex items-center justify-between px-2 text-xs font-semibold tracking-wide text-dim">
         <span>{title}</span>
         {action}
       </div>

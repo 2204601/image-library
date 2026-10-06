@@ -1,7 +1,13 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Folder as FolderIcon, Plus, X } from "lucide-react";
+import { Folder as FolderIcon, Plus, Star, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { deleteSelection } from "../lib/actions";
+import {
+  copySelection,
+  deleteSelection,
+  exportSelection,
+  openSelection,
+  setRating,
+} from "../lib/actions";
 import { api, formatBytes, type Folder, type SelectionInfo } from "../lib/api";
 import { useStore } from "../store";
 
@@ -83,6 +89,8 @@ function TagInput({ onAdd, exclude }: { onAdd: (names: string[]) => void; exclud
   );
 }
 
+const btn = "h-8 rounded-md border border-line hover:bg-white/5";
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="mt-4">
@@ -105,12 +113,14 @@ function Chip({ children, onRemove }: { children: React.ReactNode; onRemove: () 
 
 /** Text field that saves on blur, and resets when the selected item changes. */
 function SavedText({
+  id,
   value,
   onSave,
   multiline,
   className,
   placeholder,
 }: {
+  id?: string;
   value: string;
   onSave: (v: string) => void;
   multiline?: boolean;
@@ -130,6 +140,7 @@ function SavedText({
     [],
   );
   const props = {
+    id,
     value: v,
     placeholder,
     className,
@@ -148,6 +159,33 @@ function SavedText({
   );
 }
 
+/** Click a star to rate; clicking the current rating clears it. */
+function RatingStars({ value, onChange }: { value: number | null; onChange: (n: number) => void }) {
+  const [hover, setHover] = useState(0);
+  const shown = hover || value || 0;
+  return (
+    <div className="flex items-center gap-0.5" onMouseLeave={() => setHover(0)}>
+      {[1, 2, 3, 4, 5].map((n) => (
+        <button
+          key={n}
+          title={`★${n}（キー ${n}）`}
+          onMouseEnter={() => setHover(n)}
+          onClick={() => onChange(n === value ? 0 : n)}
+          className="p-0.5 transition-transform hover:scale-125"
+        >
+          <Star
+            size={16}
+            strokeWidth={1.5}
+            className={n <= shown ? "text-amber-400" : "text-dim/50"}
+            fill={n <= shown ? "currentColor" : "none"}
+          />
+        </button>
+      ))}
+      {value === null && <span className="ml-1 text-[11px] text-dim">（混在）</span>}
+    </div>
+  );
+}
+
 export function Inspector() {
   const selected = useStore((s) => s.selected);
   const items = useStore((s) => s.items);
@@ -160,6 +198,23 @@ export function Inspector() {
 
   const ids = useMemo(() => [...selected], [selected]);
   const single = ids.length === 1 ? items.find((i) => i.id === ids[0]) : undefined;
+  const renameSeq = useStore((s) => s.renameItemSeq);
+  // Common rating of the selection, or null when mixed.
+  const rating = useMemo(() => {
+    const rs = new Set(items.filter((i) => selected.has(i.id)).map((i) => i.rating));
+    return rs.size === 1 ? [...rs][0] : null;
+  }, [items, selected]);
+
+  // F2 / ⌘R: focus the name field (after the panel has opened).
+  useEffect(() => {
+    if (!renameSeq) return;
+    const t = setTimeout(() => {
+      const el = document.getElementById("inspector-name") as HTMLInputElement | null;
+      el?.focus();
+      el?.select();
+    }, 220);
+    return () => clearTimeout(t);
+  }, [renameSeq]);
 
   useEffect(() => {
     let live = true;
@@ -202,6 +257,7 @@ export function Inspector() {
           </div>
           <SavedText
             key={single.id + ":name"}
+            id="inspector-name"
             value={single.name}
             onSave={(v) => run(() => api.renameItem(single.id, v))}
             className="mt-3 w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold outline-none hover:border-line focus:border-accent"
@@ -224,6 +280,12 @@ export function Inspector() {
           <div className="text-2xl font-semibold tabular-nums">{n}</div>
           <div className="text-dim">件を選択中</div>
         </div>
+      )}
+
+      {!isTrash && (
+        <Field label="評価">
+          <RatingStars value={rating} onChange={(n) => setRating(ids, n)} />
+        </Field>
       )}
 
       <Field label="タグ">
@@ -292,11 +354,21 @@ export function Inspector() {
       )}
 
       <div className="mt-auto flex flex-col gap-2 pt-6">
+        {!isTrash && (
+          <div className="grid grid-cols-3 gap-2">
+            <button onClick={() => openSelection(ids)} className={btn} title="既定のアプリで開く">
+              開く
+            </button>
+            <button onClick={() => copySelection(ids)} className={btn} title="⌘C / Ctrl+C">
+              コピー
+            </button>
+            <button onClick={() => exportSelection(ids)} className={btn} title="フォルダに書き出し">
+              書き出し
+            </button>
+          </div>
+        )}
         {single && (
-          <button
-            onClick={() => run(() => api.revealItem(single.id))}
-            className="h-8 rounded-md border border-line hover:bg-white/5"
-          >
+          <button onClick={() => run(() => api.revealItem(single.id))} className={btn}>
             Finder / エクスプローラで表示
           </button>
         )}

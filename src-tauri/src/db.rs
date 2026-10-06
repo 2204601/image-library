@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::search;
+
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -78,6 +80,16 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
              COMMIT;",
         )?;
     }
+    if version < 2 {
+        // Star ratings, and a per-folder position for manual ordering.
+        conn.execute_batch(
+            "BEGIN;
+             ALTER TABLE items ADD COLUMN rating INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE item_folders ADD COLUMN position REAL;
+             UPDATE item_folders SET position = rowid;
+             COMMIT;",
+        )?;
+    }
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -96,6 +108,7 @@ pub struct Item {
     pub size: i64,
     pub thumb: String,
     pub note: String,
+    pub rating: u8,
     pub imported_at: i64,
     pub deleted_at: Option<i64>,
 }
@@ -113,9 +126,10 @@ pub struct NewItem {
     pub thumb: String,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum View {
+    #[default]
     All,
     Unfiled,
     Untagged,
@@ -123,15 +137,21 @@ pub enum View {
     Folder { id: String },
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SortKey {
+    #[default]
     ImportedAt,
     Name,
     Size,
+    /// Pixel count (width × height).
+    Dimensions,
+    Rating,
+    /// User-defined order inside a folder; other views fall back to import order.
+    Manual,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ItemQuery {
     pub view: View,
@@ -139,12 +159,17 @@ pub struct ItemQuery {
     pub search: String,
     #[serde(default)]
     pub tag_ids: Vec<i64>,
+    /// Folder view also shows items of all subfolders.
+    #[serde(default)]
+    pub include_subfolders: bool,
+    #[serde(default)]
+    pub min_rating: u8,
     pub sort: SortKey,
     pub desc: bool,
 }
 
-const ITEM_COLS: &str =
-    "id, name, file_name, ext, width, height, size, thumb, note, imported_at, deleted_at";
+const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items.width, items.height, \
+     items.size, items.thumb, items.note, items.rating, items.imported_at, items.deleted_at";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     Ok(Item {
@@ -157,8 +182,9 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         size: r.get(6)?,
         thumb: r.get(7)?,
         note: r.get(8)?,
-        imported_at: r.get(9)?,
-        deleted_at: r.get(10)?,
+        rating: r.get(9)?,
+        imported_at: r.get(10)?,
+        deleted_at: r.get(11)?,
     })
 }
 
@@ -179,20 +205,43 @@ fn placeholders(n: usize) -> String {
     vec!["?"; n].join(",")
 }
 
+const SUBFOLDERS_CTE: &str = "WITH RECURSIVE sub(id) AS (
+       SELECT ? UNION ALL SELECT c.id FROM folders c JOIN sub ON c.parent_id = sub.id)
+     SELECT id FROM sub";
+
 pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
     let mut wheres: Vec<String> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
 
-    if q.view == View::Trash {
-        wheres.push("deleted_at IS NOT NULL".into());
+    // Manual order joins the folder's positions; its bind value comes first.
+    let manual_folder = match (&q.view, q.sort) {
+        (View::Folder { id }, SortKey::Manual) => Some(id.clone()),
+        _ => None,
+    };
+    let join = if let Some(f) = &manual_folder {
+        args.push(Box::new(f.clone()));
+        "LEFT JOIN item_folders pos ON pos.item_id = items.id AND pos.folder_id = ?"
     } else {
-        wheres.push("deleted_at IS NULL".into());
+        ""
+    };
+
+    if q.view == View::Trash {
+        wheres.push("items.deleted_at IS NOT NULL".into());
+    } else {
+        wheres.push("items.deleted_at IS NULL".into());
     }
     match &q.view {
         View::Unfiled => wheres
             .push("NOT EXISTS (SELECT 1 FROM item_folders f WHERE f.item_id = items.id)".into()),
         View::Untagged => {
             wheres.push("NOT EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id)".into())
+        }
+        View::Folder { id } if q.include_subfolders => {
+            wheres.push(format!(
+                "EXISTS (SELECT 1 FROM item_folders f WHERE f.item_id = items.id
+                   AND f.folder_id IN ({SUBFOLDERS_CTE}))"
+            ));
+            args.push(Box::new(id.clone()));
         }
         View::Folder { id } => {
             wheres.push(
@@ -204,17 +253,23 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
         View::All | View::Trash => {}
     }
 
-    for word in q.search.split_whitespace() {
-        wheres.push(
-            "(name LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\' OR EXISTS (
+    if let Some(expr) = search::parse(&q.search) {
+        let sql = search::to_sql(&expr, &mut |word| {
+            let pat = escape_like(word);
+            args.push(Box::new(pat.clone()));
+            args.push(Box::new(pat.clone()));
+            args.push(Box::new(pat));
+            "(items.name LIKE ? ESCAPE '\\' OR items.note LIKE ? ESCAPE '\\' OR EXISTS (
                SELECT 1 FROM item_tags it JOIN tags t ON t.id = it.tag_id
                WHERE it.item_id = items.id AND t.name LIKE ? ESCAPE '\\'))"
-                .into(),
-        );
-        let pat = escape_like(word);
-        args.push(Box::new(pat.clone()));
-        args.push(Box::new(pat.clone()));
-        args.push(Box::new(pat));
+                .into()
+        });
+        wheres.push(sql);
+    }
+
+    if q.min_rating > 0 {
+        wheres.push("items.rating >= ?".into());
+        args.push(Box::new(q.min_rating));
     }
 
     for tag_id in &q.tag_ids {
@@ -224,14 +279,21 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
         args.push(Box::new(*tag_id));
     }
 
-    let order_col = match q.sort {
-        SortKey::ImportedAt => "imported_at",
-        SortKey::Name => "name COLLATE NOCASE",
-        SortKey::Size => "size",
-    };
     let dir = if q.desc { "DESC" } else { "ASC" };
+    let order = match q.sort {
+        SortKey::ImportedAt => format!("items.imported_at {dir}"),
+        SortKey::Name => format!("items.name COLLATE NOCASE {dir}"),
+        SortKey::Size => format!("items.size {dir}"),
+        SortKey::Dimensions => format!("items.width * items.height {dir}"),
+        SortKey::Rating => format!("items.rating {dir}, items.imported_at DESC"),
+        // Manual is always top-to-bottom; items without a position go last.
+        SortKey::Manual if manual_folder.is_some() => {
+            "pos.position IS NULL, pos.position ASC, items.imported_at ASC".into()
+        }
+        SortKey::Manual => format!("items.imported_at {dir}"),
+    };
     let sql = format!(
-        "SELECT {ITEM_COLS} FROM items WHERE {} ORDER BY {order_col} {dir}, rowid {dir}",
+        "SELECT {ITEM_COLS} FROM items {join} WHERE {} ORDER BY {order}, items.rowid {dir}",
         wheres.join(" AND ")
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -281,6 +343,14 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
 
 pub fn set_note(conn: &Connection, id: &str, note: &str) -> DbResult<()> {
     conn.execute("UPDATE items SET note = ?2 WHERE id = ?1", params![id, note])?;
+    Ok(())
+}
+
+pub fn set_rating(conn: &Connection, ids: &[String], rating: u8) -> DbResult<()> {
+    let mut stmt = conn.prepare("UPDATE items SET rating = ?2 WHERE id = ?1")?;
+    for id in ids {
+        stmt.execute(params![id, rating.min(5)])?;
+    }
     Ok(())
 }
 
@@ -422,13 +492,63 @@ pub fn move_folder(conn: &Connection, id: &str, new_parent: Option<&str>) -> DbR
     Ok(true)
 }
 
+/// Adds items to a folder; new members go to the end of its manual order.
 pub fn add_to_folder(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
-    let mut stmt =
-        conn.prepare("INSERT OR IGNORE INTO item_folders (item_id, folder_id) VALUES (?1, ?2)")?;
+    let mut stmt = conn.prepare(
+        "INSERT OR IGNORE INTO item_folders (item_id, folder_id, position)
+         VALUES (?1, ?2, (SELECT COALESCE(MAX(position), 0) + 1 FROM item_folders WHERE folder_id = ?2))",
+    )?;
     for id in item_ids {
         stmt.execute(params![id, folder_id])?;
     }
     Ok(())
+}
+
+/// Moves `ids` (in the given order) in front of `before`, or to the end.
+pub fn reorder_in_folder(
+    conn: &mut Connection,
+    folder_id: &str,
+    ids: &[String],
+    before: Option<&str>,
+) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    let mut order: Vec<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT item_id FROM item_folders WHERE folder_id = ?1
+             ORDER BY position IS NULL, position, rowid",
+        )?;
+        let rows = stmt.query_map([folder_id], |r| r.get(0))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    let moving: Vec<String> = ids.iter().filter(|id| order.contains(id)).cloned().collect();
+    order.retain(|id| !moving.contains(id));
+    let at = before
+        .and_then(|b| order.iter().position(|id| id == b))
+        .unwrap_or(order.len());
+    order.splice(at..at, moving);
+    {
+        let mut stmt =
+            tx.prepare("UPDATE item_folders SET position = ?3 WHERE item_id = ?1 AND folder_id = ?2")?;
+        for (i, id) in order.iter().enumerate() {
+            stmt.execute(params![id, folder_id, (i + 1) as f64])?;
+        }
+    }
+    tx.commit()
+}
+
+/// Returns the child folder called `name` under `parent`, creating it if needed.
+pub fn find_or_create_folder(conn: &Connection, parent: Option<&str>, name: &str) -> DbResult<String> {
+    let existing = conn
+        .query_row(
+            "SELECT id FROM folders WHERE name = ?1 AND parent_id IS ?2",
+            params![name, parent],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match existing {
+        Some(id) => Ok(id),
+        None => create_folder(conn, name, parent),
+    }
 }
 
 pub fn remove_from_folder(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
@@ -615,6 +735,8 @@ mod tests {
             view,
             search: String::new(),
             tag_ids: vec![],
+            include_subfolders: false,
+            min_rating: 0,
             sort: SortKey::ImportedAt,
             desc: false,
         }
@@ -746,5 +868,108 @@ mod tests {
         let links: i64 = conn.query_row("SELECT COUNT(*) FROM item_tags", [], |r| r.get(0)).unwrap();
         assert_eq!(links, 0);
         assert!(hash_index(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn migrates_v1_library() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        // A library created by v0.1.0 (schema 1) with one filed item.
+        conn.execute_batch(
+            "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL, file_name TEXT NOT NULL,
+               ext TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL,
+               hash TEXT NOT NULL, thumb TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+               imported_at INTEGER NOT NULL, deleted_at INTEGER);
+             CREATE TABLE folders (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES folders(id) ON DELETE CASCADE, name TEXT NOT NULL);
+             CREATE TABLE item_folders (item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE, PRIMARY KEY (item_id, folder_id));
+             CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE);
+             CREATE TABLE item_tags (item_id TEXT NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY (item_id, tag_id));
+             INSERT INTO items VALUES ('a','a.png','a.png','png',1,1,1,'h','a.jpg','',1,NULL);
+             INSERT INTO folders VALUES ('f',NULL,'F');
+             INSERT INTO item_folders VALUES ('a','f');
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let mut query = q(View::Folder { id: "f".into() });
+        query.sort = SortKey::Manual;
+        let items = query_items(&conn, &query).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].rating, 0);
+    }
+
+    #[test]
+    fn ratings_sort_and_filter() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.png", 2);
+        add(&mut conn, "c", "c.png", 3);
+        set_rating(&conn, &s(&["a"]), 3).unwrap();
+        set_rating(&conn, &s(&["c"]), 9).unwrap(); // clamped to 5
+        let mut query = q(View::All);
+        query.sort = SortKey::Rating;
+        query.desc = true;
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["c", "a", "b"]));
+        assert_eq!(query_items(&conn, &query).unwrap()[0].rating, 5);
+        query.min_rating = 3;
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["c", "a"]));
+    }
+
+    #[test]
+    fn search_syntax_end_to_end() {
+        let mut conn = mem();
+        add(&mut conn, "a", "black cat.png", 1);
+        add(&mut conn, "b", "black dog.png", 2);
+        add(&mut conn, "c", "white cat.png", 3);
+        add_tags(&mut conn, &s(&["c"]), &s(&["pet store"])).unwrap();
+        let find = |conn: &Connection, text: &str| {
+            let mut query = q(View::All);
+            query.search = text.into();
+            ids(query_items(conn, &query).unwrap())
+        };
+        assert_eq!(find(&conn, "(cat OR dog) black"), s(&["a", "b"]));
+        assert_eq!(find(&conn, "cat -black"), s(&["c"]));
+        assert_eq!(find(&conn, "dog || white"), s(&["b", "c"]));
+        assert_eq!(find(&conn, r#""pet store""#), s(&["c"]));
+        assert_eq!(find(&conn, "-cat -dog"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn subfolders_and_manual_order() {
+        let mut conn = mem();
+        for (i, id) in ["a", "b", "c", "d"].iter().enumerate() {
+            add(&mut conn, id, &format!("{id}.png"), i as i64);
+        }
+        let p = create_folder(&conn, "P", None).unwrap();
+        let c = create_folder(&conn, "C", Some(&p)).unwrap();
+        let g = create_folder(&conn, "G", Some(&c)).unwrap();
+        add_to_folder(&conn, &s(&["a", "b", "c"]), &p).unwrap();
+        add_to_folder(&conn, &s(&["d"]), &g).unwrap();
+
+        let mut query = q(View::Folder { id: p.clone() });
+        query.sort = SortKey::Manual;
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["a", "b", "c"]));
+        query.include_subfolders = true;
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["a", "b", "c", "d"]));
+
+        query.include_subfolders = false;
+        reorder_in_folder(&mut conn, &p, &s(&["c"]), Some("a")).unwrap();
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["c", "a", "b"]));
+        reorder_in_folder(&mut conn, &p, &s(&["c", "a"]), None).unwrap();
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "c", "a"]));
+        // Newly added items go to the end.
+        add_to_folder(&conn, &s(&["d"]), &p).unwrap();
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "c", "a", "d"]));
+    }
+
+    #[test]
+    fn find_or_create_reuses() {
+        let conn = mem();
+        let a = find_or_create_folder(&conn, None, "Photos").unwrap();
+        assert_eq!(find_or_create_folder(&conn, None, "Photos").unwrap(), a);
+        let child = find_or_create_folder(&conn, Some(&a), "Photos").unwrap();
+        assert_ne!(child, a, "same name under a different parent is a different folder");
+        assert_eq!(find_or_create_folder(&conn, Some(&a), "Photos").unwrap(), child);
     }
 }

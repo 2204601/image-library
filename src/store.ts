@@ -11,14 +11,23 @@ import {
   type View,
 } from "./lib/api";
 
+/** x/y = current pointer, sx/sy = where the drag started (for snap-back). */
+type DragPos = { x: number; y: number; sx: number; sy: number };
 export type Drag =
-  | { kind: "items"; ids: string[]; x: number; y: number }
-  | { kind: "folder"; id: string; x: number; y: number };
+  | ({ kind: "items"; ids: string[] } & DragPos)
+  | ({ kind: "folder"; id: string } & DragPos);
+
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
 
 interface Toast {
   id: number;
   message: string;
   error?: boolean;
+  action?: ToastAction;
+  leaving?: boolean;
 }
 
 interface State {
@@ -30,6 +39,18 @@ interface State {
   sort: SortKey;
   desc: boolean;
   thumbSize: number;
+  inspectorOpen: boolean;
+  sidebarOpen: boolean;
+  /** Folder views include items from subfolders. */
+  showSubfolders: boolean;
+  minRating: number;
+  /** Most recently used target folders (for Shift+D and the picker). */
+  recentFolders: string[];
+  /** Folder whose name is being edited inline in the sidebar. */
+  renamingFolder: string | null;
+  /** Bumped to ask the inspector to focus the item name field. */
+  renameItemSeq: number;
+  picker: "add" | "goto" | null;
 
   items: Item[];
   folders: Folder[];
@@ -46,7 +67,11 @@ interface State {
   viewer: number | null;
 
   drag: Drag | null;
-  dropTarget: string | null; // folder id, or "root"
+  /** Files from Finder / Explorer are being dragged over the window. */
+  fileDrag: boolean;
+  dropTarget: string | null; // "folder:<id>" or "root"
+  /** Sidebar row that just received a drop; `n` restarts the animation. */
+  flash: { target: string; n: number } | null;
   importing: { done: number; total: number } | null;
   toasts: Toast[];
 
@@ -56,6 +81,14 @@ interface State {
   toggleTagFilter: (id: number) => void;
   setSort: (sort: SortKey, desc: boolean) => void;
   setThumbSize: (n: number) => void;
+  toggleInspector: () => void;
+  toggleSidebar: () => void;
+  setShowSubfolders: (on: boolean) => void;
+  setMinRating: (n: number) => void;
+  rememberFolders: (ids: string[]) => void;
+  setRenamingFolder: (id: string | null) => void;
+  requestItemRename: () => void;
+  setPicker: (p: State["picker"]) => void;
   refresh: () => Promise<void>;
 
   select: (id: string, mode: "only" | "toggle" | "range") => void;
@@ -64,24 +97,39 @@ interface State {
 
   setDrag: (d: Drag | null) => void;
   setDropTarget: (t: string | null) => void;
+  setFileDrag: (on: boolean) => void;
+  flashTarget: (target: string) => void;
   setImporting: (p: State["importing"]) => void;
-  toast: (message: string, error?: boolean) => void;
+  toast: (message: string, error?: boolean, action?: ToastAction) => void;
+  dismissToast: (id: number) => void;
   /** Runs a mutation, reports errors, then refreshes. */
   run: (fn: () => Promise<unknown>) => Promise<void>;
   importDone: (s: ImportSummary) => void;
 }
 
-const loadNumber = (key: string, fallback: number) => {
+// localStorage can throw (private mode etc.); treat it as best-effort.
+const load = (key: string): string | null => {
   try {
-    const v = Number(localStorage.getItem(key));
-    return Number.isFinite(v) && v > 0 ? v : fallback;
+    return localStorage.getItem(key);
   } catch {
-    return fallback;
+    return null;
   }
+};
+const persist = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* ignore */
+  }
+};
+const loadNumber = (key: string, fallback: number) => {
+  const v = Number(load(key));
+  return Number.isFinite(v) && v > 0 ? v : fallback;
 };
 
 let refreshSeq = 0;
 let toastSeq = 0;
+let flashSeq = 0;
 
 export const useStore = create<State>((set, get) => ({
   library: null,
@@ -92,6 +140,14 @@ export const useStore = create<State>((set, get) => ({
   sort: "importedAt",
   desc: true,
   thumbSize: loadNumber("thumbSize", 180),
+  inspectorOpen: load("inspectorOpen") !== "false",
+  sidebarOpen: load("sidebarOpen") !== "false",
+  showSubfolders: load("showSubfolders") === "true",
+  minRating: 0,
+  recentFolders: [],
+  renamingFolder: null,
+  renameItemSeq: 0,
+  picker: null,
 
   items: [],
   folders: [],
@@ -105,7 +161,9 @@ export const useStore = create<State>((set, get) => ({
   viewer: null,
 
   drag: null,
+  fileDrag: false,
   dropTarget: null,
+  flash: null,
   importing: null,
   toasts: [],
 
@@ -141,20 +199,50 @@ export const useStore = create<State>((set, get) => ({
   },
   setThumbSize: (thumbSize) => {
     set({ thumbSize });
-    try {
-      localStorage.setItem("thumbSize", String(thumbSize));
-    } catch {
-      /* ignore */
-    }
+    persist("thumbSize", String(thumbSize));
   },
+  toggleInspector: () => {
+    const inspectorOpen = !get().inspectorOpen;
+    set({ inspectorOpen });
+    persist("inspectorOpen", String(inspectorOpen));
+  },
+  toggleSidebar: () => {
+    const sidebarOpen = !get().sidebarOpen;
+    set({ sidebarOpen });
+    persist("sidebarOpen", String(sidebarOpen));
+  },
+  setShowSubfolders: (showSubfolders) => {
+    set({ showSubfolders });
+    persist("showSubfolders", String(showSubfolders));
+    get().refresh();
+  },
+  setMinRating: (minRating) => {
+    set({ minRating });
+    get().refresh();
+  },
+  rememberFolders: (ids) => {
+    const rest = get().recentFolders.filter((f) => !ids.includes(f));
+    set({ recentFolders: [...ids, ...rest].slice(0, 8) });
+  },
+  setRenamingFolder: (renamingFolder) => set({ renamingFolder }),
+  requestItemRename: () => set({ renameItemSeq: get().renameItemSeq + 1, inspectorOpen: true }),
+  setPicker: (picker) => set({ picker }),
 
   refresh: async () => {
     if (!get().library) return;
     const seq = ++refreshSeq;
-    const { view, search, tagFilter, sort, desc } = get();
+    const { view, search, tagFilter, sort, desc, showSubfolders, minRating } = get();
     try {
       const [items, folders, tags, counts] = await Promise.all([
-        api.queryItems({ view, search, tagIds: tagFilter, sort, desc }),
+        api.queryItems({
+          view,
+          search,
+          tagIds: tagFilter,
+          includeSubfolders: showSubfolders,
+          minRating,
+          sort,
+          desc,
+        }),
         api.listFolders(),
         api.listTags(),
         api.getCounts(),
@@ -167,6 +255,7 @@ export const useStore = create<State>((set, get) => ({
       const tagFilterNow = get().tagFilter.filter((t) => tagIds.has(t));
       const viewNow = get().view;
       const viewGone = viewNow.kind === "folder" && !folders.some((f) => f.id === viewNow.id);
+      const folderIds = new Set(folders.map((f) => f.id));
       set({
         items,
         folders,
@@ -174,6 +263,7 @@ export const useStore = create<State>((set, get) => ({
         counts,
         selected,
         rev: get().rev + 1,
+        recentFolders: get().recentFolders.filter((f) => folderIds.has(f)),
         viewer: get().viewer !== null && items.length === 0 ? null : get().viewer,
       });
       if (viewGone || tagFilterNow.length !== get().tagFilter.length) {
@@ -214,11 +304,25 @@ export const useStore = create<State>((set, get) => ({
   setDropTarget: (dropTarget) => {
     if (get().dropTarget !== dropTarget) set({ dropTarget });
   },
+  setFileDrag: (fileDrag) => {
+    if (get().fileDrag !== fileDrag) set({ fileDrag, ...(fileDrag ? {} : { dropTarget: null }) });
+  },
+  flashTarget: (target) => {
+    const n = ++flashSeq;
+    set({ flash: { target, n } });
+    setTimeout(() => get().flash?.n === n && set({ flash: null }), 900);
+  },
   setImporting: (importing) => set({ importing }),
-  toast: (message, error) => {
+  toast: (message, error, action) => {
     const id = ++toastSeq;
-    set({ toasts: [...get().toasts, { id, message, error }] });
-    setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), error ? 6000 : 3500);
+    set({ toasts: [...get().toasts, { id, message, error, action }] });
+    setTimeout(() => get().dismissToast(id), error || action ? 6000 : 3500);
+  },
+  dismissToast: (id) => {
+    if (!get().toasts.some((t) => t.id === id && !t.leaving)) return;
+    // Mark first so the exit animation can play, then remove.
+    set({ toasts: get().toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) });
+    setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), 200);
   },
   run: async (fn) => {
     try {

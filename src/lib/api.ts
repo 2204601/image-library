@@ -16,6 +16,7 @@ export interface Item {
   size: number;
   thumb: string;
   note: string;
+  rating: number;
   importedAt: number;
   deletedAt: number | null;
   filePath: string;
@@ -29,12 +30,14 @@ export type View =
   | { kind: "trash" }
   | { kind: "folder"; id: string };
 
-export type SortKey = "importedAt" | "name" | "size";
+export type SortKey = "importedAt" | "name" | "size" | "dimensions" | "rating" | "manual";
 
 export interface ItemQuery {
   view: View;
   search: string;
   tagIds: number[];
+  includeSubfolders: boolean;
+  minRating: number;
   sort: SortKey;
   desc: boolean;
 }
@@ -85,6 +88,10 @@ export const api = {
   deleteItems: (ids: string[]) => invoke<void>("delete_items", { ids }),
   emptyTrash: () => invoke<void>("empty_trash"),
   revealItem: (id: string) => invoke<void>("reveal_item", { id }),
+  openItems: (ids: string[]) => invoke<void>("open_items", { ids }),
+  setRating: (ids: string[], rating: number) => invoke<void>("set_rating", { ids, rating }),
+  copyItems: (ids: string[]) => invoke<number>("copy_items", { ids }),
+  exportItems: (ids: string[], dest: string) => invoke<number>("export_items", { ids, dest }),
 
   importPaths: (paths: string[], folderId: string | null) =>
     invoke<ImportSummary>("import_paths", { paths, folderId }),
@@ -102,6 +109,8 @@ export const api = {
   moveFolder: (id: string, parentId: string | null) =>
     invoke<boolean>("move_folder", { id, parentId }),
   addToFolder: (ids: string[], folderId: string) => invoke<void>("add_to_folder", { ids, folderId }),
+  reorderInFolder: (folderId: string, ids: string[], before: string | null) =>
+    invoke<void>("reorder_in_folder", { folderId, ids, before }),
   removeFromFolder: (ids: string[], folderId: string) =>
     invoke<void>("remove_from_folder", { ids, folderId }),
 

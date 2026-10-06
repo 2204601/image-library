@@ -9,7 +9,13 @@ type MockItem = Omit<Item, "filePath" | "thumbPath"> & { hue: number };
 const items: MockItem[] = [];
 const folders: Omit<Folder, "count">[] = [];
 const tags: { id: number; name: string }[] = [];
-const itemFolders = new Set<string>(); // `${itemId}|${folderId}`
+// `${itemId}|${folderId}` -> manual position
+const itemFolders = new Map<string, number>();
+let posSeq = 0;
+const link = (i: string, f: string) => {
+  const k = `${i}|${f}`;
+  if (!itemFolders.has(k)) itemFolders.set(k, ++posSeq);
+};
 const itemTags = new Set<string>(); // `${itemId}|${tagId}`
 let tagSeq = 0;
 let uid = 0;
@@ -34,6 +40,7 @@ function seed() {
       size: 40_000 + i * 997,
       thumb: "",
       note: "",
+      rating: i % 7 === 0 ? 3 : i % 11 === 0 ? 5 : 0,
       importedAt: Date.now() - (120 - i) * 60_000,
       deletedAt: null,
       hue: (i * 47) % 360,
@@ -41,7 +48,8 @@ function seed() {
   }
   const animals = { id: id(), parentId: null, name: "動物" };
   folders.push(animals, { id: id(), parentId: animals.id, name: "ねこ" }, { id: id(), parentId: null, name: "風景" });
-  items.slice(0, 30).forEach((it) => itemFolders.add(`${it.id}|${animals.id}`));
+  items.slice(0, 30).forEach((it) => link(it.id, animals.id));
+  items.slice(30, 36).forEach((it) => link(it.id, folders[1].id));
   addTags(items.slice(0, 40).map((i) => i.id), ["参考"]);
   addTags(items.slice(20, 60).map((i) => i.id), ["ブルー", "背景"]);
 }
@@ -68,22 +76,45 @@ function addTags(ids: string[], names: string[]) {
   }
 }
 
+function descendants(fid: string): string[] {
+  return [fid, ...folders.filter((f) => f.parentId === fid).flatMap((f) => descendants(f.id))];
+}
+
+// Simplified search (AND + "-exclude"); the real parser lives in src-tauri/src/search.rs.
 function query(q: ItemQuery): Item[] {
   let r = q.view.kind === "trash" ? items.filter((i) => i.deletedAt !== null) : live();
   const v = q.view;
   if (v.kind === "unfiled") r = r.filter((i) => !folders.some((f) => inFolder(i.id, f.id)));
   if (v.kind === "untagged") r = r.filter((i) => !tags.some((t) => hasTag(i.id, t.id)));
-  if (v.kind === "folder") r = r.filter((i) => inFolder(i.id, v.id));
-  for (const w of q.search.toLowerCase().split(/\s+/).filter(Boolean)) {
-    r = r.filter(
-      (i) =>
-        i.name.toLowerCase().includes(w) ||
-        i.note.toLowerCase().includes(w) ||
-        tags.some((t) => hasTag(i.id, t.id) && t.name.toLowerCase().includes(w)),
-    );
+  if (v.kind === "folder") {
+    const ids = q.includeSubfolders ? descendants(v.id) : [v.id];
+    r = r.filter((i) => ids.some((f) => inFolder(i.id, f)));
+  }
+  for (const raw of q.search.toLowerCase().split(/\s+/).filter(Boolean)) {
+    const neg = raw.startsWith("-") && raw.length > 1;
+    const w = neg ? raw.slice(1) : raw;
+    const hit = (i: MockItem) =>
+      i.name.toLowerCase().includes(w) ||
+      i.note.toLowerCase().includes(w) ||
+      tags.some((t) => hasTag(i.id, t.id) && t.name.toLowerCase().includes(w));
+    r = r.filter((i) => hit(i) !== neg);
   }
   for (const t of q.tagIds) r = r.filter((i) => hasTag(i.id, t));
-  const key = (i: MockItem) => (q.sort === "name" ? i.name.toLowerCase() : q.sort === "size" ? i.size : i.importedAt);
+  if (q.minRating) r = r.filter((i) => i.rating >= q.minRating);
+  if (q.sort === "manual" && v.kind === "folder") {
+    const pos = (i: MockItem) => itemFolders.get(`${i.id}|${v.id}`) ?? Infinity;
+    return [...r].sort((a, b) => pos(a) - pos(b)).map(view);
+  }
+  const key = (i: MockItem): number | string =>
+    q.sort === "name"
+      ? i.name.toLowerCase()
+      : q.sort === "size"
+        ? i.size
+        : q.sort === "dimensions"
+          ? i.width * i.height
+          : q.sort === "rating"
+            ? i.rating
+            : i.importedAt;
   r = [...r].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * (q.desc ? -1 : 1));
   return r.map(view);
 }
@@ -91,7 +122,7 @@ function query(q: ItemQuery): Item[] {
 function removeFolder(fid: string) {
   folders.filter((f) => f.parentId === fid).forEach((f) => removeFolder(f.id));
   folders.splice(folders.findIndex((f) => f.id === fid), 1);
-  [...itemFolders].filter((k) => k.endsWith(`|${fid}`)).forEach((k) => itemFolders.delete(k));
+  [...itemFolders.keys()].filter((k) => k.endsWith(`|${fid}`)).forEach((k) => itemFolders.delete(k));
 }
 
 function handle(cmd: string, a: any): unknown {
@@ -139,7 +170,14 @@ function handle(cmd: string, a: any): unknown {
       return;
     }
     case "reveal_item":
+    case "open_items":
       return;
+    case "set_rating":
+      items.filter((i) => a.ids.includes(i.id)).forEach((i) => (i.rating = Math.min(5, a.rating)));
+      return;
+    case "copy_items":
+    case "export_items":
+      return a.ids.length;
     case "supported_exts":
       return ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
     case "import_paths":
@@ -168,8 +206,19 @@ function handle(cmd: string, a: any): unknown {
       return true;
     }
     case "add_to_folder":
-      a.ids.forEach((i: string) => itemFolders.add(`${i}|${a.folderId}`));
+      a.ids.forEach((i: string) => link(i, a.folderId));
       return;
+    case "reorder_in_folder": {
+      const order = [...itemFolders.entries()]
+        .filter(([k]) => k.endsWith(`|${a.folderId}`))
+        .sort((x, y) => x[1] - y[1])
+        .map(([k]) => k.split("|")[0])
+        .filter((id) => !a.ids.includes(id));
+      const at = a.before ? order.indexOf(a.before) : -1;
+      order.splice(at < 0 ? order.length : at, 0, ...a.ids);
+      order.forEach((id, n) => itemFolders.set(`${id}|${a.folderId}`, n + 1));
+      return;
+    }
     case "remove_from_folder":
       a.ids.forEach((i: string) => itemFolders.delete(`${i}|${a.folderId}`));
       return;
@@ -217,5 +266,6 @@ export function installMockBackend() {
   mockIPC((cmd, payload) => handle(cmd, payload), { shouldMockEvents: true });
   // Thumbnails are data: URLs already; pass them through untouched.
   (window as unknown as { __TAURI_INTERNALS__: { convertFileSrc: (p: string) => string } }).__TAURI_INTERNALS__.convertFileSrc = (p) => p;
+  (window as unknown as { __MOCK_BACKEND__: boolean }).__MOCK_BACKEND__ = true;
   console.info("[mock] in-memory backend installed");
 }

@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod import;
 pub mod library;
+pub mod search;
 
 use commands::*;
 
@@ -10,6 +11,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_drag::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             open_last_library,
@@ -25,6 +27,11 @@ pub fn run() {
             delete_items,
             empty_trash,
             reveal_item,
+            open_items,
+            set_rating,
+            copy_items,
+            export_items,
+            reorder_in_folder,
             import_paths,
             import_bytes,
             supported_exts,
