@@ -38,8 +38,11 @@ tempfile = "3.27.0"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
-codegen-units = 1
-lto = true
+# Thin LTO with the default 16 codegen units instead of fat LTO + 1 unit:
+# measured on an M-series Mac, a rebuild with cached dependencies drops from
+# 93 s to 36 s (from scratch 159 s -> 102 s). The binary grows 9.8 -> 12.2 MB,
+# about +0.5 MB once compressed in the installer.
+lto = "thin"
 opt-level = 3
 panic = "abort"
 strip = true

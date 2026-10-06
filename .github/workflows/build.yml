@@ -3,7 +3,18 @@ name: build
 on:
   workflow_dispatch:
   push:
+    # main builds keep the Rust cache warm: a tag build can only restore caches
+    # saved on the default branch, so without these every release compiled all
+    # dependencies from scratch.
+    branches: [main]
     tags: ["v*"]
+    # Not applied to tag pushes (GitHub ignores path filters for tags).
+    paths-ignore: ["**.md", "docs/**"]
+
+# A newer push to main supersedes the running build; tag builds always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
 jobs:
   test:
@@ -14,6 +25,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install Linux deps for Tauri
         run: |
           sudo apt-get update
@@ -26,8 +38,9 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
 
+  # Runs alongside `test` rather than after it. A tag build only creates a
+  # draft release, so a failing test still stops it from being published.
   build:
-    needs: test
     # Needed to create the GitHub Release and upload installers to it.
     permissions:
       contents: write
@@ -53,6 +66,9 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          # Only main saves (see `on.push`); saving on tags took ~2 min and the
+          # cache could never be used again.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: npm ci
       - uses: tauri-apps/tauri-action@v0
         env:
