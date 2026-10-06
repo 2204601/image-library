@@ -52,6 +52,14 @@ MyPictures.library/
 
 最後に開いたライブラリのパスはアプリ設定（macOS: `~/Library/Application Support/com.local.imagelibrary/settings.json`）に保存される。
 
+## インストール
+
+[Releases](https://github.com/2204601/image-library/releases) から入手する。署名（Apple Developer ID / Windows コード署名）なしのビルドなので、初回だけ警告が出る。
+
+- **macOS（Apple Silicon 専用）**：`.dmg` を開いて「アプリケーション」へコピー → 起動すると「開発元を検証できない」と出るので「完了」→ **システム設定 › プライバシーとセキュリティ** の下にある「このまま開く」を押す。
+  ターミナルで `xattr -dr com.apple.quarantine "/Applications/Image Library.app"` を実行しても良い。
+- **Windows**：`-setup.exe` を実行 → SmartScreen が出たら「詳細情報」→「実行」。
+
 ## 開発
 
 前提：Node.js 22+、Rust（stable）、[Tauri の前提環境](https://tauri.app/start/prerequisites/)
