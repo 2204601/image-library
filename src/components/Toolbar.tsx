@@ -1,6 +1,8 @@
 import {
   ArrowDownWideNarrow,
   ArrowUpNarrowWide,
+  ChevronDown,
+  CopyCheck,
   FolderInput,
   ImagePlus,
   PanelLeftClose,
@@ -12,8 +14,14 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { emptyTrash, importFilesDialog, importFolderDialog } from "../lib/actions";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import {
+  emptyTrash,
+  importFilesDialog,
+  importFolderDialog,
+  resolveDuplicates,
+  similarGroups,
+} from "../lib/actions";
 import type { Folder, SortKey, View } from "../lib/api";
 import { useStore } from "../store";
 
@@ -44,6 +52,8 @@ function viewTitle(view: View, folders: Folder[]): string {
       return "タグなし";
     case "trash":
       return "ゴミ箱";
+    case "similar":
+      return "重複の候補";
     case "folder":
       return folders.find((f) => f.id === view.id)?.name ?? "";
   }
@@ -60,7 +70,9 @@ export function Toolbar() {
   const tags = useStore((s) => s.tags);
   const tagFilter = useStore((s) => s.tagFilter);
   const toggleTagFilter = useStore((s) => s.toggleTagFilter);
-  const count = useStore((s) => s.items.length);
+  const tagMatchAll = useStore((s) => s.tagMatchAll);
+  const items = useStore((s) => s.items);
+  const count = items.length;
   const selectedCount = useStore((s) => s.selected.size);
   const view = useStore((s) => s.view);
   const folders = useStore((s) => s.folders);
@@ -72,7 +84,10 @@ export function Toolbar() {
   const setMinRating = useStore((s) => s.setMinRating);
   const isTrash = view.kind === "trash";
   const isFolder = view.kind === "folder";
+  const isSimilar = view.kind === "similar";
   const manual = sort === "manual";
+  const groups = useMemo(() => (isSimilar ? similarGroups(items) : []), [isSimilar, items]);
+  const sortLabel = SORTS.find((s) => s.key === sort)?.label ?? "";
 
   // Debounce typing so each keystroke doesn't hit the DB.
   const [text, setText] = useState(search);
@@ -132,17 +147,26 @@ export function Toolbar() {
               </button>
             )}
           </label>
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as SortKey, desc)}
-            className="h-8 w-28 shrink-0 truncate rounded-md border border-line bg-bg px-2 outline-none"
+          {/* Native select for the menu, laid over a label sized to the current
+              choice so long names aren't clipped and the arrow matches the UI. */}
+          <label
+            title="並び順"
+            className="relative flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line bg-bg pr-2 pl-2.5 whitespace-nowrap hover:bg-white/5 focus-within:border-accent"
           >
-            {SORTS.map((s) => (
-              <option key={s.key} value={s.key} disabled={s.key === "manual" && !isFolder}>
-                {s.key === "manual" && !isFolder ? "手動（フォルダ表示時のみ）" : s.label}
-              </option>
-            ))}
-          </select>
+            {manual ? "手動" : sortLabel}
+            <ChevronDown size={14} className="text-dim" />
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey, desc)}
+              className="absolute inset-0 cursor-default opacity-0"
+            >
+              {SORTS.map((s) => (
+                <option key={s.key} value={s.key} disabled={s.key === "manual" && !isFolder}>
+                  {s.key === "manual" && !isFolder ? "手動（フォルダ表示時のみ）" : s.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             title={manual ? "手動の並びは昇順のみ" : desc ? "降順" : "昇順"}
             disabled={manual}
@@ -170,23 +194,33 @@ export function Toolbar() {
               <Trash2 size={15} className="hidden @max-3xl:block" />
               <span className="@max-3xl:hidden">ゴミ箱を空にする</span>
             </button>
+          ) : isSimilar ? (
+            <button
+              title="各グループで解像度が最も高い1枚を残し、残りをゴミ箱へ移動"
+              disabled={groups.length === 0}
+              onClick={() => resolveDuplicates(groups, true)}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-3 whitespace-nowrap enabled:hover:bg-white/5 disabled:opacity-40 @max-3xl:px-2"
+            >
+              <CopyCheck size={15} /> <span className="@max-3xl:hidden">まとめて整理</span>
+            </button>
           ) : (
-            <>
-              <button
-                title="フォルダから追加"
-                onClick={importFolderDialog}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line hover:bg-white/5"
-              >
-                <FolderInput size={15} />
-              </button>
+            // One bordered group, like the other controls.
+            <div className="flex h-8 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
               <button
                 title="画像を追加"
                 onClick={importFilesDialog}
-                className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 whitespace-nowrap font-medium text-white hover:brightness-110 @max-3xl:px-2"
+                className="flex items-center gap-1.5 px-2.5 whitespace-nowrap hover:bg-white/5"
               >
                 <ImagePlus size={15} /> <span className="@max-3xl:hidden">追加</span>
               </button>
-            </>
+              <button
+                title="フォルダから追加"
+                onClick={importFolderDialog}
+                className="flex w-8 items-center justify-center border-l border-line hover:bg-white/5"
+              >
+                <FolderInput size={15} />
+              </button>
+            </div>
           )}
           <InspectorToggle className="flex @max-xl:hidden" />
         </div>
@@ -226,21 +260,28 @@ export function Toolbar() {
             </button>
           )}
         </div>
+        {isSimilar && groups.length > 0 && (
+          <span className="text-dim">
+            {groups.length} グループ・重複 {count - groups.length} 件。各グループの先頭（解像度が最も高い画像）が残す候補です
+          </span>
+        )}
         {manual && isFolder && !showSubfolders && (
           <span className="text-dim">画像をドラッグして並べ替えできます</span>
         )}
         {tagFilter.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-dim">タグ:</span>
-          {tagFilter.map((id) => (
-            <button
-              key={id}
-              onClick={() => toggleTagFilter(id)}
-              className="flex items-center gap-1 rounded-full bg-accent/25 px-2 py-0.5 text-xs hover:bg-accent/40"
-            >
-              {tags.find((t) => t.id === id)?.name}
-              <X size={12} />
-            </button>
+          {tagFilter.map((id, i) => (
+            <Fragment key={id}>
+              {i > 0 && <span className="text-[11px] text-dim">{tagMatchAll ? "かつ" : "または"}</span>}
+              <button
+                onClick={() => toggleTagFilter(id)}
+                className="flex items-center gap-1 rounded-full bg-accent/25 px-2 py-0.5 text-xs hover:bg-accent/40"
+              >
+                {tags.find((t) => t.id === id)?.name}
+                <X size={12} />
+              </button>
+            </Fragment>
           ))}
         </div>
         )}

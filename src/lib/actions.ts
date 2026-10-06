@@ -1,6 +1,6 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api } from "./api";
+import { api, type Item } from "./api";
 import { currentFolderId, useStore } from "../store";
 
 const st = () => useStore.getState();
@@ -106,6 +106,41 @@ export async function deleteSelection(ids: string[]) {
       onClick: () => st().run(() => api.restoreItems(ids)),
     });
   }
+}
+
+/**
+ * Keeps the first (best) image of each similar group and trashes the rest,
+ * moving their tags, folders and rating onto the one kept.
+ */
+export async function resolveDuplicates(groups: string[][], confirm = false) {
+  const plan = groups
+    .filter((g) => g.length > 1)
+    .map(([keep, ...remove]) => ({ keep, remove }));
+  const removed = plan.flatMap((p) => p.remove);
+  if (!removed.length) return;
+  if (confirm) {
+    const ok = await ask(
+      `${plan.length} グループの重複 ${removed.length} 件をゴミ箱へ移動します。\n` +
+        "各グループで解像度が最も高い1枚が残り、タグ・フォルダ・評価はその1枚に引き継がれます。",
+      { title: "重複を整理", kind: "warning", okLabel: "整理する", cancelLabel: "キャンセル" },
+    );
+    if (!ok) return;
+  }
+  await st().run(() => api.resolveDuplicates(plan));
+  st().toast(`${removed.length} 件の重複をゴミ箱へ移動しました`, false, {
+    label: "元に戻す",
+    onClick: () => st().run(() => api.restoreItems(removed)),
+  });
+}
+
+/** Item ids of the similar view, split into its groups. */
+export function similarGroups(items: Item[]): string[][] {
+  const out: string[][] = [];
+  items.forEach((it, i) => {
+    if (i === 0 || it.group !== items[i - 1].group) out.push([]);
+    out[out.length - 1].push(it.id);
+  });
+  return out;
 }
 
 export async function emptyTrash() {

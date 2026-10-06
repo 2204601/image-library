@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronRight,
+  Copy,
   Folder as FolderIcon,
   FolderPlus,
   Images,
@@ -9,6 +10,7 @@ import {
   Tag as TagIcon,
   Tags,
   Trash2,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -322,12 +324,44 @@ function TagList() {
   const tags = useStore((s) => s.tags);
   const tagFilter = useStore((s) => s.tagFilter);
   const toggleTagFilter = useStore((s) => s.toggleTagFilter);
+  const clearTagFilter = useStore((s) => s.clearTagFilter);
+  const tagMatchAll = useStore((s) => s.tagMatchAll);
+  const setTagMatchAll = useStore((s) => s.setTagMatchAll);
   const run = useStore((s) => s.run);
   const showMenu = useMenu((s) => s.show);
   const [editing, setEditing] = useState<number | null>(null);
 
+  const mode = (all: boolean, label: string, title: string) => (
+    <button
+      title={title}
+      onClick={() => setTagMatchAll(all)}
+      className={`rounded px-1.5 py-px font-normal ${
+        tagMatchAll === all ? "bg-white/15 text-fg" : "text-dim hover:text-fg"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
-    <Section title="タグ">
+    <Section
+      title="タグ"
+      action={
+        tagFilter.length > 0 && (
+          <div className="flex items-center gap-1.5 tracking-normal">
+            {tagFilter.length > 1 && (
+              <div className="flex rounded-md border border-line p-px">
+                {mode(false, "いずれか", "選択したタグのどれかが付いた画像（OR）")}
+                {mode(true, "すべて", "選択したタグがすべて付いた画像（AND）")}
+              </div>
+            )}
+            <button title="タグの絞り込みを解除" className="text-dim hover:text-fg" onClick={clearTagFilter}>
+              <X size={14} />
+            </button>
+          </div>
+        )
+      }
+    >
       {tags.length === 0 && <p className="px-2 py-1 text-xs text-dim">タグはまだありません</p>}
       {tags.map((t) => (
         <Row
@@ -369,10 +403,11 @@ export function Sidebar() {
   const setView = useStore((s) => s.setView);
   const showMenu = useMenu((s) => s.show);
 
-  const smart: { view: View; label: string; icon: React.ReactNode; count: number }[] = [
+  const smart: { view: View; label: string; icon: React.ReactNode; count?: number }[] = [
     { view: { kind: "all" }, label: "すべて", icon: <Images size={15} />, count: counts.all },
     { view: { kind: "unfiled" }, label: "未分類", icon: <Inbox size={15} />, count: counts.unfiled },
     { view: { kind: "untagged" }, label: "タグなし", icon: <Tags size={15} />, count: counts.untagged },
+    { view: { kind: "similar" }, label: "重複の候補", icon: <Copy size={15} /> },
     { view: { kind: "trash" }, label: "ゴミ箱", icon: <Trash2 size={15} />, count: counts.trash },
   ];
 

@@ -4,6 +4,7 @@
 
 use crate::db::{self, NewItem};
 use crate::library::Library;
+use crate::similar;
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader};
 use rayon::prelude::*;
@@ -127,8 +128,7 @@ fn decode(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
 
 /// Writes a JPEG thumbnail, or PNG when the image has real transparency.
 /// Returns the thumbnail's file name.
-fn write_thumb(img: &DynamicImage, dir: &Path, id: &str) -> Result<String, String> {
-    let thumb = img.thumbnail(THUMB_MAX, THUMB_MAX);
+fn write_thumb(thumb: &DynamicImage, dir: &Path, id: &str) -> Result<String, String> {
     let transparent = thumb.color().has_alpha() && thumb.to_rgba8().pixels().any(|p| p[3] < 255);
     if transparent {
         let name = format!("{id}.png");
@@ -174,7 +174,11 @@ fn process(
     let item_dir = root.join("images").join(&id);
     fs::create_dir_all(&item_dir).map_err(|e| e.to_string())?;
     fs::write(item_dir.join(&file_name), &data).map_err(|e| e.to_string())?;
-    let thumb = match write_thumb(&img, &root.join("thumbs"), &id) {
+    // The perceptual hash comes from the thumbnail, like the backfill in
+    // `compute_missing_phashes`, so old and new items hash the same way.
+    let small = img.thumbnail(THUMB_MAX, THUMB_MAX);
+    let phash = (similar::dhash(&small), similar::mean_color(&small));
+    let thumb = match write_thumb(&small, &root.join("thumbs"), &id) {
         Ok(t) => t,
         Err(e) => {
             let _ = fs::remove_dir_all(&item_dir);
@@ -192,6 +196,7 @@ fn process(
         size: data.len() as i64,
         hash,
         thumb,
+        phash: Some(phash),
     }))
 }
 
@@ -229,6 +234,34 @@ pub fn run(
         return Err("インポート中にライブラリが切り替わりました".into());
     }
     commit(&mut l.conn, outcomes, folder_id.as_deref()).map_err(|e| e.to_string())
+}
+
+/// Computes perceptual hashes for items imported before they existed, from
+/// their thumbnails. Like `run`, the library is locked only at the ends.
+/// Returns how many were computed.
+pub fn compute_missing_phashes(lib: &Mutex<Option<Library>>) -> Result<usize, String> {
+    let (root, missing) = {
+        let guard = lib.lock().unwrap();
+        let l = guard.as_ref().ok_or("ライブラリが開かれていません")?;
+        (l.root.clone(), db::missing_phashes(&l.conn).map_err(|e| e.to_string())?)
+    };
+    if missing.is_empty() {
+        return Ok(0);
+    }
+    let hashes: Vec<(String, (u64, u32))> = missing
+        .par_iter()
+        .filter_map(|(id, thumb)| {
+            let img = image::open(root.join("thumbs").join(thumb)).ok()?;
+            Some((id.clone(), (similar::dhash(&img), similar::mean_color(&img))))
+        })
+        .collect();
+    let mut guard = lib.lock().unwrap();
+    let l = guard.as_mut().ok_or("ライブラリが開かれていません")?;
+    if l.root != root {
+        return Err("解析中にライブラリが切り替わりました".into());
+    }
+    db::set_phashes(&mut l.conn, &hashes).map_err(|e| e.to_string())?;
+    Ok(hashes.len())
 }
 
 fn commit(
@@ -411,6 +444,53 @@ mod tests {
         let conn = &g.as_ref().unwrap().conn;
         assert!(db::trashed_ids(conn).unwrap().is_empty());
         assert_eq!(db::get_items(conn, &[id]).unwrap().len(), 1);
+    }
+
+    /// Smooth pattern with `fx` / `fy` waves across the image.
+    fn textured(w: u32, h: u32, fx: f32, fy: f32) -> DynamicImage {
+        DynamicImage::ImageRgb8(RgbImage::from_fn(w, h, |x, y| {
+            let v = ((x as f32 / w as f32 * fx).sin() * (y as f32 / h as f32 * fy).cos() * 120.0 + 128.0) as u8;
+            Rgb([v, 255 - v, v / 2])
+        }))
+    }
+
+    fn jpeg_bytes(img: &DynamicImage) -> Vec<u8> {
+        let mut buf = Cursor::new(Vec::new());
+        img.to_rgb8().write_to(&mut buf, ImageFormat::Jpeg).unwrap();
+        buf.into_inner()
+    }
+
+    #[test]
+    fn finds_resized_copies_and_backfills_hashes() {
+        let (_tmp, lib) = setup();
+        let big = textured(1600, 1200, 9.0, 6.0);
+        let small = big.resize(400, 300, image::imageops::FilterType::Lanczos3);
+        let sources = vec![
+            Source::Bytes { name: "small.jpg".into(), data: jpeg_bytes(&small) },
+            Source::Bytes { name: "other.png".into(), data: png_bytes(textured(1600, 1200, 3.0, 13.0)) },
+            Source::Bytes { name: "big.png".into(), data: png_bytes(big) },
+        ];
+        assert_eq!(run(&lib, sources, None, |_, _| {}).unwrap().imported, 3);
+
+        let similar = |lib: &Mutex<Option<Library>>| {
+            let g = lib.lock().unwrap();
+            let q = db::ItemQuery { view: db::View::Similar, ..Default::default() };
+            db::query_items(&g.as_ref().unwrap().conn, &q)
+                .unwrap()
+                .into_iter()
+                .map(|i| (i.name, i.group))
+                .collect::<Vec<_>>()
+        };
+        // The larger copy comes first.
+        let expected = vec![("big.png".to_string(), Some(0)), ("small.jpg".to_string(), Some(0))];
+        assert_eq!(similar(&lib), expected);
+
+        // Items from before the hash existed get it from their thumbnails.
+        lib.lock().unwrap().as_ref().unwrap().conn.execute("UPDATE items SET phash = NULL", []).unwrap();
+        assert!(similar(&lib).is_empty());
+        assert_eq!(compute_missing_phashes(&lib).unwrap(), 3);
+        assert_eq!(compute_missing_phashes(&lib).unwrap(), 0);
+        assert_eq!(similar(&lib), expected);
     }
 
     #[test]

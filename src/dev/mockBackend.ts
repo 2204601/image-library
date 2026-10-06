@@ -52,6 +52,36 @@ function seed() {
   items.slice(30, 36).forEach((it) => link(it.id, folders[1].id));
   addTags(items.slice(0, 40).map((i) => i.id), ["参考"]);
   addTags(items.slice(20, 60).map((i) => i.id), ["ブルー", "背景"]);
+  // Look-alikes for the similar view: smaller re-saves of a few images.
+  for (const [src, n] of [[3, 1], [10, 2], [57, 1]] as const) {
+    const orig = items[src];
+    for (let k = 1; k <= n; k++) {
+      items.push({
+        ...orig,
+        id: id(),
+        name: orig.name.replace(".jpg", k > 1 ? ` (コピー ${k}).jpg` : " (コピー).jpg"),
+        width: Math.round(orig.width / (k + 1)),
+        height: Math.round(orig.height / (k + 1)),
+        size: Math.round(orig.size / (k + 1)),
+        rating: 0,
+        importedAt: orig.importedAt + k * 1000,
+      });
+    }
+  }
+}
+
+/** Mock stand-in for the perceptual hash: same colours and shape = look-alike. */
+function similar(r: MockItem[]): MockItem[] {
+  const key = (i: MockItem) => `${i.hue}|${(i.width / i.height).toFixed(2)}`;
+  const groups = new Map<string, MockItem[]>();
+  r.forEach((i) => groups.set(key(i), [...(groups.get(key(i)) ?? []), i]));
+  return [...groups.values()]
+    .filter((g) => g.length > 1)
+    .flatMap((g, n) =>
+      [...g]
+        .sort((a, b) => b.width * b.height - a.width * a.height || b.size - a.size)
+        .map((i) => ({ ...i, group: n })),
+    );
 }
 
 function svg(it: MockItem, scale: number) {
@@ -99,7 +129,10 @@ function query(q: ItemQuery): Item[] {
       tags.some((t) => hasTag(i.id, t.id) && t.name.toLowerCase().includes(w));
     r = r.filter((i) => hit(i) !== neg);
   }
-  for (const t of q.tagIds) r = r.filter((i) => hasTag(i.id, t));
+  if (q.tagIds.length) {
+    const need = q.tagMatchAll ? q.tagIds.length : 1;
+    r = r.filter((i) => q.tagIds.filter((t) => hasTag(i.id, t)).length >= need);
+  }
   if (q.minRating) r = r.filter((i) => i.rating >= q.minRating);
   if (q.sort === "manual" && v.kind === "folder") {
     const pos = (i: MockItem) => itemFolders.get(`${i.id}|${v.id}`) ?? Infinity;
@@ -116,7 +149,7 @@ function query(q: ItemQuery): Item[] {
             ? i.rating
             : i.importedAt;
   r = [...r].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * (q.desc ? -1 : 1));
-  return r.map(view);
+  return (v.kind === "similar" ? similar(r) : r).map(view);
 }
 
 function removeFolder(fid: string) {
@@ -178,6 +211,20 @@ function handle(cmd: string, a: any): unknown {
     case "copy_items":
     case "export_items":
       return a.ids.length;
+    case "index_similar":
+      return 0;
+    case "resolve_duplicates":
+      for (const g of a.groups as { keep: string; remove: string[] }[]) {
+        const keep = items.find((i) => i.id === g.keep)!;
+        for (const rid of g.remove) {
+          const it = items.find((i) => i.id === rid)!;
+          tags.forEach((t) => hasTag(rid, t.id) && itemTags.add(`${keep.id}|${t.id}`));
+          folders.forEach((f) => inFolder(rid, f.id) && link(keep.id, f.id));
+          keep.rating = Math.max(keep.rating, it.rating);
+          it.deletedAt ??= Date.now();
+        }
+      }
+      return;
     case "supported_exts":
       return ["jpg", "jpeg", "png", "gif", "webp", "bmp"];
     case "import_paths":

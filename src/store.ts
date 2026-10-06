@@ -36,6 +36,8 @@ interface State {
   view: View;
   search: string;
   tagFilter: number[];
+  /** Sidebar tag filter requires all selected tags (AND) instead of any (OR). */
+  tagMatchAll: boolean;
   sort: SortKey;
   desc: boolean;
   thumbSize: number;
@@ -46,6 +48,8 @@ interface State {
   minRating: number;
   /** Most recently used target folders (for Shift+D and the picker). */
   recentFolders: string[];
+  /** Most recently assigned tags, newest first (suggested in the tag input). */
+  recentTags: number[];
   /** Folder whose name is being edited inline in the sidebar. */
   renamingFolder: string | null;
   /** Bumped to ask the inspector to focus the item name field. */
@@ -73,12 +77,16 @@ interface State {
   /** Sidebar row that just received a drop; `n` restarts the animation. */
   flash: { target: string; n: number } | null;
   importing: { done: number; total: number } | null;
+  /** Hashing older images before the similar view can be shown. */
+  analyzing: boolean;
   toasts: Toast[];
 
   setLibrary: (lib: LibraryInfo | null) => void;
   setView: (view: View) => void;
   setSearch: (s: string) => void;
   toggleTagFilter: (id: number) => void;
+  clearTagFilter: () => void;
+  setTagMatchAll: (on: boolean) => void;
   setSort: (sort: SortKey, desc: boolean) => void;
   setThumbSize: (n: number) => void;
   toggleInspector: () => void;
@@ -86,6 +94,7 @@ interface State {
   setShowSubfolders: (on: boolean) => void;
   setMinRating: (n: number) => void;
   rememberFolders: (ids: string[]) => void;
+  rememberTags: (names: string[]) => void;
   setRenamingFolder: (id: string | null) => void;
   requestItemRename: () => void;
   setPicker: (p: State["picker"]) => void;
@@ -127,6 +136,17 @@ const loadNumber = (key: string, fallback: number) => {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 };
 
+const recentTagsKey = (root: string) => `recentTags:${root}`;
+const loadRecentTags = (root: string): number[] => {
+  try {
+    const v = JSON.parse(load(recentTagsKey(root)) ?? "[]");
+    return Array.isArray(v) ? v.filter((x) => typeof x === "number") : [];
+  } catch {
+    return [];
+  }
+};
+let pendingRecentTags: string[] = [];
+
 let refreshSeq = 0;
 let toastSeq = 0;
 let flashSeq = 0;
@@ -137,6 +157,7 @@ export const useStore = create<State>((set, get) => ({
   view: { kind: "all" },
   search: "",
   tagFilter: [],
+  tagMatchAll: load("tagMatchAll") === "true",
   sort: "importedAt",
   desc: true,
   thumbSize: loadNumber("thumbSize", 180),
@@ -145,6 +166,7 @@ export const useStore = create<State>((set, get) => ({
   showSubfolders: load("showSubfolders") === "true",
   minRating: 0,
   recentFolders: [],
+  recentTags: [],
   renamingFolder: null,
   renameItemSeq: 0,
   picker: null,
@@ -165,6 +187,7 @@ export const useStore = create<State>((set, get) => ({
   dropTarget: null,
   flash: null,
   importing: null,
+  analyzing: false,
   toasts: [],
 
   setLibrary: (library) => {
@@ -173,6 +196,7 @@ export const useStore = create<State>((set, get) => ({
       view: { kind: "all" },
       search: "",
       tagFilter: [],
+      recentTags: library ? loadRecentTags(library.root) : [],
       selected: new Set(),
       anchor: null,
       focus: null,
@@ -181,7 +205,9 @@ export const useStore = create<State>((set, get) => ({
     if (library) get().refresh();
   },
   setView: (view) => {
-    set({ view, selected: new Set(), anchor: null, focus: null });
+    // The similar view may take a moment to prepare; don't leave the old list up.
+    const clear = view.kind === "similar" && get().view.kind !== "similar" ? { items: [] } : {};
+    set({ view, selected: new Set(), anchor: null, focus: null, ...clear });
     get().refresh();
   },
   setSearch: (search) => {
@@ -192,6 +218,15 @@ export const useStore = create<State>((set, get) => ({
     const cur = get().tagFilter;
     set({ tagFilter: cur.includes(id) ? cur.filter((t) => t !== id) : [...cur, id] });
     get().refresh();
+  },
+  clearTagFilter: () => {
+    set({ tagFilter: [] });
+    get().refresh();
+  },
+  setTagMatchAll: (tagMatchAll) => {
+    set({ tagMatchAll });
+    persist("tagMatchAll", String(tagMatchAll));
+    if (get().tagFilter.length > 1) get().refresh();
   },
   setSort: (sort, desc) => {
     set({ sort, desc });
@@ -224,6 +259,11 @@ export const useStore = create<State>((set, get) => ({
     const rest = get().recentFolders.filter((f) => !ids.includes(f));
     set({ recentFolders: [...ids, ...rest].slice(0, 8) });
   },
+  // Takes names because new tags only get an id once the backend creates them;
+  // they are resolved against the tag list after the next refresh.
+  rememberTags: (names) => {
+    pendingRecentTags = [...names, ...pendingRecentTags.filter((n) => !names.includes(n))];
+  },
   setRenamingFolder: (renamingFolder) => set({ renamingFolder }),
   requestItemRename: () => set({ renameItemSeq: get().renameItemSeq + 1, inspectorOpen: true }),
   setPicker: (picker) => set({ picker }),
@@ -231,13 +271,22 @@ export const useStore = create<State>((set, get) => ({
   refresh: async () => {
     if (!get().library) return;
     const seq = ++refreshSeq;
-    const { view, search, tagFilter, sort, desc, showSubfolders, minRating } = get();
+    const { view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating } = get();
     try {
+      if (view.kind === "similar") {
+        set({ analyzing: true });
+        try {
+          await api.indexSimilar();
+        } finally {
+          set({ analyzing: false });
+        }
+      }
       const [items, folders, tags, counts] = await Promise.all([
         api.queryItems({
           view,
           search,
           tagIds: tagFilter,
+          tagMatchAll,
           includeSubfolders: showSubfolders,
           minRating,
           sort,
@@ -256,6 +305,14 @@ export const useStore = create<State>((set, get) => ({
       const viewNow = get().view;
       const viewGone = viewNow.kind === "folder" && !folders.some((f) => f.id === viewNow.id);
       const folderIds = new Set(folders.map((f) => f.id));
+      const byName = new Map(tags.map((t) => [t.name, t.id]));
+      const fresh = pendingRecentTags.flatMap((n) => byName.get(n) ?? []);
+      // Keep names not created yet (a refresh that began before add_tags finished).
+      pendingRecentTags = pendingRecentTags.filter((n) => !byName.has(n)).slice(0, 12);
+      const recentTags = [...fresh, ...get().recentTags.filter((t) => !fresh.includes(t))]
+        .filter((t) => tagIds.has(t))
+        .slice(0, 12);
+      if (fresh.length) persist(recentTagsKey(get().library!.root), JSON.stringify(recentTags));
       set({
         items,
         folders,
@@ -264,6 +321,7 @@ export const useStore = create<State>((set, get) => ({
         selected,
         rev: get().rev + 1,
         recentFolders: get().recentFolders.filter((f) => folderIds.has(f)),
+        recentTags,
         viewer: get().viewer !== null && items.length === 0 ? null : get().viewer,
       });
       if (viewGone || tagFilterNow.length !== get().tagFilter.length) {

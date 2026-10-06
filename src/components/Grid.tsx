@@ -11,6 +11,7 @@ import {
   exportSelection,
   importFilesDialog,
   openSelection,
+  resolveDuplicates,
   setRating,
 } from "../lib/actions";
 import { api, type Item } from "../lib/api";
@@ -21,6 +22,8 @@ import { startPointerDrag } from "./DragLayer";
 const PAD = 16;
 const GAP = 12;
 const LABEL = 34;
+/** Similar view: band above each group's first row. */
+const HEADER = 40;
 /** Aspect ratios outside this range are letterboxed instead of making absurd cells. */
 const MIN_AR = 0.4;
 const MAX_AR = 3;
@@ -37,7 +40,16 @@ type Row = {
   /** Left edge of each cell (content coordinates); `xs[k + 1] - GAP` is its right edge. */
   xs: number[];
   widths: number[];
+  /** Similar view: the row starts a group, with a header band above `top`. */
+  header: boolean;
 };
+
+/** Index one past the last item of the group starting at `start`. */
+function groupEnd(items: Item[], start: number): number {
+  let end = start + 1;
+  while (end < items.length && items[end].group === items[start].group) end++;
+  return end;
+}
 
 /**
  * Justified layout: each row is filled edge to edge with cells in the images' own
@@ -46,12 +58,17 @@ type Row = {
  */
 function justify(items: Item[], inner: number, target: number): Row[] {
   const rows: Row[] = [];
+  const grouped = items[0]?.group !== undefined;
   let top = PAD;
   let i = 0;
   while (i < items.length) {
+    // In the similar view a row never spans two groups.
+    const header = grouped && (i === 0 || items[i].group !== items[i - 1].group);
+    if (header) top += HEADER;
+    const end = grouped ? groupEnd(items, i) : items.length;
     let sum = 0;
     let j = i;
-    while (j < items.length) {
+    while (j < end) {
       sum += aspect(items[j++]);
       if (sum * target + GAP * (j - i - 1) >= inner) break;
     }
@@ -83,7 +100,7 @@ function justify(items: Item[], inner: number, target: number): Row[] {
       widths.push(Math.max(1, Math.round(acc) - x0));
     }
     const h = Math.round(height);
-    rows.push({ start: i, top, height: h, xs, widths });
+    rows.push({ start: i, top, height: h, xs, widths, header });
     top += h + LABEL + GAP;
     i = j;
   }
@@ -99,6 +116,7 @@ const Cell = memo(function Cell({
   height,
   reorderable,
   insert,
+  best,
 }: {
   item: Item;
   index: number;
@@ -110,6 +128,8 @@ const Cell = memo(function Cell({
   reorderable: boolean;
   /** Where the reorder drop indicator is shown, if here. */
   insert: "before" | "after" | null;
+  /** Similar view: this is the copy that would be kept. */
+  best?: boolean;
 }) {
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
@@ -160,6 +180,11 @@ const Cell = memo(function Cell({
             aspect(item) === rawAspect(item) ? "object-cover" : "object-contain"
           }`}
         />
+        {best && (
+          <span className="absolute top-1.5 left-1.5 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-medium text-white">
+            最高画質
+          </span>
+        )}
       </div>
       {insert && (
         <span
@@ -237,6 +262,7 @@ export function Grid() {
   const selected = useStore((s) => s.selected);
   const thumbSize = useStore((s) => s.thumbSize);
   const viewKind = useStore((s) => s.view.kind);
+  const analyzing = useStore((s) => s.analyzing);
   const filtering = useStore((s) => s.search !== "" || s.tagFilter.length > 0);
   const dragIds = useStore((s) => (s.drag?.kind === "items" ? s.drag.ids : null));
   const dragging = useMemo(() => new Set(dragIds ?? []), [dragIds]);
@@ -269,7 +295,7 @@ export function Grid() {
   const virt = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: (i) => rows[i].height + LABEL + GAP,
+    estimateSize: (i) => (rows[i].header ? HEADER : 0) + rows[i].height + LABEL + GAP,
     overscan: 3,
     paddingStart: PAD,
     paddingEnd: PAD,
@@ -465,7 +491,7 @@ export function Grid() {
       onPointerDown={onBackgroundPointerDown}
     >
       {items.length === 0 ? (
-        <Empty kind={viewKind} filtering={filtering} />
+        <Empty kind={viewKind} filtering={filtering} analyzing={analyzing} />
       ) : (
         <div style={{ height: virt.getTotalSize(), position: "relative" }}>
           {marquee && (
@@ -482,28 +508,30 @@ export function Grid() {
           {virt.getVirtualItems().map((v) => {
             const row = rows[v.index];
             return (
-              <div
-                key={v.key}
-                className="absolute left-0 flex"
-                style={{ top: v.start, gap: GAP, paddingLeft: PAD, height: row.height + LABEL }}
-              >
-                {items.slice(row.start, row.start + row.xs.length).map((item, j) => (
-                  <Cell
-                    key={item.id}
-                    item={item}
-                    index={row.start + j}
-                    selected={selected.has(item.id)}
-                    dimmed={dragging.has(item.id)}
-                    width={row.widths[j]}
-                    height={row.height}
-                    reorderable={reorderable}
-                    insert={
-                      dropTarget?.startsWith(`item:${item.id}:`)
-                        ? (dropTarget.slice(-6) === "before" ? "before" : "after")
-                        : null
-                    }
-                  />
-                ))}
+              <div key={v.key} className="absolute left-0" style={{ top: v.start, width }}>
+                {row.header && (
+                  <GroupHeader items={items} start={row.start} selected={selected} />
+                )}
+                <div className="flex" style={{ gap: GAP, paddingLeft: PAD, height: row.height + LABEL }}>
+                  {items.slice(row.start, row.start + row.xs.length).map((item, j) => (
+                    <Cell
+                      key={item.id}
+                      item={item}
+                      index={row.start + j}
+                      selected={selected.has(item.id)}
+                      dimmed={dragging.has(item.id)}
+                      width={row.widths[j]}
+                      height={row.height}
+                      reorderable={reorderable}
+                      insert={
+                        dropTarget?.startsWith(`item:${item.id}:`)
+                          ? (dropTarget.slice(-6) === "before" ? "before" : "after")
+                          : null
+                      }
+                      best={item.group !== undefined && row.header && j === 0}
+                    />
+                  ))}
+                </div>
               </div>
             );
           })}
@@ -513,8 +541,40 @@ export function Grid() {
   );
 }
 
-function Empty({ kind, filtering }: { kind: string; filtering: boolean }) {
+/** Similar view: names the group and offers to keep one copy. */
+function GroupHeader({ items, start, selected }: { items: Item[]; start: number; selected: Set<string> }) {
+  const group = items.slice(start, groupEnd(items, start));
+  // Keep the copy the user picked, if exactly one in this group is selected.
+  const picked = group.filter((i) => selected.has(i.id));
+  const keep = picked.length === 1 ? picked[0] : group[0];
+  const ids = [keep.id, ...group.filter((i) => i !== keep).map((i) => i.id)];
+  return (
+    <div
+      className={`flex items-center gap-3 text-xs ${start > 0 ? "border-t border-line" : ""}`}
+      style={{ height: HEADER - 8, marginLeft: PAD, marginRight: PAD, marginBottom: 8 }}
+    >
+      <span className="font-semibold">グループ {(group[0].group ?? 0) + 1}</span>
+      <span className="text-dim">{group.length} 件</span>
+      <button
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => resolveDuplicates([ids])}
+        title="残す1枚にタグ・フォルダ・評価を引き継ぎ、他はゴミ箱へ移動します"
+        className="ml-auto rounded-md border border-line px-2 py-0.5 hover:bg-white/5"
+      >
+        {picked.length === 1 ? "選択中の1枚を残して整理" : "最高画質の1枚を残して整理"}
+      </button>
+    </div>
+  );
+}
+
+function Empty({ kind, filtering, analyzing }: { kind: string; filtering: boolean; analyzing: boolean }) {
   if (kind === "trash") return <p className="mt-24 text-center text-dim">ゴミ箱は空です</p>;
+  if (kind === "similar")
+    return (
+      <p className="mt-24 text-center text-dim">
+        {analyzing ? "画像を解析しています…" : "似ている画像は見つかりませんでした"}
+      </p>
+    );
   if (filtering) return <p className="mt-24 text-center text-dim">条件に一致する画像はありません</p>;
   if (kind === "unfiled" || kind === "untagged")
     return <p className="mt-24 text-center text-dim">該当する画像はありません</p>;

@@ -3,6 +3,7 @@ pub mod db;
 pub mod import;
 pub mod library;
 pub mod search;
+pub mod similar;
 
 use commands::*;
 
@@ -34,6 +35,8 @@ pub fn run() {
             reorder_in_folder,
             import_paths,
             import_bytes,
+            index_similar,
+            resolve_duplicates,
             supported_exts,
             list_folders,
             create_folder,
