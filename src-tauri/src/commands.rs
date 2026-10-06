@@ -1,0 +1,358 @@
+//! Commands invoked from the frontend. All return `Result<_, String>` so
+//! errors surface as rejected promises in JS.
+
+use crate::db::{self, Counts, Folder, Item, ItemQuery, SelectionInfo, Tag};
+use crate::import::{self, ImportSummary, Source};
+use crate::library::Library;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
+
+pub type CmdResult<T> = Result<T, String>;
+
+#[derive(Default)]
+pub struct AppState {
+    pub lib: Mutex<Option<Library>>,
+}
+
+fn err(e: impl ToString) -> String {
+    e.to_string()
+}
+
+fn with_lib<T>(state: &AppState, f: impl FnOnce(&mut Library) -> CmdResult<T>) -> CmdResult<T> {
+    let mut guard = state.lib.lock().unwrap();
+    let lib = guard.as_mut().ok_or("ライブラリが開かれていません")?;
+    f(lib)
+}
+
+// ------------------------------------------------------------- settings
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Settings {
+    last_library: Option<PathBuf>,
+}
+
+fn settings_path(app: &AppHandle) -> CmdResult<PathBuf> {
+    Ok(app.path().app_config_dir().map_err(err)?.join("settings.json"))
+}
+
+fn load_settings(app: &AppHandle) -> Settings {
+    settings_path(app)
+        .ok()
+        .and_then(|p| fs::read(p).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+fn save_settings(app: &AppHandle, s: &Settings) -> CmdResult<()> {
+    let path = settings_path(app)?;
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(err)?;
+    }
+    fs::write(path, serde_json::to_vec_pretty(s).map_err(err)?).map_err(err)
+}
+
+// -------------------------------------------------------------- library
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryInfo {
+    root: String,
+    name: String,
+}
+
+fn activate(app: &AppHandle, state: &AppState, lib: Library) -> CmdResult<LibraryInfo> {
+    app.asset_protocol_scope()
+        .allow_directory(&lib.root, true)
+        .map_err(err)?;
+    let info = LibraryInfo {
+        root: lib.root.display().to_string(),
+        name: lib
+            .root
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    };
+    save_settings(app, &Settings { last_library: Some(lib.root.clone()) })?;
+    *state.lib.lock().unwrap() = Some(lib);
+    Ok(info)
+}
+
+/// Re-opens the library used last time, if it still exists.
+#[tauri::command]
+pub fn open_last_library(app: AppHandle, state: State<AppState>) -> CmdResult<Option<LibraryInfo>> {
+    match load_settings(&app).last_library {
+        Some(p) => match Library::open(&p) {
+            Ok(lib) => activate(&app, &state, lib).map(Some),
+            Err(_) => Ok(None),
+        },
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub fn create_library(app: AppHandle, state: State<AppState>, path: PathBuf) -> CmdResult<LibraryInfo> {
+    let path = if path.extension().is_some_and(|e| e == "library") {
+        path
+    } else {
+        path.with_extension("library")
+    };
+    activate(&app, &state, Library::create(&path)?)
+}
+
+#[tauri::command]
+pub fn open_library(app: AppHandle, state: State<AppState>, path: PathBuf) -> CmdResult<LibraryInfo> {
+    activate(&app, &state, Library::open(&path)?)
+}
+
+// ---------------------------------------------------------------- items
+
+/// Item plus absolute paths for display (built in Rust so separators are
+/// correct on Windows).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemView {
+    #[serde(flatten)]
+    item: Item,
+    file_path: String,
+    thumb_path: String,
+}
+
+#[tauri::command]
+pub fn query_items(state: State<AppState>, query: ItemQuery) -> CmdResult<Vec<ItemView>> {
+    with_lib(&state, |lib| {
+        let items = db::query_items(&lib.conn, &query).map_err(err)?;
+        Ok(items
+            .into_iter()
+            .map(|item| ItemView {
+                file_path: lib.file_path(&item).display().to_string(),
+                thumb_path: lib.thumb_path(&item).display().to_string(),
+                item,
+            })
+            .collect())
+    })
+}
+
+#[tauri::command]
+pub fn get_counts(state: State<AppState>) -> CmdResult<Counts> {
+    with_lib(&state, |lib| db::counts(&lib.conn).map_err(err))
+}
+
+#[tauri::command]
+pub fn selection_info(state: State<AppState>, ids: Vec<String>) -> CmdResult<SelectionInfo> {
+    with_lib(&state, |lib| db::selection_info(&lib.conn, &ids).map_err(err))
+}
+
+#[tauri::command]
+pub fn set_note(state: State<AppState>, id: String, note: String) -> CmdResult<()> {
+    with_lib(&state, |lib| db::set_note(&lib.conn, &id, &note).map_err(err))
+}
+
+#[tauri::command]
+pub fn rename_item(state: State<AppState>, id: String, name: String) -> CmdResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    with_lib(&state, |lib| db::rename_item(&lib.conn, &id, name).map_err(err))
+}
+
+#[tauri::command]
+pub fn trash_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::trash_items(&lib.conn, &ids).map_err(err))
+}
+
+#[tauri::command]
+pub fn restore_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::restore_items(&lib.conn, &ids).map_err(err))
+}
+
+#[tauri::command]
+pub fn delete_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| lib.delete_items(&ids))
+}
+
+#[tauri::command]
+pub fn empty_trash(state: State<AppState>) -> CmdResult<()> {
+    with_lib(&state, |lib| {
+        let ids = db::trashed_ids(&lib.conn).map_err(err)?;
+        lib.delete_items(&ids)
+    })
+}
+
+#[tauri::command]
+pub fn reveal_item(state: State<AppState>, id: String) -> CmdResult<()> {
+    let path = with_lib(&state, |lib| {
+        let item = db::get_items(&lib.conn, &[id])
+            .map_err(err)?
+            .pop()
+            .ok_or("画像が見つかりません")?;
+        Ok(lib.file_path(&item))
+    })?;
+    tauri_plugin_opener::reveal_item_in_dir(path).map_err(err)
+}
+
+// --------------------------------------------------------------- import
+
+#[derive(Clone, Serialize)]
+struct Progress {
+    done: usize,
+    total: usize,
+}
+
+fn emit_progress(app: &AppHandle) -> impl Fn(usize, usize) + Sync + '_ {
+    move |done, total| {
+        let _ = app.emit("import-progress", Progress { done, total });
+    }
+}
+
+#[tauri::command]
+pub async fn import_paths(
+    app: AppHandle,
+    paths: Vec<PathBuf>,
+    folder_id: Option<String>,
+) -> CmdResult<ImportSummary> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let files = import::collect_files(&paths);
+        let state = app.state::<AppState>();
+        import::run(
+            &state.lib,
+            files.into_iter().map(Source::Path).collect(),
+            folder_id,
+            emit_progress(&app),
+        )
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Imports raw image bytes (clipboard paste). The file name and target
+/// folder are passed as headers so the body can stay binary.
+#[tauri::command]
+pub async fn import_bytes(app: AppHandle, request: tauri::ipc::Request<'_>) -> CmdResult<ImportSummary> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("バイナリデータが必要です".into());
+    };
+    let header = |k: &str| {
+        request
+            .headers()
+            .get(k)
+            .and_then(|v| v.to_str().ok())
+            .map(percent_decode)
+    };
+    let name = header("x-name").unwrap_or_else(|| "pasted.png".into());
+    let folder_id = header("x-folder").filter(|s| !s.is_empty());
+    let data = data.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        import::run(&state.lib, vec![Source::Bytes { name, data }], folder_id, emit_progress(&app))
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Headers are ASCII-only, so the frontend sends `encodeURIComponent` values.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(b);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+#[tauri::command]
+pub fn supported_exts() -> Vec<&'static str> {
+    import::SUPPORTED_EXTS.to_vec()
+}
+
+// -------------------------------------------------------------- folders
+
+#[tauri::command]
+pub fn list_folders(state: State<AppState>) -> CmdResult<Vec<Folder>> {
+    with_lib(&state, |lib| db::list_folders(&lib.conn).map_err(err))
+}
+
+#[tauri::command]
+pub fn create_folder(state: State<AppState>, name: String, parent_id: Option<String>) -> CmdResult<String> {
+    with_lib(&state, |lib| {
+        db::create_folder(&lib.conn, name.trim(), parent_id.as_deref()).map_err(err)
+    })
+}
+
+#[tauri::command]
+pub fn rename_folder(state: State<AppState>, id: String, name: String) -> CmdResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    with_lib(&state, |lib| db::rename_folder(&lib.conn, &id, name).map_err(err))
+}
+
+#[tauri::command]
+pub fn delete_folder(state: State<AppState>, id: String) -> CmdResult<()> {
+    with_lib(&state, |lib| db::delete_folder(&lib.conn, &id).map_err(err))
+}
+
+#[tauri::command]
+pub fn move_folder(state: State<AppState>, id: String, parent_id: Option<String>) -> CmdResult<bool> {
+    with_lib(&state, |lib| db::move_folder(&lib.conn, &id, parent_id.as_deref()).map_err(err))
+}
+
+#[tauri::command]
+pub fn add_to_folder(state: State<AppState>, ids: Vec<String>, folder_id: String) -> CmdResult<()> {
+    with_lib(&state, |lib| db::add_to_folder(&lib.conn, &ids, &folder_id).map_err(err))
+}
+
+#[tauri::command]
+pub fn remove_from_folder(state: State<AppState>, ids: Vec<String>, folder_id: String) -> CmdResult<()> {
+    with_lib(&state, |lib| db::remove_from_folder(&lib.conn, &ids, &folder_id).map_err(err))
+}
+
+// ----------------------------------------------------------------- tags
+
+#[tauri::command]
+pub fn list_tags(state: State<AppState>) -> CmdResult<Vec<Tag>> {
+    with_lib(&state, |lib| db::list_tags(&lib.conn).map_err(err))
+}
+
+#[tauri::command]
+pub fn add_tags(state: State<AppState>, ids: Vec<String>, names: Vec<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::add_tags(&mut lib.conn, &ids, &names).map_err(err))
+}
+
+#[tauri::command]
+pub fn remove_tag(state: State<AppState>, ids: Vec<String>, tag_id: i64) -> CmdResult<()> {
+    with_lib(&state, |lib| db::remove_tag(&lib.conn, &ids, tag_id).map_err(err))
+}
+
+#[tauri::command]
+pub fn rename_tag(state: State<AppState>, id: i64, name: String) -> CmdResult<()> {
+    with_lib(&state, |lib| db::rename_tag(&mut lib.conn, id, &name).map_err(err))
+}
+
+#[tauri::command]
+pub fn delete_tag(state: State<AppState>, id: i64) -> CmdResult<()> {
+    with_lib(&state, |lib| db::delete_tag(&lib.conn, id).map_err(err))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn percent_decode_utf8() {
+        assert_eq!(super::percent_decode("%E7%94%BB%E5%83%8F.png"), "画像.png");
+        assert_eq!(super::percent_decode("a%2"), "a%2");
+    }
+}

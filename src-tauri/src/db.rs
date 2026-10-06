@@ -1,0 +1,750 @@
+//! SQLite schema and queries. Everything here takes a plain `Connection`
+//! so it can be unit-tested without Tauri.
+
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+pub type DbResult<T> = rusqlite::Result<T>;
+
+const SCHEMA_VERSION: i32 = 1;
+
+pub fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+pub fn open(path: &std::path::Path) -> DbResult<Connection> {
+    let conn = Connection::open(path)?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;",
+    )?;
+    migrate(&conn)?;
+    Ok(conn)
+}
+
+pub fn migrate(conn: &Connection) -> DbResult<()> {
+    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version < 1 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE items (
+               id          TEXT PRIMARY KEY,
+               name        TEXT NOT NULL,
+               file_name   TEXT NOT NULL,
+               ext         TEXT NOT NULL,
+               width       INTEGER NOT NULL,
+               height      INTEGER NOT NULL,
+               size        INTEGER NOT NULL,
+               hash        TEXT NOT NULL,
+               thumb       TEXT NOT NULL,
+               note        TEXT NOT NULL DEFAULT '',
+               imported_at INTEGER NOT NULL,
+               deleted_at  INTEGER
+             );
+             CREATE INDEX idx_items_hash ON items(hash);
+             CREATE INDEX idx_items_deleted ON items(deleted_at, imported_at);
+
+             CREATE TABLE folders (
+               id        TEXT PRIMARY KEY,
+               parent_id TEXT REFERENCES folders(id) ON DELETE CASCADE,
+               name      TEXT NOT NULL
+             );
+             CREATE INDEX idx_folders_parent ON folders(parent_id);
+
+             CREATE TABLE item_folders (
+               item_id   TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+               PRIMARY KEY (item_id, folder_id)
+             );
+             CREATE INDEX idx_item_folders_folder ON item_folders(folder_id);
+
+             CREATE TABLE tags (
+               id   INTEGER PRIMARY KEY,
+               name TEXT NOT NULL UNIQUE COLLATE NOCASE
+             );
+
+             CREATE TABLE item_tags (
+               item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+               PRIMARY KEY (item_id, tag_id)
+             );
+             CREATE INDEX idx_item_tags_tag ON item_tags(tag_id);
+             COMMIT;",
+        )?;
+    }
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------- items
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Item {
+    pub id: String,
+    pub name: String,
+    pub file_name: String,
+    pub ext: String,
+    pub width: u32,
+    pub height: u32,
+    pub size: i64,
+    pub thumb: String,
+    pub note: String,
+    pub imported_at: i64,
+    pub deleted_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewItem {
+    pub id: String,
+    pub name: String,
+    pub file_name: String,
+    pub ext: String,
+    pub width: u32,
+    pub height: u32,
+    pub size: i64,
+    pub hash: String,
+    pub thumb: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum View {
+    All,
+    Unfiled,
+    Untagged,
+    Trash,
+    Folder { id: String },
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SortKey {
+    ImportedAt,
+    Name,
+    Size,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemQuery {
+    pub view: View,
+    #[serde(default)]
+    pub search: String,
+    #[serde(default)]
+    pub tag_ids: Vec<i64>,
+    pub sort: SortKey,
+    pub desc: bool,
+}
+
+const ITEM_COLS: &str =
+    "id, name, file_name, ext, width, height, size, thumb, note, imported_at, deleted_at";
+
+fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
+    Ok(Item {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        file_name: r.get(2)?,
+        ext: r.get(3)?,
+        width: r.get(4)?,
+        height: r.get(5)?,
+        size: r.get(6)?,
+        thumb: r.get(7)?,
+        note: r.get(8)?,
+        imported_at: r.get(9)?,
+        deleted_at: r.get(10)?,
+    })
+}
+
+fn escape_like(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('%');
+    for c in s.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out.push('%');
+    out
+}
+
+fn placeholders(n: usize) -> String {
+    vec!["?"; n].join(",")
+}
+
+pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
+    let mut wheres: Vec<String> = Vec::new();
+    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+
+    if q.view == View::Trash {
+        wheres.push("deleted_at IS NOT NULL".into());
+    } else {
+        wheres.push("deleted_at IS NULL".into());
+    }
+    match &q.view {
+        View::Unfiled => wheres
+            .push("NOT EXISTS (SELECT 1 FROM item_folders f WHERE f.item_id = items.id)".into()),
+        View::Untagged => {
+            wheres.push("NOT EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id)".into())
+        }
+        View::Folder { id } => {
+            wheres.push(
+                "EXISTS (SELECT 1 FROM item_folders f WHERE f.item_id = items.id AND f.folder_id = ?)"
+                    .into(),
+            );
+            args.push(Box::new(id.clone()));
+        }
+        View::All | View::Trash => {}
+    }
+
+    for word in q.search.split_whitespace() {
+        wheres.push(
+            "(name LIKE ? ESCAPE '\\' OR note LIKE ? ESCAPE '\\' OR EXISTS (
+               SELECT 1 FROM item_tags it JOIN tags t ON t.id = it.tag_id
+               WHERE it.item_id = items.id AND t.name LIKE ? ESCAPE '\\'))"
+                .into(),
+        );
+        let pat = escape_like(word);
+        args.push(Box::new(pat.clone()));
+        args.push(Box::new(pat.clone()));
+        args.push(Box::new(pat));
+    }
+
+    for tag_id in &q.tag_ids {
+        wheres.push(
+            "EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id AND t.tag_id = ?)".into(),
+        );
+        args.push(Box::new(*tag_id));
+    }
+
+    let order_col = match q.sort {
+        SortKey::ImportedAt => "imported_at",
+        SortKey::Name => "name COLLATE NOCASE",
+        SortKey::Size => "size",
+    };
+    let dir = if q.desc { "DESC" } else { "ASC" };
+    let sql = format!(
+        "SELECT {ITEM_COLS} FROM items WHERE {} ORDER BY {order_col} {dir}, rowid {dir}",
+        wheres.join(" AND ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(args.iter().map(|b| b.as_ref())), row_to_item)?;
+    rows.collect()
+}
+
+pub fn get_items(conn: &Connection, ids: &[String]) -> DbResult<Vec<Item>> {
+    if ids.is_empty() {
+        return Ok(vec![]);
+    }
+    let sql = format!(
+        "SELECT {ITEM_COLS} FROM items WHERE id IN ({})",
+        placeholders(ids.len())
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(ids), row_to_item)?;
+    rows.collect()
+}
+
+/// hash -> item id, including trashed items.
+pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT hash, id FROM items")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
+pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
+    tx.execute(
+        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            it.id,
+            it.name,
+            it.file_name,
+            it.ext,
+            it.width,
+            it.height,
+            it.size,
+            it.hash,
+            it.thumb,
+            imported_at
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn set_note(conn: &Connection, id: &str, note: &str) -> DbResult<()> {
+    conn.execute("UPDATE items SET note = ?2 WHERE id = ?1", params![id, note])?;
+    Ok(())
+}
+
+pub fn rename_item(conn: &Connection, id: &str, name: &str) -> DbResult<()> {
+    conn.execute("UPDATE items SET name = ?2 WHERE id = ?1", params![id, name])?;
+    Ok(())
+}
+
+pub fn trash_items(conn: &Connection, ids: &[String]) -> DbResult<()> {
+    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(now_ms())];
+    args.extend(ids.iter().map(|s| Box::new(s.clone()) as Box<dyn ToSql>));
+    let sql = format!(
+        "UPDATE items SET deleted_at = ? WHERE deleted_at IS NULL AND id IN ({})",
+        placeholders(ids.len())
+    );
+    conn.execute(&sql, params_from_iter(args.iter().map(|b| b.as_ref())))?;
+    Ok(())
+}
+
+pub fn restore_items(conn: &Connection, ids: &[String]) -> DbResult<()> {
+    let sql = format!(
+        "UPDATE items SET deleted_at = NULL WHERE id IN ({})",
+        placeholders(ids.len())
+    );
+    conn.execute(&sql, params_from_iter(ids))?;
+    Ok(())
+}
+
+/// Deletes rows and returns them so the caller can remove the files.
+pub fn delete_items(conn: &Connection, ids: &[String]) -> DbResult<Vec<Item>> {
+    let items = get_items(conn, ids)?;
+    let sql = format!("DELETE FROM items WHERE id IN ({})", placeholders(ids.len()));
+    conn.execute(&sql, params_from_iter(ids))?;
+    Ok(items)
+}
+
+pub fn trashed_ids(conn: &Connection) -> DbResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT id FROM items WHERE deleted_at IS NOT NULL")?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    rows.collect()
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Counts {
+    pub all: i64,
+    pub unfiled: i64,
+    pub untagged: i64,
+    pub trash: i64,
+}
+
+pub fn counts(conn: &Connection) -> DbResult<Counts> {
+    conn.query_row(
+        "SELECT
+           SUM(deleted_at IS NULL),
+           SUM(deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM item_folders f WHERE f.item_id = items.id)),
+           SUM(deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id)),
+           SUM(deleted_at IS NOT NULL)
+         FROM items",
+        [],
+        |r| {
+            Ok(Counts {
+                all: r.get::<_, Option<i64>>(0)?.unwrap_or(0),
+                unfiled: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
+                untagged: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
+                trash: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+            })
+        },
+    )
+}
+
+// -------------------------------------------------------------- folders
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Folder {
+    pub id: String,
+    pub parent_id: Option<String>,
+    pub name: String,
+    pub count: i64,
+}
+
+pub fn list_folders(conn: &Connection) -> DbResult<Vec<Folder>> {
+    let mut stmt = conn.prepare(
+        "SELECT f.id, f.parent_id, f.name,
+           (SELECT COUNT(*) FROM item_folders x JOIN items i ON i.id = x.item_id
+            WHERE x.folder_id = f.id AND i.deleted_at IS NULL)
+         FROM folders f ORDER BY f.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Folder {
+            id: r.get(0)?,
+            parent_id: r.get(1)?,
+            name: r.get(2)?,
+            count: r.get(3)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn create_folder(conn: &Connection, name: &str, parent_id: Option<&str>) -> DbResult<String> {
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    conn.execute(
+        "INSERT INTO folders (id, parent_id, name) VALUES (?1, ?2, ?3)",
+        params![id, parent_id, name],
+    )?;
+    Ok(id)
+}
+
+pub fn rename_folder(conn: &Connection, id: &str, name: &str) -> DbResult<()> {
+    conn.execute("UPDATE folders SET name = ?2 WHERE id = ?1", params![id, name])?;
+    Ok(())
+}
+
+/// Deletes the folder and its subfolders. Items themselves are kept.
+pub fn delete_folder(conn: &Connection, id: &str) -> DbResult<()> {
+    conn.execute("DELETE FROM folders WHERE id = ?1", params![id])?;
+    Ok(())
+}
+
+/// Re-parents a folder. Returns false (and does nothing) if that would create a cycle.
+pub fn move_folder(conn: &Connection, id: &str, new_parent: Option<&str>) -> DbResult<bool> {
+    let mut cur = new_parent.map(str::to_owned);
+    while let Some(c) = cur {
+        if c == id {
+            return Ok(false);
+        }
+        cur = conn
+            .query_row("SELECT parent_id FROM folders WHERE id = ?1", [&c], |r| {
+                r.get::<_, Option<String>>(0)
+            })
+            .optional()?
+            .flatten();
+    }
+    conn.execute(
+        "UPDATE folders SET parent_id = ?2 WHERE id = ?1",
+        params![id, new_parent],
+    )?;
+    Ok(true)
+}
+
+pub fn add_to_folder(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
+    let mut stmt =
+        conn.prepare("INSERT OR IGNORE INTO item_folders (item_id, folder_id) VALUES (?1, ?2)")?;
+    for id in item_ids {
+        stmt.execute(params![id, folder_id])?;
+    }
+    Ok(())
+}
+
+pub fn remove_from_folder(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
+    let mut stmt = conn.prepare("DELETE FROM item_folders WHERE item_id = ?1 AND folder_id = ?2")?;
+    for id in item_ids {
+        stmt.execute(params![id, folder_id])?;
+    }
+    Ok(())
+}
+
+// ----------------------------------------------------------------- tags
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Tag {
+    pub id: i64,
+    pub name: String,
+    pub count: i64,
+}
+
+pub fn list_tags(conn: &Connection) -> DbResult<Vec<Tag>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.name,
+           (SELECT COUNT(*) FROM item_tags x JOIN items i ON i.id = x.item_id
+            WHERE x.tag_id = t.id AND i.deleted_at IS NULL)
+         FROM tags t ORDER BY t.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(Tag {
+            id: r.get(0)?,
+            name: r.get(1)?,
+            count: r.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+fn ensure_tag(conn: &Connection, name: &str) -> DbResult<i64> {
+    conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [name])?;
+    conn.query_row("SELECT id FROM tags WHERE name = ?1", [name], |r| r.get(0))
+}
+
+pub fn add_tags(conn: &mut Connection, item_ids: &[String], names: &[String]) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+        let tag_id = ensure_tag(&tx, name)?;
+        let mut stmt =
+            tx.prepare_cached("INSERT OR IGNORE INTO item_tags (item_id, tag_id) VALUES (?1, ?2)")?;
+        for id in item_ids {
+            stmt.execute(params![id, tag_id])?;
+        }
+    }
+    tx.commit()
+}
+
+pub fn remove_tag(conn: &Connection, item_ids: &[String], tag_id: i64) -> DbResult<()> {
+    let mut stmt = conn.prepare("DELETE FROM item_tags WHERE item_id = ?1 AND tag_id = ?2")?;
+    for id in item_ids {
+        stmt.execute(params![id, tag_id])?;
+    }
+    Ok(())
+}
+
+/// Renames a tag. If another tag already has that name, the two are merged.
+pub fn rename_tag(conn: &mut Connection, id: i64, name: &str) -> DbResult<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.transaction()?;
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM tags WHERE name = ?1 AND id != ?2",
+            params![name, id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    match existing {
+        Some(target) => {
+            tx.execute(
+                "INSERT OR IGNORE INTO item_tags (item_id, tag_id)
+                 SELECT item_id, ?2 FROM item_tags WHERE tag_id = ?1",
+                params![id, target],
+            )?;
+            tx.execute("DELETE FROM tags WHERE id = ?1", [id])?;
+        }
+        None => {
+            tx.execute("UPDATE tags SET name = ?2 WHERE id = ?1", params![id, name])?;
+        }
+    }
+    tx.commit()
+}
+
+pub fn delete_tag(conn: &Connection, id: i64) -> DbResult<()> {
+    conn.execute("DELETE FROM tags WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+// ------------------------------------------------------------ selection
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FolderRef {
+    pub id: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionInfo {
+    /// Tags present on at least one selected item; `count` = how many of them.
+    pub tags: Vec<Tag>,
+    pub folders: Vec<FolderRef>,
+}
+
+pub fn selection_info(conn: &Connection, ids: &[String]) -> DbResult<SelectionInfo> {
+    if ids.is_empty() {
+        return Ok(SelectionInfo { tags: vec![], folders: vec![] });
+    }
+    let ph = placeholders(ids.len());
+    let mut stmt = conn.prepare(&format!(
+        "SELECT t.id, t.name, COUNT(*) FROM item_tags x JOIN tags t ON t.id = x.tag_id
+         WHERE x.item_id IN ({ph}) GROUP BY t.id ORDER BY t.name COLLATE NOCASE"
+    ))?;
+    let tags = stmt
+        .query_map(params_from_iter(ids), |r| {
+            Ok(Tag {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                count: r.get(2)?,
+            })
+        })?
+        .collect::<DbResult<Vec<_>>>()?;
+    let mut stmt = conn.prepare(&format!(
+        "SELECT folder_id, COUNT(*) FROM item_folders WHERE item_id IN ({ph}) GROUP BY folder_id"
+    ))?;
+    let folders = stmt
+        .query_map(params_from_iter(ids), |r| {
+            Ok(FolderRef {
+                id: r.get(0)?,
+                count: r.get(1)?,
+            })
+        })?
+        .collect::<DbResult<Vec<_>>>()?;
+    Ok(SelectionInfo { tags, folders })
+}
+
+// ---------------------------------------------------------------- tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mem() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        migrate(&conn).unwrap();
+        conn
+    }
+
+    fn add(conn: &mut Connection, id: &str, name: &str, at: i64) {
+        let tx = conn.transaction().unwrap();
+        insert_item(
+            &tx,
+            &NewItem {
+                id: id.into(),
+                name: name.into(),
+                file_name: name.into(),
+                ext: "png".into(),
+                width: 10,
+                height: 10,
+                size: at,
+                hash: format!("h-{id}"),
+                thumb: format!("{id}.jpg"),
+            },
+            at,
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    fn q(view: View) -> ItemQuery {
+        ItemQuery {
+            view,
+            search: String::new(),
+            tag_ids: vec![],
+            sort: SortKey::ImportedAt,
+            desc: false,
+        }
+    }
+
+    fn ids(items: Vec<Item>) -> Vec<String> {
+        items.into_iter().map(|i| i.id).collect()
+    }
+
+    fn s(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn migrate_is_idempotent() {
+        let conn = mem();
+        migrate(&conn).unwrap();
+        let v: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn views_and_counts() {
+        let mut conn = mem();
+        add(&mut conn, "a", "cat.png", 1);
+        add(&mut conn, "b", "dog.png", 2);
+        add(&mut conn, "c", "bird.png", 3);
+        let f = create_folder(&conn, "Animals", None).unwrap();
+        add_to_folder(&conn, &s(&["a"]), &f).unwrap();
+        add_tags(&mut conn, &s(&["b"]), &s(&["cute"])).unwrap();
+        trash_items(&conn, &s(&["c"])).unwrap();
+
+        assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a", "b"]));
+        assert_eq!(ids(query_items(&conn, &q(View::Unfiled)).unwrap()), s(&["b"]));
+        assert_eq!(ids(query_items(&conn, &q(View::Untagged)).unwrap()), s(&["a"]));
+        assert_eq!(ids(query_items(&conn, &q(View::Trash)).unwrap()), s(&["c"]));
+        assert_eq!(
+            ids(query_items(&conn, &q(View::Folder { id: f.clone() })).unwrap()),
+            s(&["a"])
+        );
+        assert_eq!(
+            counts(&conn).unwrap(),
+            Counts { all: 2, unfiled: 1, untagged: 1, trash: 1 }
+        );
+
+        restore_items(&conn, &s(&["c"])).unwrap();
+        assert_eq!(counts(&conn).unwrap().trash, 0);
+        assert_eq!(counts(&conn).unwrap().all, 3);
+    }
+
+    #[test]
+    fn search_tags_and_sort() {
+        let mut conn = mem();
+        add(&mut conn, "a", "Cat_1.png", 1);
+        add(&mut conn, "b", "dog.png", 2);
+        add(&mut conn, "c", "cat%2.png", 3);
+        add_tags(&mut conn, &s(&["b", "c"]), &s(&["pet", "Animal"])).unwrap();
+        set_note(&conn, "b", "fluffy friend").unwrap();
+
+        let mut query = q(View::All);
+        query.search = "cat".into();
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["a", "c"]));
+        query.search = "%".into(); // LIKE wildcard must be escaped
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["c"]));
+        query.search = "fluffy".into(); // note
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b"]));
+        query.search = "anim".into(); // tag name
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "c"]));
+
+        let tags = list_tags(&conn).unwrap();
+        assert_eq!(tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Animal", "pet"]);
+        let pet = tags.iter().find(|t| t.name == "pet").unwrap().id;
+        remove_tag(&conn, &s(&["c"]), pet).unwrap();
+        let mut query = q(View::All);
+        query.tag_ids = vec![pet];
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b"]));
+
+        let mut query = q(View::All);
+        query.sort = SortKey::Name;
+        query.desc = true;
+        assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "a", "c"])); // "_" > "%"
+    }
+
+    #[test]
+    fn tag_rename_merges() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.png", 2);
+        add_tags(&mut conn, &s(&["a"]), &s(&["red"])).unwrap();
+        add_tags(&mut conn, &s(&["a", "b"]), &s(&["Rouge"])).unwrap();
+        let red = list_tags(&conn).unwrap().into_iter().find(|t| t.name == "red").unwrap();
+        rename_tag(&mut conn, red.id, "rouge").unwrap(); // case-insensitive clash
+        let tags = list_tags(&conn).unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0].count, 2);
+    }
+
+    #[test]
+    fn folder_tree_ops() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        let p = create_folder(&conn, "Parent", None).unwrap();
+        let c = create_folder(&conn, "Child", Some(&p)).unwrap();
+        add_to_folder(&conn, &s(&["a"]), &c).unwrap();
+
+        assert!(!move_folder(&conn, &p, Some(&c)).unwrap(), "cycle must be rejected");
+        assert!(!move_folder(&conn, &p, Some(&p)).unwrap());
+        assert!(move_folder(&conn, &c, None).unwrap());
+        assert!(move_folder(&conn, &c, Some(&p)).unwrap());
+
+        let info = selection_info(&conn, &s(&["a"])).unwrap();
+        assert_eq!(info.folders, vec![FolderRef { id: c.clone(), count: 1 }]);
+
+        delete_folder(&conn, &p).unwrap(); // cascades to child
+        assert!(list_folders(&conn).unwrap().is_empty());
+        assert_eq!(counts(&conn).unwrap().unfiled, 1);
+        assert_eq!(counts(&conn).unwrap().all, 1);
+    }
+
+    #[test]
+    fn delete_cascades_links() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add_tags(&mut conn, &s(&["a"]), &s(&["x"])).unwrap();
+        trash_items(&conn, &s(&["a"])).unwrap();
+        assert_eq!(trashed_ids(&conn).unwrap(), s(&["a"]));
+        let removed = delete_items(&conn, &s(&["a"])).unwrap();
+        assert_eq!(removed.len(), 1);
+        let links: i64 = conn.query_row("SELECT COUNT(*) FROM item_tags", [], |r| r.get(0)).unwrap();
+        assert_eq!(links, 0);
+        assert!(hash_index(&conn).unwrap().is_empty());
+    }
+}
