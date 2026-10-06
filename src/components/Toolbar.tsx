@@ -9,6 +9,7 @@ import {
   PanelRightOpen,
   Search,
   Star,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -61,8 +62,6 @@ export function Toolbar() {
   const toggleTagFilter = useStore((s) => s.toggleTagFilter);
   const count = useStore((s) => s.items.length);
   const selectedCount = useStore((s) => s.selected.size);
-  const inspectorOpen = useStore((s) => s.inspectorOpen);
-  const toggleInspector = useStore((s) => s.toggleInspector);
   const view = useStore((s) => s.view);
   const folders = useStore((s) => s.folders);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
@@ -85,110 +84,112 @@ export function Toolbar() {
   }, [text, search, setSearch]);
 
   return (
-    <header className="flex flex-col gap-2 border-b border-line bg-panel px-4 py-2">
-      <div className="flex items-center gap-3">
-        <button
-          title={`サイドバーを${sidebarOpen ? "隠す" : "表示"}（Tab / ⌘⌥1）`}
-          onClick={toggleSidebar}
-          className={`-ml-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-white/5 ${
-            sidebarOpen ? "text-dim" : "text-accent"
-          }`}
-        >
-          {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
-        </button>
-        <h1 className="flex min-w-36 flex-1 items-baseline gap-2 text-base font-semibold">
-          <span className="truncate">{viewTitle(view, folders)}</span>
-          <span className="shrink-0 text-xs font-normal text-dim tabular-nums">
-            {selectedCount > 0 ? (
-              <span className="text-fg">
-                {selectedCount} / {count} 件選択
-              </span>
-            ) : (
-              `${count} 件`
-            )}
-          </span>
-        </h1>
-        <label
-          title={SEARCH_HELP}
-          className="flex h-8 w-60 min-w-24 shrink items-center gap-2 rounded-md border border-line bg-bg px-2 focus-within:border-accent"
-        >
-          <Search size={14} className="text-dim" />
-          <input
-            id="search"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && (setText(""), e.currentTarget.blur())}
-            placeholder="検索（-除外 / OR）"
-            className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-dim"
-          />
-          {text && (
-            <button onClick={() => setText("")} className="text-dim hover:text-fg">
-              <X size={14} />
-            </button>
-          )}
-        </label>
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey, desc)}
-          className="h-8 shrink-0 rounded-md border border-line bg-bg px-2 outline-none"
-        >
-          {SORTS.map((s) => (
-            <option key={s.key} value={s.key} disabled={s.key === "manual" && !isFolder}>
-              {s.key === "manual" && !isFolder ? "手動（フォルダ表示時のみ）" : s.label}
-            </option>
-          ))}
-        </select>
-        <button
-          title={manual ? "手動の並びは昇順のみ" : desc ? "降順" : "昇順"}
-          disabled={manual}
-          onClick={() => setSort(sort, !desc)}
-          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line enabled:hover:bg-white/5 disabled:opacity-40"
-        >
-          {desc ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
-        </button>
-        <input
-          type="range"
-          min={80}
-          max={360}
-          step={10}
-          value={thumbSize}
-          onChange={(e) => setThumbSize(Number(e.target.value))}
-          title="サムネイルサイズ（⌘+ / ⌘-）"
-          className="w-20 shrink-0 accent-accent"
-        />
-        {isTrash ? (
+    <header className="@container flex flex-col gap-2 border-b border-line bg-panel px-4 py-2">
+      {/* Collapses progressively by toolbar width (container queries) so nothing
+          overflows into the inspector: label → slider → two rows. */}
+      <div className="flex items-center gap-x-3 gap-y-2 @max-xl:flex-col @max-xl:items-stretch">
+        <div className="flex min-w-40 flex-1 items-center gap-2">
           <button
-            onClick={emptyTrash}
-            className="h-8 shrink-0 rounded-md border border-danger/60 px-3 whitespace-nowrap text-danger hover:bg-danger/10"
+            title={`サイドバーを${sidebarOpen ? "隠す" : "表示"}（Tab / ⌘⌥1）`}
+            onClick={toggleSidebar}
+            className={`-ml-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-white/5 ${
+              sidebarOpen ? "text-dim" : "text-accent"
+            }`}
           >
-            ゴミ箱を空にする
+            {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </button>
-        ) : (
-          <>
+          <h1 className="flex min-w-0 flex-1 items-baseline gap-2 text-base font-semibold">
+            <span className="truncate">{viewTitle(view, folders)}</span>
+            <span className="shrink-0 text-xs font-normal text-dim tabular-nums">
+              {selectedCount > 0 ? (
+                <span className="text-fg">
+                  {selectedCount} / {count} 件選択
+                </span>
+              ) : (
+                `${count} 件`
+              )}
+            </span>
+          </h1>
+          <InspectorToggle className="hidden @max-xl:flex" />
+        </div>
+        <div className="flex min-w-0 items-center gap-2">
+          <label
+            title={SEARCH_HELP}
+            className="flex h-8 w-60 min-w-28 shrink items-center gap-2 rounded-md border border-line bg-bg px-2 focus-within:border-accent @max-xl:w-auto @max-xl:min-w-0 @max-xl:flex-1"
+          >
+            <Search size={14} className="shrink-0 text-dim" />
+            <input
+              id="search"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onKeyDown={(e) => e.key === "Escape" && (setText(""), e.currentTarget.blur())}
+              placeholder="検索（-除外 / OR）"
+              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-dim"
+            />
+            {text && (
+              <button onClick={() => setText("")} className="text-dim hover:text-fg">
+                <X size={14} />
+              </button>
+            )}
+          </label>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey, desc)}
+            className="h-8 w-28 shrink-0 truncate rounded-md border border-line bg-bg px-2 outline-none"
+          >
+            {SORTS.map((s) => (
+              <option key={s.key} value={s.key} disabled={s.key === "manual" && !isFolder}>
+                {s.key === "manual" && !isFolder ? "手動（フォルダ表示時のみ）" : s.label}
+              </option>
+            ))}
+          </select>
+          <button
+            title={manual ? "手動の並びは昇順のみ" : desc ? "降順" : "昇順"}
+            disabled={manual}
+            onClick={() => setSort(sort, !desc)}
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line enabled:hover:bg-white/5 disabled:opacity-40"
+          >
+            {desc ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
+          <input
+            type="range"
+            min={80}
+            max={360}
+            step={10}
+            value={thumbSize}
+            onChange={(e) => setThumbSize(Number(e.target.value))}
+            title="サムネイルサイズ（⌘+ / ⌘-）"
+            className="w-20 shrink-0 accent-accent @max-2xl:hidden"
+          />
+          {isTrash ? (
             <button
-              title="フォルダから追加"
-              onClick={importFolderDialog}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line hover:bg-white/5"
+              title="ゴミ箱を空にする"
+              onClick={emptyTrash}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-danger/60 px-3 whitespace-nowrap text-danger hover:bg-danger/10 @max-3xl:px-2"
             >
-              <FolderInput size={15} />
+              <Trash2 size={15} className="hidden @max-3xl:block" />
+              <span className="@max-3xl:hidden">ゴミ箱を空にする</span>
             </button>
-            <button
-              onClick={importFilesDialog}
-              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 whitespace-nowrap font-medium text-white hover:brightness-110"
-            >
-              <ImagePlus size={15} /> 追加
-            </button>
-          </>
-        )}
-        <button
-          title={`詳細パネルを${inspectorOpen ? "閉じる" : "開く"}（⌘/Ctrl+I）`}
-          onClick={toggleInspector}
-          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md border hover:bg-white/5 ${
-            inspectorOpen ? "border-line" : "border-accent/60 text-accent"
-          }`}
-        >
-          {inspectorOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
-        </button>
+          ) : (
+            <>
+              <button
+                title="フォルダから追加"
+                onClick={importFolderDialog}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line hover:bg-white/5"
+              >
+                <FolderInput size={15} />
+              </button>
+              <button
+                title="画像を追加"
+                onClick={importFilesDialog}
+                className="flex h-8 shrink-0 items-center gap-1.5 rounded-md bg-accent px-3 whitespace-nowrap font-medium text-white hover:brightness-110 @max-3xl:px-2"
+              >
+                <ImagePlus size={15} /> <span className="@max-3xl:hidden">追加</span>
+              </button>
+            </>
+          )}
+          <InspectorToggle className="flex @max-xl:hidden" />
+        </div>
       </div>
       <div className="flex min-h-6 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
         {isFolder && (
@@ -245,5 +246,22 @@ export function Toolbar() {
         )}
       </div>
     </header>
+  );
+}
+
+/** Rendered twice (end of the row, or top-right when the toolbar is stacked). */
+function InspectorToggle({ className }: { className: string }) {
+  const inspectorOpen = useStore((s) => s.inspectorOpen);
+  const toggleInspector = useStore((s) => s.toggleInspector);
+  return (
+    <button
+      title={`詳細パネルを${inspectorOpen ? "閉じる" : "開く"}（⌘/Ctrl+I）`}
+      onClick={toggleInspector}
+      className={`h-8 w-8 shrink-0 items-center justify-center rounded-md border hover:bg-white/5 ${className} ${
+        inspectorOpen ? "border-line" : "border-accent/60 text-accent"
+      }`}
+    >
+      {inspectorOpen ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}
+    </button>
   );
 }
