@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
+  clearDismissedDuplicates,
   emptyTrash,
   importFilesDialog,
   importFolderDialog,
@@ -101,6 +102,7 @@ export function Toolbar() {
   const manual = sort === "manual";
   const groups = useMemo(() => (isSimilar ? similarGroups(items) : []), [isSimilar, items]);
   const keepPick = useStore((s) => s.keepPick);
+  const dismissedGroups = useStore((s) => s.dismissedGroups);
   const sortLabel = SORTS.find((s) => s.key === sort)?.label ?? "";
 
   // Debounce typing so each keystroke doesn't hit the DB.
@@ -308,6 +310,18 @@ export function Toolbar() {
           <span className="text-dim">
             {groups.length} グループ・重複 {count - groups.length} 枚。画像の「残す」で残す1枚を選べます（初期値は解像度が最も高い画像）
           </span>
+        )}
+        {isSimilar && dismissedGroups > 0 && (
+          <>
+            <span className="text-dim">無視した候補: {dismissedGroups} グループ</span>
+            <button
+              onClick={clearDismissedDuplicates}
+              title="「重複ではない」にした候補をすべて元に戻します"
+              className="shrink-0 rounded px-1.5 py-0.5 text-accent hover:bg-accent/15"
+            >
+              すべて解除
+            </button>
+          </>
         )}
         {manual && isFolder && !showSubfolders && (
           <span className="text-dim">画像をドラッグして並べ替えできます</span>

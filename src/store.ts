@@ -91,6 +91,8 @@ interface State {
   similarLevel: SimilarLevel;
   /** Similar view: copies the user chose to keep (at most one per group). */
   keepPick: Set<string>;
+  /** Similar view: how many groups the user dismissed as "not duplicates" (not persisted). */
+  dismissedGroups: number;
   /** Duplicate tidy-up waiting for confirmation. */
   review: DuplicateReview | null;
 
@@ -264,6 +266,7 @@ export const useStore = create<State>((set, get) => ({
   picker: null,
   similarLevel: (["strict", "standard", "loose"] as const).find((l) => l === load("similarLevel")) ?? "standard",
   keepPick: new Set(),
+  dismissedGroups: 0,
   review: null,
 
   items: [],
@@ -434,6 +437,7 @@ export const useStore = create<State>((set, get) => ({
     const seq = ++refreshSeq;
     const { view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating, filter, similarLevel } = get();
     try {
+      let dismissedGroups: number | null = null;
       if (view.kind === "similar") {
         set({ analyzing: true });
         try {
@@ -441,6 +445,7 @@ export const useStore = create<State>((set, get) => ({
         } finally {
           set({ analyzing: false });
         }
+        dismissedGroups = await api.countDismissedDuplicates();
       }
       const [items, folders, tags, counts, smartFolders, exts] = await Promise.all([
         api.queryItems({
@@ -489,6 +494,7 @@ export const useStore = create<State>((set, get) => ({
         counts,
         selected,
         rev: get().rev + 1,
+        ...(dismissedGroups !== null ? { dismissedGroups } : {}),
         recentFolders: get().recentFolders.filter((f) => folderIds.has(f)),
         recentTags,
         viewer: get().viewer !== null && items.length === 0 ? null : get().viewer,

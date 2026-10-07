@@ -185,6 +185,33 @@ export async function confirmDuplicates() {
   await st().refresh();
 }
 
+/** Marks a group as "not duplicates" so it stops being proposed. */
+export async function dismissDuplicates(ids: string[]) {
+  try {
+    await api.dismissDuplicates(ids);
+    const gone = new Set(ids);
+    useStore.setState({ keepPick: new Set([...st().keepPick].filter((x) => !gone.has(x))) });
+    st().toast(`${ids.length} 枚のグループを重複ではないとしました`, false, {
+      label: "元に戻す",
+      onClick: () => st().run(() => api.undismissDuplicates(ids)),
+    });
+  } catch (e) {
+    st().toast(String(e), true);
+  }
+  await st().refresh();
+}
+
+/** Brings back every group dismissed as "not duplicates". */
+export async function clearDismissedDuplicates() {
+  try {
+    await api.clearDismissedDuplicates();
+    st().toast("無視した候補をすべて解除しました");
+  } catch (e) {
+    st().toast(String(e), true);
+  }
+  await st().refresh();
+}
+
 export async function emptyTrash() {
   const n = st().counts.trash;
   if (!n) return;
