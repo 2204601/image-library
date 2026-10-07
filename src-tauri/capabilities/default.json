@@ -7,6 +7,8 @@
     "core:default",
     "opener:default",
     "dialog:default",
-    "drag:default"
+    "drag:default",
+    "updater:default",
+    "process:default"
   ]
 }

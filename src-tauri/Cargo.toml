@@ -34,6 +34,8 @@ clipboard-rs = "0.3.5"
 tauri-plugin-drag = "2.1.1"
 resvg = "0.48"
 tempfile = "3.27.0"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

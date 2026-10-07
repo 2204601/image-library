@@ -85,11 +85,17 @@ MyPictures.library/
 
 ## インストール
 
-[Releases](https://github.com/2204601/image-library/releases) から入手する。署名（Apple Developer ID / Windows コード署名）なしのビルドなので、初回だけ警告が出る。
+[Releases](https://github.com/2204601/image-library/releases) から入手する。署名（Apple Developer ID / Windows コード署名）なしのビルドなので、**初回インストール時だけ**警告が出る。
 
 - **macOS（Apple Silicon 専用）**：`.dmg` を開いて「アプリケーション」へコピー → 起動すると「開発元を検証できない」と出るので「完了」→ **システム設定 › プライバシーとセキュリティ** の下にある「このまま開く」を押す。
   ターミナルで `xattr -dr com.apple.quarantine "/Applications/Image Library.app"` を実行しても良い。
 - **Windows**：`-setup.exe` を実行 → SmartScreen が出たら「詳細情報」→「実行」。
+
+### アップデート
+
+2 回目以降はアプリ内で更新する。起動から数秒後に新しいバージョンを確認し、あればダイアログで知らせる（「更新して再起動」で適用）。手動で確認するにはサイドバー上部のライブラリ名 →「アップデートを確認…」。
+
+アプリ自身が書き出したファイルには macOS の quarantine 属性が付かないので、この経路で更新すると Gatekeeper / SmartScreen の警告は出ない。更新ファイルは Tauri Updater の鍵（minisign）で署名されていて、アプリ側の公開鍵と一致しないものは適用されない。
 
 ## 開発
 
@@ -131,6 +137,21 @@ src-tauri/examples/seed.rs  テストデータ生成
 
 アプリ内のドラッグ&ドロップは HTML5 DnD ではなく pointer イベントで実装している（Windows では Tauri のファイルドロップ受付と HTML5 DnD が両立しないため）。
 
-### Windows 版のビルド
+### リリース
 
 `v*` タグを push すると GitHub Actions で macOS（Apple Silicon 専用）と Windows のインストーラがビルドされ、そのタグのリリースが下書きで作られてインストーラが添付される（内容を確認して Publish）。手動実行（workflow_dispatch）の場合は Actions の Artifacts にだけ出る。
+
+手順：`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml` のバージョンを上げる → `chore: vX.Y.Z` でコミット → `git tag vX.Y.Z && git push --tags` → ビルド完了後に下書きリリースを **Publish**。
+
+アプリ内アップデートは `releases/latest/download/latest.json` を見るので、**Publish するまで配信されない**（下書きのうちは旧バージョンのまま）。リリースには次が添付される。
+
+- `Image Library_X.Y.Z_aarch64.dmg` / `-setup.exe`：初回インストール用
+- `Image Library.app.tar.gz` と `.sig`、`-setup.exe` の `.sig`、`latest.json`：アプリ内アップデート用（tauri-action が生成）
+
+更新ファイルの署名鍵は GitHub Actions の Secrets に置く（`TAURI_SIGNING_PRIVATE_KEY`：秘密鍵ファイルの中身、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：パスワード、未設定なら空）。対応する公開鍵は `tauri.conf.json` の `plugins.updater.pubkey`。**秘密鍵を失うと配布済みのアプリに更新を届けられなくなる**ので、必ずバックアップを取る。鍵の作り直しは `npx tauri signer generate -w ~/.tauri/image-library.key`。
+
+ローカルで配布用ビルドをするときも署名鍵が要る（`createUpdaterArtifacts` が有効なため）。
+
+```bash
+TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/image-library.key)" npm run tauri build
+```

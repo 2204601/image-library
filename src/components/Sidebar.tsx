@@ -30,6 +30,7 @@ import {
   sortFoldersByName,
 } from "../lib/actions";
 import { api, type Folder, type View } from "../lib/api";
+import { appVersion, checkForUpdate } from "../lib/update";
 import { activeConditions, useStore } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
@@ -529,6 +530,8 @@ export function Sidebar() {
           showMenu(e, [
             { label: "別のライブラリを開く…", onClick: openLibraryDialog },
             { label: "新しいライブラリを作成…", onClick: createLibraryDialog },
+            { separator: true },
+            { label: "アップデートを確認…", hint: appVersion(), onClick: () => checkForUpdate(true) },
           ])
         }
       >
