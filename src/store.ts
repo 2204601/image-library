@@ -131,6 +131,8 @@ interface State {
   /** Sidebar row that just received a drop; `n` restarts the animation. */
   flash: { target: string; n: number } | null;
   importing: { done: number; total: number } | null;
+  /** Update download in progress (bytes; total is null when the server did not say). */
+  updating: { done: number; total: number | null } | null;
   /** Hashing older images before the similar view can be shown. */
   analyzing: boolean;
   toasts: Toast[];
@@ -182,6 +184,7 @@ interface State {
   setFileDrag: (on: boolean) => void;
   flashTarget: (target: string) => void;
   setImporting: (p: State["importing"]) => void;
+  setUpdating: (p: State["updating"]) => void;
   toast: (message: string, error?: boolean, action?: ToastAction) => void;
   dismissToast: (id: number) => void;
   /** Runs a mutation, reports errors, then refreshes. */
@@ -318,6 +321,7 @@ export const useStore = create<State>((set, get) => ({
   dropTarget: null,
   flash: null,
   importing: null,
+  updating: null,
   analyzing: false,
   toasts: [],
 
@@ -609,6 +613,7 @@ export const useStore = create<State>((set, get) => ({
     setTimeout(() => get().flash?.n === n && set({ flash: null }), 900);
   },
   setImporting: (importing) => set({ importing }),
+  setUpdating: (updating) => set({ updating }),
   toast: (message, error, action) => {
     const id = ++toastSeq;
     set({ toasts: [...get().toasts, { id, message, error, action }] });

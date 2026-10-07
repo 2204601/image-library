@@ -29,7 +29,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "nsis"],
+    "targets": ["app", "dmg", "nsis"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -39,6 +39,14 @@
     ],
     "macOS": {
       "signingIdentity": "-"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdDOEYwRjQ0RTJBQTU2MDQKUldRRVZxcmlSQStQZkttbkN4UmdGRkZpRUN5ZEI0OWxBUEtCcnJHL3gvQ2ZrelZ6T2VEK2hVMFUK",
+      "endpoints": ["https://github.com/2204601/image-library/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
     }
   }
 }

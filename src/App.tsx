@@ -15,6 +15,7 @@ import { Viewer } from "./components/Viewer";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
 import { api } from "./lib/api";
+import { loadAppVersion, scheduleUpdateCheck } from "./lib/update";
 import { useStore } from "./store";
 
 /** Sidebar folder under a native file drag (position is in physical pixels). */
@@ -40,6 +41,8 @@ export default function App() {
       .then((lib) => lib && useStore.getState().setLibrary(lib))
       .catch((e) => useStore.getState().toast(String(e), true))
       .finally(() => setReady(true));
+    loadAppVersion();
+    return scheduleUpdateCheck();
   }, []);
 
   // Files dropped from Finder / Explorer.
