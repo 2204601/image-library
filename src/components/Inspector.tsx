@@ -1,6 +1,6 @@
 import { colorHex } from "../lib/colors";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Folder as FolderIcon, Plus, Star, X } from "lucide-react";
+import { Folder as FolderIcon, Heart, Pin, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   copySelection,
@@ -8,9 +8,12 @@ import {
   exportSelection,
   openSelection,
   setRating,
+  toggleFavorite,
+  togglePinned,
 } from "../lib/actions";
-import { api, formatBytes, type Folder, type SelectionInfo, type Tag } from "../lib/api";
+import { api, formatBytes, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
 import { useStore } from "../store";
+import { RatingStars } from "./RatingStars";
 
 function folderPath(folders: Folder[], id: string): string {
   const byId = new Map(folders.map((f) => [f.id, f]));
@@ -199,29 +202,64 @@ function SavedText({
   );
 }
 
-/** Click a star to rate; clicking the current rating clears it. */
-function RatingStars({ value, onChange }: { value: number | null; onChange: (n: number) => void }) {
-  const [hover, setHover] = useState(0);
-  const shown = hover || value || 0;
+/** Favourite / pin toggle for the selection; `state` null = mixed. */
+export function FlagButton({
+  state,
+  icon,
+  label,
+  hint,
+  onClick,
+  activeClass,
+}: {
+  state: boolean | null;
+  icon: React.ReactNode;
+  label: string;
+  hint: string;
+  onClick: () => void;
+  activeClass: string;
+}) {
   return (
-    <div className="flex items-center gap-0.5" onMouseLeave={() => setHover(0)}>
-      {[1, 2, 3, 4, 5].map((n) => (
-        <button
-          key={n}
-          title={`★${n}（キー ${n}）`}
-          onMouseEnter={() => setHover(n)}
-          onClick={() => onChange(n === value ? 0 : n)}
-          className="p-0.5 transition-transform hover:scale-125"
-        >
-          <Star
-            size={16}
-            strokeWidth={1.5}
-            className={n <= shown ? "text-amber-400" : "text-dim/50"}
-            fill={n <= shown ? "currentColor" : "none"}
-          />
-        </button>
-      ))}
-      {value === null && <span className="ml-1 text-[11px] text-dim">（混在）</span>}
+    <button
+      onClick={onClick}
+      title={hint}
+      className={`flex h-8 flex-1 items-center justify-center gap-1.5 rounded-md border text-xs ${
+        state ? activeClass : state === null ? "border-line text-dim hover:bg-white/5" : "border-line hover:bg-white/5"
+      }`}
+    >
+      {icon}
+      {label}
+      {state === null && <span className="text-[10px] text-dim">（混在）</span>}
+    </button>
+  );
+}
+
+/** Favourite and pin buttons for `ids` (state read from the loaded items). */
+export function FlagButtons({ ids, items }: { ids: string[]; items: Item[] }) {
+  const sel = items.filter((i) => ids.includes(i.id));
+  const state = (flag: (i: Item) => boolean): boolean | null => {
+    const n = sel.filter(flag).length;
+    return n === 0 ? false : n === sel.length ? true : null;
+  };
+  const fav = state((i) => i.favorite);
+  const pin = state((i) => i.pinnedAt !== null);
+  return (
+    <div className="flex gap-2">
+      <FlagButton
+        state={fav}
+        icon={<Heart size={14} fill={fav ? "currentColor" : "none"} />}
+        label={fav ? "お気に入り" : "お気に入りに追加"}
+        hint="お気に入り（キー F）"
+        activeClass="border-pink-500/60 bg-pink-500/15 text-pink-400"
+        onClick={() => toggleFavorite(ids)}
+      />
+      <FlagButton
+        state={pin}
+        icon={<Pin size={14} fill={pin ? "currentColor" : "none"} />}
+        label={pin ? "ピン留め中" : "ピン留め"}
+        hint="一覧の先頭に固定（キー P）"
+        activeClass="border-accent/60 bg-accent/15 text-accent"
+        onClick={() => togglePinned(ids)}
+      />
     </div>
   );
 }
@@ -325,6 +363,9 @@ export function Inspector() {
       {!isTrash && (
         <Field label="評価">
           <RatingStars value={rating} onChange={(n) => setRating(ids, n)} />
+          <div className="mt-2.5">
+            <FlagButtons ids={ids} items={items} />
+          </div>
         </Field>
       )}
 

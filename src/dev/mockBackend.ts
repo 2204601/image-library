@@ -4,7 +4,9 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { Folder, Item, ItemQuery, Rule, SimilarLevel, Tag } from "../lib/api";
 
-type MockItem = Omit<Item, "filePath" | "thumbPath" | "displayPath" | "preview"> & { hue: number };
+type MockItem = Omit<Item, "filePath" | "thumbPath" | "displayPath" | "preview" | "folderId" | "tagIds"> & {
+  hue: number;
+};
 
 const items: MockItem[] = [];
 const folders: Omit<Folder, "count">[] = [];
@@ -45,9 +47,11 @@ function seed() {
       size: 40_000 + i * 997 * (i % 9) * 30,
       thumb: "",
       note: "",
-      rating: i % 7 === 0 ? 3 : i % 11 === 0 ? 5 : 0,
+      rating: i % 7 === 0 ? 3 : i % 11 === 0 ? 5 : i % 5 === 0 ? 1 : 0,
       importedAt: Date.now() - (120 - i) * 60_000,
       deletedAt: null,
+      favorite: i % 13 === 0,
+      pinnedAt: i === 8 ? Date.now() - 1000 : i === 21 ? Date.now() : null,
       hue: (i * 47) % 360,
     });
   }
@@ -73,6 +77,8 @@ function seed() {
         height: Math.round(orig.height / (k + 1)),
         size: Math.round(orig.size / (k + 1)),
         rating: 0,
+        favorite: false,
+        pinnedAt: null,
         importedAt: orig.importedAt + k * 1000,
       });
     }
@@ -116,7 +122,9 @@ function svg(it: MockItem, scale: number) {
 
 const view = (it: MockItem): Item => {
   const filePath = svg(it, 1);
-  return { ...it, preview: null, filePath, displayPath: filePath, thumbPath: svg(it, 3) };
+  const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
+  const tagIds = tags.filter((t) => hasTag(it.id, t.id)).map((t) => t.id);
+  return { ...it, preview: null, folderId, tagIds, filePath, displayPath: filePath, thumbPath: svg(it, 3) };
 };
 const inFolder = (i: string, f: string) => itemFolders.has(`${i}|${f}`);
 const hasTag = (i: string, t: number) => itemTags.has(`${i}|${t}`);
@@ -206,6 +214,8 @@ function query(q: ItemQuery): Item[] {
   const v = q.view;
   if (v.kind === "unfiled") r = r.filter((i) => !folders.some((f) => inFolder(i.id, f.id)));
   if (v.kind === "untagged") r = r.filter((i) => !tags.some((t) => hasTag(i.id, t.id)));
+  if (v.kind === "favorites") r = r.filter((i) => i.favorite);
+  if (v.kind === "pinned") r = r.filter((i) => i.pinnedAt !== null);
   if (v.kind === "folder") {
     const ids = q.includeSubfolders ? descendants(v.id) : [v.id];
     r = r.filter((i) => ids.some((f) => inFolder(i.id, f)));
@@ -215,9 +225,11 @@ function query(q: ItemQuery): Item[] {
     const sf = smartFolders.find((f) => f.id === v.id);
     r = sf ? applyRule(r, sf.rule) : [];
   }
+  // Pinned items lead every list, latest pin first.
+  const pin = (a: MockItem, b: MockItem) => (b.pinnedAt ?? -Infinity) - (a.pinnedAt ?? -Infinity);
   if (q.sort === "manual" && v.kind === "folder") {
     const pos = (i: MockItem) => itemFolders.get(`${i.id}|${v.id}`) ?? Infinity;
-    return [...r].sort((a, b) => pos(a) - pos(b)).map(view);
+    return [...r].sort((a, b) => pin(a, b) || pos(a) - pos(b)).map(view);
   }
   const key = (i: MockItem): number | string =>
     q.sort === "name"
@@ -229,7 +241,7 @@ function query(q: ItemQuery): Item[] {
           : q.sort === "rating"
             ? i.rating
             : i.importedAt;
-  r = [...r].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * (q.desc ? -1 : 1));
+  r = [...r].sort((a, b) => pin(a, b) || (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0) * (q.desc ? -1 : 1));
   return (v.kind === "similar" ? similar(r, q.similarLevel ?? "standard") : r).map(view);
 }
 
@@ -253,6 +265,8 @@ function handle(cmd: string, a: any): unknown {
         unfiled: live().filter((i) => !folders.some((f) => inFolder(i.id, f.id))).length,
         untagged: live().filter((i) => !tags.some((t) => hasTag(i.id, t.id))).length,
         trash: items.length - live().length,
+        favorites: live().filter((i) => i.favorite).length,
+        pinned: live().filter((i) => i.pinnedAt !== null).length,
       };
     case "selection_info": {
       const ids: string[] = a.ids;
@@ -288,6 +302,12 @@ function handle(cmd: string, a: any): unknown {
       return;
     case "set_rating":
       items.filter((i) => a.ids.includes(i.id)).forEach((i) => (i.rating = Math.min(5, a.rating)));
+      return;
+    case "set_favorite":
+      items.filter((i) => a.ids.includes(i.id)).forEach((i) => (i.favorite = a.on));
+      return;
+    case "set_pinned":
+      items.filter((i) => a.ids.includes(i.id)).forEach((i) => (i.pinnedAt = a.on ? (i.pinnedAt ?? Date.now()) : null));
       return;
     case "copy_items":
     case "export_items":

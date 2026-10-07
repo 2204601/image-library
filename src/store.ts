@@ -16,6 +16,7 @@ import {
   type Tag,
   type View,
 } from "./lib/api";
+import { GROUP_BYS, groupItems, similarSections, type GroupBy, type Section } from "./lib/grouping";
 
 /** x/y = current pointer, sx/sy = where the drag started (for snap-back). */
 type DragPos = { x: number; y: number; sx: number; sy: number };
@@ -76,6 +77,11 @@ interface State {
   editingSmart: { id: string; name: string } | null;
   layout: Layout;
   showInfo: ShowInfo;
+  /** How the list is split into sections (ignored in the similar view). */
+  groupBy: GroupBy;
+  /** Viewer: details panel and the strip of thumbnails. */
+  viewerInfo: boolean;
+  viewerStrip: boolean;
   /** Tag names copied with ⌘⇧C. */
   tagClipboard: string[];
   /** Most recently used target folders (for Shift+D and the picker). */
@@ -96,7 +102,12 @@ interface State {
   /** Duplicate tidy-up waiting for confirmation. */
   review: DuplicateReview | null;
 
+  /** What the grid shows: the query result, regrouped by `groupBy`. */
   items: Item[];
+  /** The query result as returned (one entry per image). */
+  rawItems: Item[];
+  /** Bands of `items`: similar-view groups, or the `groupBy` sections. */
+  sections: Section[];
   folders: Folder[];
   smartFolders: SmartFolder[];
   /** File types in the library with counts (filter bar options). */
@@ -147,6 +158,9 @@ interface State {
   stopEditSmart: () => void;
   setLayout: (l: Layout) => void;
   setShowInfo: (patch: Partial<ShowInfo>) => void;
+  setGroupBy: (g: GroupBy) => void;
+  toggleViewerInfo: () => void;
+  toggleViewerStrip: () => void;
   setTagClipboard: (names: string[]) => void;
   rememberFolders: (ids: string[]) => void;
   rememberTags: (names: string[]) => void;
@@ -239,6 +253,18 @@ let refreshSeq = 0;
 let toastSeq = 0;
 let flashSeq = 0;
 
+/** The display list and its sections for the current view / grouping. */
+function arrange(s: {
+  view: View;
+  groupBy: GroupBy;
+  rawItems: Item[];
+  tags: Tag[];
+  folders: Folder[];
+}): { items: Item[]; sections: Section[] } {
+  if (s.view.kind === "similar") return { items: s.rawItems, sections: similarSections(s.rawItems) };
+  return groupItems(s.rawItems, s.groupBy, s.tags, s.folders);
+}
+
 export const useStore = create<State>((set, get) => ({
   library: null,
 
@@ -258,6 +284,9 @@ export const useStore = create<State>((set, get) => ({
   editingSmart: null,
   layout: (["justified", "grid", "waterfall", "list"] as const).find((l) => l === load("layout")) ?? "justified",
   showInfo: { name: true, dims: true, rating: true, meta: false, ...loadJson("showInfo") },
+  groupBy: GROUP_BYS.find((g) => g === load("groupBy")) ?? "none",
+  viewerInfo: load("viewerInfo") === "true",
+  viewerStrip: load("viewerStrip") !== "false",
   tagClipboard: [],
   recentFolders: [],
   recentTags: [],
@@ -270,11 +299,13 @@ export const useStore = create<State>((set, get) => ({
   review: null,
 
   items: [],
+  rawItems: [],
+  sections: [],
   folders: [],
   smartFolders: [],
   exts: [],
   tags: [],
-  counts: { all: 0, unfiled: 0, untagged: 0, trash: 0 },
+  counts: { all: 0, unfiled: 0, untagged: 0, trash: 0, favorites: 0, pinned: 0 },
   rev: 0,
 
   selected: new Set(),
@@ -309,7 +340,8 @@ export const useStore = create<State>((set, get) => ({
   },
   setView: (view) => {
     // The similar view may take a moment to prepare; don't leave the old list up.
-    const clear = view.kind === "similar" && get().view.kind !== "similar" ? { items: [] } : {};
+    const clear =
+      view.kind === "similar" && get().view.kind !== "similar" ? { items: [], rawItems: [], sections: [] } : {};
     // Conditions belong to the view they were set in: moving to another one
     // starts clean (re-selecting the open view keeps them).
     const moved = JSON.stringify(view) !== JSON.stringify(get().view);
@@ -406,6 +438,25 @@ export const useStore = create<State>((set, get) => ({
     set({ showInfo });
     persist("showInfo", JSON.stringify(showInfo));
   },
+  setGroupBy: (groupBy) => {
+    persist("groupBy", groupBy);
+    const s = get();
+    const { items, sections } = arrange({ ...s, groupBy });
+    // The viewer follows the image it was showing to its new place.
+    const shown = s.viewer !== null ? s.items[s.viewer]?.id : undefined;
+    const viewer = shown ? Math.max(0, items.findIndex((i) => i.id === shown)) : s.viewer;
+    set({ groupBy, items, sections, viewer });
+  },
+  toggleViewerInfo: () => {
+    const viewerInfo = !get().viewerInfo;
+    set({ viewerInfo });
+    persist("viewerInfo", String(viewerInfo));
+  },
+  toggleViewerStrip: () => {
+    const viewerStrip = !get().viewerStrip;
+    set({ viewerStrip });
+    persist("viewerStrip", String(viewerStrip));
+  },
   setTagClipboard: (tagClipboard) => set({ tagClipboard }),
   rememberFolders: (ids) => {
     const rest = get().recentFolders.filter((f) => !ids.includes(f));
@@ -447,7 +498,7 @@ export const useStore = create<State>((set, get) => ({
         }
         dismissedGroups = await api.countDismissedDuplicates();
       }
-      const [items, folders, tags, counts, smartFolders, exts] = await Promise.all([
+      const [rawItems, folders, tags, counts, smartFolders, exts] = await Promise.all([
         api.queryItems({
           view,
           search,
@@ -467,6 +518,7 @@ export const useStore = create<State>((set, get) => ({
         api.listExts(),
       ]);
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
+      const { items, sections } = arrange({ view, groupBy: get().groupBy, rawItems, tags, folders });
       const present = new Set(items.map((i) => i.id));
       const selected = new Set([...get().selected].filter((id) => present.has(id)));
       // Drop filters / views pointing at things that no longer exist.
@@ -485,8 +537,19 @@ export const useStore = create<State>((set, get) => ({
         .filter((t) => tagIds.has(t))
         .slice(0, 12);
       if (fresh.length) persist(recentTagsKey(get().library!.root), JSON.stringify(recentTags));
+      // Keep the viewer on the image it was showing even if the list moved.
+      const prev = get();
+      const shownId = prev.viewer !== null ? prev.items[prev.viewer]?.id : undefined;
+      const viewerNow =
+        prev.viewer === null || items.length === 0
+          ? null
+          : shownId && present.has(shownId)
+            ? items.findIndex((i) => i.id === shownId)
+            : Math.min(prev.viewer, items.length - 1);
       set({
         items,
+        rawItems,
+        sections,
         folders,
         smartFolders,
         exts,
@@ -497,7 +560,7 @@ export const useStore = create<State>((set, get) => ({
         ...(dismissedGroups !== null ? { dismissedGroups } : {}),
         recentFolders: get().recentFolders.filter((f) => folderIds.has(f)),
         recentTags,
-        viewer: get().viewer !== null && items.length === 0 ? null : get().viewer,
+        viewer: viewerNow,
       });
       if (viewGone || tagFilterNow.length !== get().tagFilter.length) {
         set({ tagFilter: tagFilterNow, ...(viewGone ? { view: { kind: "all" } } : {}) });

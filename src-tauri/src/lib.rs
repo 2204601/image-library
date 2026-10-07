@@ -31,6 +31,8 @@ pub fn run() {
             reveal_item,
             open_items,
             set_rating,
+            set_favorite,
+            set_pinned,
             copy_items,
             export_items,
             reorder_in_folder,
