@@ -2,11 +2,12 @@
 // boxes (content coordinates) so the grid can virtualize, hit-test and
 // navigate them the same way.
 import type { Item } from "./api";
+import type { Section } from "./grouping";
 import type { Layout, ShowInfo } from "../store";
 
 export const PAD = 16;
 export const GAP = 12;
-/** Similar view: band above each group of look-alikes. */
+/** Band above each section (similar-view group, rating, tag, folder). */
 export const HEADER = 40;
 /** List layout row height. */
 export const LIST_ROW = 48;
@@ -29,7 +30,7 @@ export interface Box {
 
 export interface Placement {
   boxes: Box[];
-  /** Similar view: header bands, `y` = top of the band, `start` = first item. */
+  /** Section header bands, `y` = top of the band, `start` = first item. */
   headers: { y: number; start: number }[];
   /** Total content height. */
   height: number;
@@ -45,18 +46,10 @@ export function labelHeight(info: ShowInfo): number {
   return lines === 0 ? 0 : 6 + lines * 15;
 }
 
-/** [start, end) of each similar-view group, or one segment for ungrouped items. */
-function segments(items: Item[]): [number, number][] {
-  if (items[0]?.group === undefined) return items.length ? [[0, items.length]] : [];
-  const out: [number, number][] = [];
-  let start = 0;
-  for (let i = 1; i <= items.length; i++) {
-    if (i === items.length || items[i].group !== items[start].group) {
-      out.push([start, i]);
-      start = i;
-    }
-  }
-  return out;
+/** [start, end) of each section, or one segment when the list isn't sectioned. */
+function segments(items: Item[], sections: Section[]): [number, number][] {
+  if (sections.length) return sections.map((s) => [s.start, s.end]);
+  return items.length ? [[0, items.length]] : [];
 }
 
 /** Column count / width for a target cell size. */
@@ -72,14 +65,15 @@ export function computeLayout(
   inner: number,
   target: number,
   info: ShowInfo,
+  sections: Section[] = [],
 ): Placement {
   const label = kind === "list" ? 0 : labelHeight(info);
   const boxes: Box[] = new Array(items.length);
   const headers: { y: number; start: number }[] = [];
-  const grouped = items[0]?.group !== undefined;
+  const grouped = sections.length > 0;
   let y = PAD;
 
-  for (const [start, end] of segments(items)) {
+  for (const [start, end] of segments(items, sections)) {
     if (grouped) {
       headers.push({ y, start });
       y += HEADER;

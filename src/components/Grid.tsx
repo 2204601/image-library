@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Check, ImagePlus, Star, Trash2 } from "lucide-react";
+import { Check, Heart, ImagePlus, Pin, Star, Trash2 } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   moveToLastFolder,
@@ -20,8 +20,12 @@ import {
   similarGroups,
   setRating,
   shiftFolder,
+  toggleFavorite,
+  togglePinned,
 } from "../lib/actions";
 import { api, formatBytes, type Item } from "../lib/api";
+import { colorHex } from "../lib/colors";
+import type { Section } from "../lib/grouping";
 import {
   computeLayout,
   GAP,
@@ -40,16 +44,21 @@ import { startPointerDrag } from "./DragLayer";
 /** Extra rows rendered above / below the viewport. */
 const OVERSCAN = 600;
 
-/** Index one past the last item of the group starting at `start`. */
-function groupEnd(items: Item[], start: number): number {
-  let end = start + 1;
-  while (end < items.length && items[end].group === items[start].group) end++;
-  return end;
+/**
+ * Display index of the focused item. With tag grouping an image can appear
+ * more than once, so the position it was clicked / moved to is remembered
+ * and preferred over the first occurrence.
+ */
+let focusAt: number | null = null;
+function focusIndex(s: { items: Item[]; focus: string | null }): number {
+  if (focusAt !== null && s.items[focusAt]?.id === s.focus) return focusAt;
+  return s.items.findIndex((i) => i.id === s.focus);
 }
 
-function onItemPointerDown(e: React.PointerEvent, item: Item) {
+function onItemPointerDown(e: React.PointerEvent, item: Item, index: number) {
   if (e.button !== 0) return;
   e.stopPropagation();
+  focusAt = index;
   const s = useStore.getState();
   const mod = e.metaKey || e.ctrlKey;
   if (e.shiftKey) s.select(item.id, "range");
@@ -100,7 +109,38 @@ type CellProps = {
   insert: "before" | "after" | null;
   /** Similar view: what the tidy-up would do with this copy. */
   similar?: SimilarMark;
+  /** Show the favourite / pin marks (hidden in the similar view). */
+  flags: boolean;
 };
+
+/** Favourite heart (also a toggle on hover) and pin mark on a thumbnail. */
+function FlagOverlay({ item }: { item: Item }) {
+  return (
+    <>
+      <button
+        onPointerDown={(e) => e.stopPropagation()}
+        onDoubleClick={(e) => e.stopPropagation()}
+        onClick={() => toggleFavorite([item.id])}
+        title={item.favorite ? "お気に入りから外す（F）" : "お気に入りに追加（F）"}
+        className={`absolute top-1.5 right-1.5 rounded-full p-1 transition-colors ${
+          item.favorite
+            ? "bg-black/45 text-pink-400 hover:bg-black/70"
+            : "hidden bg-black/45 text-white/80 group-hover:block hover:text-pink-400"
+        }`}
+      >
+        <Heart size={13} fill={item.favorite ? "currentColor" : "none"} strokeWidth={2} />
+      </button>
+      {item.pinnedAt !== null && (
+        <span
+          title="ピン留め中（一覧の先頭に表示）"
+          className="absolute top-1.5 left-1.5 rounded-full bg-accent p-1 text-white shadow"
+        >
+          <Pin size={11} fill="currentColor" strokeWidth={2} />
+        </span>
+      )}
+    </>
+  );
+}
 
 type SimilarMark = {
   /** This copy would be kept (otherwise trashed). */
@@ -153,6 +193,7 @@ const Cell = memo(function Cell({
   reorderable,
   insert,
   similar,
+  flags,
 }: CellProps) {
   const detail = info.dims || info.rating || info.meta;
   return (
@@ -161,7 +202,7 @@ const Cell = memo(function Cell({
         dimmed ? "scale-95 opacity-35" : ""
       }`}
       style={{ width }}
-      onPointerDown={(e) => onItemPointerDown(e, item)}
+      onPointerDown={(e) => onItemPointerDown(e, item, index)}
       onDoubleClick={() => useStore.getState().openViewer(index)}
       onContextMenu={(e) => showItemMenu(e, item, index)}
       data-drop={reorderable ? `item:${item.id}` : undefined}
@@ -174,6 +215,7 @@ const Cell = memo(function Cell({
       >
         <Thumb item={item} fit={fit} />
         {similar && <SimilarOverlay item={item} mark={similar} />}
+        {flags && <FlagOverlay item={item} />}
       </div>
       {insert && (
         <span
@@ -216,6 +258,7 @@ const ListRow = memo(function ListRow({
   reorderable,
   insert,
   similar,
+  flags,
 }: CellProps) {
   return (
     <div
@@ -223,7 +266,7 @@ const ListRow = memo(function ListRow({
         selected ? "bg-accent/25 text-white" : "hover:bg-white/5"
       } ${dimmed ? "opacity-35" : ""}`}
       style={{ width, height }}
-      onPointerDown={(e) => onItemPointerDown(e, item)}
+      onPointerDown={(e) => onItemPointerDown(e, item, index)}
       onDoubleClick={() => useStore.getState().openViewer(index)}
       onContextMenu={(e) => showItemMenu(e, item, index)}
       data-drop={reorderable ? `item:${item.id}` : undefined}
@@ -258,6 +301,10 @@ const ListRow = memo(function ListRow({
           </button>
         )}
       </span>
+      <span className="flex w-10 shrink-0 items-center gap-1">
+        {flags && item.pinnedAt !== null && <Pin size={12} className="text-accent" fill="currentColor" />}
+        {flags && item.favorite && <Heart size={12} className="text-pink-400" fill="currentColor" />}
+      </span>
       <span className="w-24 shrink-0">{item.rating > 0 && <Stars n={item.rating} />}</span>
       <span className="w-28 shrink-0 text-right text-dim tabular-nums">
         {item.width} × {item.height}
@@ -278,11 +325,11 @@ const ListRow = memo(function ListRow({
   );
 });
 
-function Stars({ n }: { n: number }) {
+function Stars({ n, size = 9 }: { n: number; size?: number }) {
   return (
     <span className="flex text-amber-400" title={`★${n}`}>
       {Array.from({ length: n }, (_, i) => (
-        <Star key={i} size={9} fill="currentColor" strokeWidth={0} />
+        <Star key={i} size={size} fill="currentColor" strokeWidth={0} />
       ))}
     </span>
   );
@@ -301,10 +348,16 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
     ]);
     return;
   }
+  const all = (flag: (i: Item) => boolean) => ids.every((id) => flag(s.rawItems.find((i) => i.id === id)!));
+  const allFav = all((i) => i.favorite);
+  const allPinned = all((i) => i.pinnedAt !== null);
   useMenu.getState().show(e, [
     { label: "表示", hint: "Enter", onClick: () => s.openViewer(index) },
     { label: "既定のアプリで開く", onClick: () => openSelection(ids) },
     { label: "Finder / エクスプローラで表示", onClick: () => s.run(() => api.revealItem(item.id)) },
+    { separator: true },
+    { label: allFav ? `お気に入りから外す${many}` : `お気に入りに追加${many}`, hint: "F", onClick: () => toggleFavorite(ids) },
+    { label: allPinned ? `ピン留めを解除${many}` : `ピン留め${many}`, hint: "P", onClick: () => togglePinned(ids) },
     { separator: true },
     { label: `コピー${many}`, hint: "⌘C", onClick: () => copySelection(ids) },
     { label: `書き出し…${many}`, onClick: () => exportSelection(ids) },
@@ -332,6 +385,7 @@ type Rect = { x1: number; y1: number; x2: number; y2: number };
 
 export function Grid() {
   const items = useStore((s) => s.items);
+  const sections = useStore((s) => s.sections);
   const selected = useStore((s) => s.selected);
   const thumbSize = useStore((s) => s.thumbSize);
   const kind = useStore((s) => s.layout);
@@ -377,9 +431,9 @@ export function Grid() {
   const placement = useMemo<Placement>(
     () =>
       inner > 0
-        ? computeLayout(kind, items, inner, thumbSize, info)
+        ? computeLayout(kind, items, inner, thumbSize, info, sections)
         : { boxes: [], headers: [], height: 0, label: 0, fit: "cover" },
-    [kind, items, inner, thumbSize, info],
+    [kind, items, inner, thumbSize, info, sections],
   );
   const visible = useMemo(
     () => visibleRange(placement, viewport.top - OVERSCAN, viewport.top + viewport.height + OVERSCAN),
@@ -412,10 +466,9 @@ export function Grid() {
 
   // Keep the focused item on screen when the layout changes (e.g. switching layouts).
   useEffect(() => {
-    const s = useStore.getState();
-    const i = s.items.findIndex((it) => it.id === s.focus);
+    const i = focusIndex(useStore.getState());
     if (i >= 0) reveal(i);
-  }, [kind]);
+  }, [kind, sections]);
 
   /** Ids of cells intersecting a rectangle in content coordinates. */
   const hitTest = (r: Rect): string[] => {
@@ -529,6 +582,13 @@ export function Grid() {
       if (mod && e.shiftKey && e.code === "KeyV") return handled(), void pasteTags(sel());
       if (!mod && e.shiftKey && e.code === "KeyD") return handled(), void moveToLastFolder(sel());
       if (mod && !e.shiftKey && e.code === "KeyC") return handled(), void copySelection(sel());
+      // Favourite / pin (not in the trash).
+      if (!mod && !e.shiftKey && !e.altKey && e.code === "KeyF" && s.view.kind !== "trash") {
+        return handled(), void toggleFavorite(sel());
+      }
+      if (!mod && !e.shiftKey && !e.altKey && e.code === "KeyP" && s.view.kind !== "trash") {
+        return handled(), void togglePinned(sel());
+      }
       if (e.key === "F2" || (mod && e.code === "KeyR")) {
         handled();
         if (s.selected.size === 1) s.requestItemRename();
@@ -553,7 +613,7 @@ export function Grid() {
         return;
       }
 
-      const cur = s.items.findIndex((i) => i.id === s.focus);
+      const cur = focusIndex(s);
       const delta: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 };
       // A / D act like ← / → (Shift+D is "add to last folder" above).
       const key = !mod && !e.shiftKey && e.code === "KeyA" ? "ArrowLeft" : !mod && !e.shiftKey && e.code === "KeyD" ? "ArrowRight" : e.key;
@@ -576,11 +636,12 @@ export function Grid() {
       const s = useStore.getState();
       const { placement } = layout.current;
       if (!s.items.length || !placement.boxes.length) return;
-      const cur = s.items.findIndex((i) => i.id === s.focus);
+      const cur = focusIndex(s);
       let next: number;
       if (cur < 0) next = 0;
       else if (Math.abs(d) === 1) next = Math.min(s.items.length - 1, Math.max(0, cur + d));
       else next = neighbour(placement, cur, d < 0 ? "up" : "down");
+      focusAt = next;
       s.select(s.items[next].id, extend ? "range" : "only");
       reveal(next);
     };
@@ -611,16 +672,21 @@ export function Grid() {
               }}
             />
           )}
-          {placement.headers.map((h) => (
+          {placement.headers.map((h, n) => (
             <div key={`h${h.start}`} className="absolute left-0" style={{ top: h.y, width }}>
-              <GroupHeader items={items} start={h.start} keepPick={keepPick} />
+              {viewKind === "similar" ? (
+                <GroupHeader items={items} section={sections[n]} keepPick={keepPick} />
+              ) : (
+                <SectionHeader items={items} section={sections[n]} />
+              )}
             </div>
           ))}
           {visible.map((i) => {
             const item = items[i];
             const b = placement.boxes[i];
             return (
-              <div key={item.id} className="absolute" style={{ left: b.x, top: b.y }}>
+              // With tag grouping an image can appear in several sections.
+              <div key={`${item.id}:${i}`} className="absolute" style={{ left: b.x, top: b.y }}>
                 <Comp
                   item={item}
                   index={i}
@@ -648,6 +714,7 @@ export function Grid() {
                           match: Math.round((1 - (item.distance ?? 0) / 64) * 100),
                         }
                   }
+                  flags={viewKind !== "similar" && viewKind !== "trash"}
                 />
               </div>
             );
@@ -658,9 +725,32 @@ export function Grid() {
   );
 }
 
+/** Band above a rating / tag / folder section; clicking it selects the section. */
+function SectionHeader({ items, section }: { items: Item[]; section: Section }) {
+  const { start, end, title, color, rating } = section;
+  const hex = colorHex(color);
+  return (
+    <div
+      className={`flex cursor-default items-center gap-2 text-xs ${start > 0 ? "border-t border-line" : ""}`}
+      style={{ height: HEADER - 8, marginLeft: PAD, marginRight: PAD, marginBottom: 8 }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => useStore.getState().setSelection(items.slice(start, end).map((i) => i.id))}
+      title="クリックでこの区切りの画像をすべて選択"
+    >
+      {rating !== undefined && rating > 0 ? <Stars n={rating} size={12} /> : null}
+      {hex && <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: hex }} />}
+      <span className={`truncate font-semibold ${rating === 0 ? "text-dim" : ""}`}>
+        {rating !== undefined && rating > 0 ? "" : title}
+      </span>
+      <span className="shrink-0 text-dim tabular-nums">{end - start} 枚</span>
+    </div>
+  );
+}
+
 /** Similar view: names the group and offers to tidy it up. */
-function GroupHeader({ items, start, keepPick }: { items: Item[]; start: number; keepPick: Set<string> }) {
-  const group = items.slice(start, groupEnd(items, start));
+function GroupHeader({ items, section, keepPick }: { items: Item[]; section: Section; keepPick: Set<string> }) {
+  const { start, end } = section;
+  const group = items.slice(start, end);
   const keep = keeperOf(group, keepPick);
   const freed = group.filter((i) => i !== keep).reduce((n, i) => n + i.size, 0);
   return (
@@ -668,7 +758,7 @@ function GroupHeader({ items, start, keepPick }: { items: Item[]; start: number;
       className={`flex items-center gap-3 text-xs ${start > 0 ? "border-t border-line" : ""}`}
       style={{ height: HEADER - 8, marginLeft: PAD, marginRight: PAD, marginBottom: 8 }}
     >
-      <span className="font-semibold">グループ {(group[0].group ?? 0) + 1}</span>
+      <span className="font-semibold">{section.title}</span>
       <span className="text-dim">
         {group.length} 枚 · 整理すると {formatBytes(freed)} 減ります
       </span>
@@ -714,6 +804,18 @@ function Empty({ kind, filtering, analyzing }: { kind: string; filtering: boolea
     );
   if (kind === "unfiled" || kind === "untagged")
     return <p className="mt-24 text-center text-dim">該当する画像はありません</p>;
+  if (kind === "favorites")
+    return (
+      <p className="mt-24 text-center text-dim">
+        お気に入りはまだありません。画像を選んで F キー、またはサムネイルのハートで追加できます
+      </p>
+    );
+  if (kind === "pinned")
+    return (
+      <p className="mt-24 text-center text-dim">
+        ピン留めした画像はありません。画像を選んで P キーでピン留めすると、どの一覧でも先頭に表示されます
+      </p>
+    );
   if (kind === "folder")
     return (
       <div className="mt-24 flex flex-col items-center gap-2 text-dim">

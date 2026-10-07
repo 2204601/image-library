@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -188,6 +188,13 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
              CREATE INDEX IF NOT EXISTS dismissed_pairs_b ON dismissed_pairs(b);",
         )
     })?;
+    // Favourites (a flag) and pinning (pinned items come first in every list;
+    // the time is kept so the latest pin is at the top).
+    step(8, &|c| {
+        add_column(c, "items", "favorite", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(c, "items", "pinned_at", "INTEGER")?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -216,6 +223,12 @@ pub struct Item {
     /// File name in `previews/` of a JPEG display copy, if the original
     /// format can't be shown by the web view.
     pub preview: Option<String>,
+    pub favorite: bool,
+    /// When the item was pinned to the top of lists; None = not pinned.
+    pub pinned_at: Option<i64>,
+    /// The folder the item is in (an item is in one at most).
+    pub folder_id: Option<String>,
+    pub tag_ids: Vec<i64>,
     /// Similar view only: which group of look-alikes the item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<u32>,
@@ -252,6 +265,8 @@ pub enum View {
     Folder { id: String },
     /// Groups of images that look alike (likely duplicates).
     Similar,
+    Favorites,
+    Pinned,
     /// Items matching a smart folder's saved rule.
     Smart { id: String },
 }
@@ -348,9 +363,13 @@ impl ItemQuery {
 }
 
 const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items.width, items.height, \
-     items.size, items.thumb, items.note, items.rating, items.imported_at, items.deleted_at, items.preview";
+     items.size, items.thumb, items.note, items.rating, items.imported_at, items.deleted_at, items.preview, \
+     items.favorite, items.pinned_at, \
+     (SELECT folder_id FROM item_folders WHERE item_id = items.id LIMIT 1), \
+     (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id)";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
+    let tag_ids: Option<String> = r.get(16)?;
     Ok(Item {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -365,6 +384,12 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         imported_at: r.get(10)?,
         deleted_at: r.get(11)?,
         preview: r.get(12)?,
+        favorite: r.get::<_, i64>(13)? != 0,
+        pinned_at: r.get(14)?,
+        folder_id: r.get(15)?,
+        tag_ids: tag_ids
+            .map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect())
+            .unwrap_or_default(),
         group: None,
         distance: None,
     })
@@ -517,6 +542,8 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
             );
             args.push(Box::new(id.clone()));
         }
+        View::Favorites => wheres.push("items.favorite = 1".into()),
+        View::Pinned => wheres.push("items.pinned_at IS NOT NULL".into()),
         View::All | View::Trash | View::Similar | View::Smart { .. } => {}
     }
 
@@ -541,8 +568,10 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
         }
         SortKey::Manual => format!("items.imported_at {dir}"),
     };
+    // Pinned items come first (latest pin on top), whatever the sort.
     let sql = format!(
-        "SELECT {ITEM_COLS} FROM items {join} WHERE {} ORDER BY {order}, items.rowid {dir}",
+        "SELECT {ITEM_COLS} FROM items {join} WHERE {}
+         ORDER BY items.pinned_at IS NULL, items.pinned_at DESC, {order}, items.rowid {dir}",
         wheres.join(" AND ")
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -677,6 +706,29 @@ pub fn set_rating(conn: &Connection, ids: &[String], rating: u8) -> DbResult<()>
     let mut stmt = conn.prepare("UPDATE items SET rating = ?2 WHERE id = ?1")?;
     for id in ids {
         stmt.execute(params![id, rating.min(5)])?;
+    }
+    Ok(())
+}
+
+pub fn set_favorite(conn: &Connection, ids: &[String], on: bool) -> DbResult<()> {
+    let mut stmt = conn.prepare("UPDATE items SET favorite = ?2 WHERE id = ?1")?;
+    for id in ids {
+        stmt.execute(params![id, on as i64])?;
+    }
+    Ok(())
+}
+
+/// Pins (to the top of every list) or unpins. Items already pinned keep
+/// their place when pinned again.
+pub fn set_pinned(conn: &Connection, ids: &[String], on: bool) -> DbResult<()> {
+    let mut stmt = if on {
+        conn.prepare("UPDATE items SET pinned_at = COALESCE(pinned_at, ?2) WHERE id = ?1")?
+    } else {
+        conn.prepare("UPDATE items SET pinned_at = NULL WHERE id = ?1 AND ?2")?
+    };
+    let now = now_ms();
+    for id in ids {
+        stmt.execute(params![id, now])?;
     }
     Ok(())
 }
@@ -870,6 +922,8 @@ pub struct Counts {
     pub unfiled: i64,
     pub untagged: i64,
     pub trash: i64,
+    pub favorites: i64,
+    pub pinned: i64,
 }
 
 pub fn counts(conn: &Connection) -> DbResult<Counts> {
@@ -878,7 +932,9 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
            SUM(deleted_at IS NULL),
            SUM(deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM item_folders f WHERE f.item_id = items.id)),
            SUM(deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id)),
-           SUM(deleted_at IS NOT NULL)
+           SUM(deleted_at IS NOT NULL),
+           SUM(deleted_at IS NULL AND favorite = 1),
+           SUM(deleted_at IS NULL AND pinned_at IS NOT NULL)
          FROM items",
         [],
         |r| {
@@ -887,6 +943,8 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
                 unfiled: r.get::<_, Option<i64>>(1)?.unwrap_or(0),
                 untagged: r.get::<_, Option<i64>>(2)?.unwrap_or(0),
                 trash: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                favorites: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                pinned: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
             })
         },
     )
@@ -1519,7 +1577,7 @@ mod tests {
         );
         assert_eq!(
             counts(&conn).unwrap(),
-            Counts { all: 2, unfiled: 1, untagged: 1, trash: 1 }
+            Counts { all: 2, unfiled: 1, untagged: 1, trash: 1, favorites: 0, pinned: 0 }
         );
 
         restore_items(&conn, &s(&["c"])).unwrap();
@@ -1767,6 +1825,48 @@ mod tests {
         assert_eq!(query_items(&conn, &query).unwrap()[0].rating, 5);
         query.min_rating = 3;
         assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["c", "a"]));
+    }
+
+    #[test]
+    fn favorites_and_pins() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.png", 2);
+        add(&mut conn, "c", "c.png", 3);
+        set_favorite(&conn, &s(&["b"]), true).unwrap();
+        assert_eq!(ids(query_items(&conn, &q(View::Favorites)).unwrap()), s(&["b"]));
+        assert!(query_items(&conn, &q(View::Favorites)).unwrap()[0].favorite);
+        set_favorite(&conn, &s(&["b"]), false).unwrap();
+        assert!(query_items(&conn, &q(View::Favorites)).unwrap().is_empty());
+
+        // Pinned items lead every list, latest pin first; the rest keep the sort.
+        set_pinned(&conn, &s(&["c"]), true).unwrap();
+        let first = query_items(&conn, &q(View::Pinned)).unwrap()[0].pinned_at;
+        set_pinned(&conn, &s(&["c"]), true).unwrap(); // no-op, keeps its time
+        assert_eq!(query_items(&conn, &q(View::Pinned)).unwrap()[0].pinned_at, first);
+        conn.execute("UPDATE items SET pinned_at = pinned_at - 10 WHERE id = 'c'", []).unwrap();
+        set_pinned(&conn, &s(&["a"]), true).unwrap();
+        assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a", "c", "b"]));
+        assert_eq!(ids(query_items(&conn, &q(View::Pinned)).unwrap()), s(&["a", "c"]));
+        assert_eq!(counts(&conn).unwrap().pinned, 2);
+        set_pinned(&conn, &s(&["a", "c"]), false).unwrap();
+        assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a", "b", "c"]));
+        assert_eq!(counts(&conn).unwrap().pinned, 0);
+    }
+
+    #[test]
+    fn items_carry_folder_and_tags() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.png", 2);
+        let f = create_folder(&conn, "F", None).unwrap();
+        move_to_folder(&conn, &s(&["a"]), &f).unwrap();
+        add_tags(&mut conn, &s(&["a"]), &s(&["x", "y"])).unwrap();
+        let items = query_items(&conn, &q(View::All)).unwrap();
+        assert_eq!(items[0].folder_id.as_deref(), Some(f.as_str()));
+        assert_eq!(items[0].tag_ids.len(), 2);
+        assert_eq!(items[1].folder_id, None);
+        assert!(items[1].tag_ids.is_empty());
     }
 
     #[test]

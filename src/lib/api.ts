@@ -21,6 +21,12 @@ export interface Item {
   deletedAt: number | null;
   /** JPEG display copy for HEIC / TIFF. */
   preview: string | null;
+  favorite: boolean;
+  /** When the item was pinned to the top of lists; null = not pinned. */
+  pinnedAt: number | null;
+  /** The folder the item is in, if any (one at most). */
+  folderId: string | null;
+  tagIds: number[];
   filePath: string;
   thumbPath: string;
   /** What the viewer shows: the display copy if any, else the original. */
@@ -37,6 +43,8 @@ export type View =
   | { kind: "untagged" }
   | { kind: "trash" }
   | { kind: "similar" }
+  | { kind: "favorites" }
+  | { kind: "pinned" }
   | { kind: "folder"; id: string }
   | { kind: "smart"; id: string };
 
@@ -112,6 +120,8 @@ export interface Counts {
   unfiled: number;
   untagged: number;
   trash: number;
+  favorites: number;
+  pinned: number;
 }
 
 export interface Folder {
@@ -169,6 +179,9 @@ export const api = {
   revealItem: (id: string) => invoke<void>("reveal_item", { id }),
   openItems: (ids: string[]) => invoke<void>("open_items", { ids }),
   setRating: (ids: string[], rating: number) => invoke<void>("set_rating", { ids, rating }),
+  setFavorite: (ids: string[], on: boolean) => invoke<void>("set_favorite", { ids, on }),
+  /** Pinned items come first in every list. */
+  setPinned: (ids: string[], on: boolean) => invoke<void>("set_pinned", { ids, on }),
   copyItems: (ids: string[]) => invoke<number>("copy_items", { ids }),
   exportItems: (ids: string[], dest: string) => invoke<number>("export_items", { ids, dest }),
 

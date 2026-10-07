@@ -260,6 +260,17 @@ pub fn set_rating(state: State<AppState>, ids: Vec<String>, rating: u8) -> CmdRe
     with_lib(&state, |lib| db::set_rating(&lib.conn, &ids, rating).map_err(err))
 }
 
+#[tauri::command]
+pub fn set_favorite(state: State<AppState>, ids: Vec<String>, on: bool) -> CmdResult<()> {
+    with_lib(&state, |lib| db::set_favorite(&lib.conn, &ids, on).map_err(err))
+}
+
+/// Pins the items to the top of every list, or unpins them.
+#[tauri::command]
+pub fn set_pinned(state: State<AppState>, ids: Vec<String>, on: bool) -> CmdResult<()> {
+    with_lib(&state, |lib| db::set_pinned(&lib.conn, &ids, on).map_err(err))
+}
+
 /// Puts the files on the clipboard (paste into Finder / Explorer / chat apps).
 /// A single image is also put on as bitmap data for design tools.
 #[tauri::command]

@@ -62,6 +62,10 @@ function viewTitle(view: View, folders: Folder[], smart: SmartFolder[]): string 
       return "ゴミ箱";
     case "similar":
       return "重複の候補";
+    case "favorites":
+      return "お気に入り";
+    case "pinned":
+      return "ピン留め";
     case "folder":
       return folders.find((f) => f.id === view.id)?.name ?? "";
     case "smart":
@@ -79,7 +83,8 @@ export function Toolbar() {
   const setThumbSize = useStore((s) => s.setThumbSize);
   const tags = useStore((s) => s.tags);
   const items = useStore((s) => s.items);
-  const count = items.length;
+  // Number of images (with tag grouping an image can be listed more than once).
+  const count = useStore((s) => s.rawItems.length);
   const selectedCount = useStore((s) => s.selected.size);
   const view = useStore((s) => s.view);
   const folders = useStore((s) => s.folders);

@@ -291,6 +291,27 @@ export async function setRating(ids: string[], rating: number) {
   await st().run(() => api.setRating(ids, rating));
 }
 
+/** True when every one of `ids` has the flag (so a toggle turns it off). */
+function allHave(ids: string[], flag: (i: Item) => boolean): boolean {
+  const byId = new Map(st().rawItems.map((i) => [i.id, i]));
+  return ids.length > 0 && ids.every((id) => flag(byId.get(id)!));
+}
+
+/** F: adds to favourites, or removes when every selected image already is one. */
+export async function toggleFavorite(ids: string[]) {
+  if (!ids.length) return;
+  const on = !allHave(ids, (i) => i.favorite);
+  await st().run(() => api.setFavorite(ids, on));
+}
+
+/** P: pins to the top of every list, or unpins when all are pinned. */
+export async function togglePinned(ids: string[]) {
+  if (!ids.length) return;
+  const on = !allHave(ids, (i) => i.pinnedAt !== null);
+  await st().run(() => api.setPinned(ids, on));
+  if (on) st().toast(`${ids.length} 件をピン留めしました（一覧の先頭に表示）`);
+}
+
 /** Manual order: move `ids` in front of `before` (null = end) in the open folder. */
 export async function reorder(ids: string[], before: string | null) {
   const folder = currentFolderId();
