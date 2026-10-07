@@ -79,6 +79,12 @@ function seed() {
   }
 }
 
+/** Pairs dismissed as "not duplicates": "a|b" (a < b) -> batch number (one per dismiss action). */
+const dismissed = new Map<string, number>();
+let dismissSeq = 0;
+const pairKey = (x: string, y: string) => (x < y ? `${x}|${y}` : `${y}|${x}`);
+const pairsOf = (ids: string[]) => ids.flatMap((x, k) => ids.slice(k + 1).map((y) => pairKey(x, y)));
+
 /** Mock stand-in for the perceptual hash: same colours and shape = look-alike. */
 function similar(r: MockItem[], level: SimilarLevel): MockItem[] {
   const key = (i: MockItem) =>
@@ -94,6 +100,8 @@ function similar(r: MockItem[], level: SimilarLevel): MockItem[] {
     // Strict: only copies that are barely smaller than the best one.
     .map((g) => (level === "strict" ? g.filter((i) => i.width >= g[0].width / 2.2) : g))
     .filter((g) => g.length > 1)
+    // Simplified: a group disappears once every pair in it was dismissed.
+    .filter((g) => !pairsOf(g.map((i) => i.id)).every((p) => dismissed.has(p)))
     .flatMap((g, n) =>
       g.map((i) => ({ ...i, group: n, distance: Math.round(Math.log2(g[0].width / i.width) * 4) })),
     );
@@ -286,6 +294,19 @@ function handle(cmd: string, a: any): unknown {
       return a.ids.length;
     case "index_similar":
       return 0;
+    case "dismiss_duplicates": {
+      const batch = ++dismissSeq;
+      for (const p of pairsOf(a.ids as string[])) if (!dismissed.has(p)) dismissed.set(p, batch);
+      return null;
+    }
+    case "undismiss_duplicates":
+      for (const p of pairsOf(a.ids as string[])) dismissed.delete(p);
+      return null;
+    case "clear_dismissed_duplicates":
+      dismissed.clear();
+      return null;
+    case "count_dismissed_duplicates":
+      return new Set(dismissed.values()).size;
     case "preview_duplicates":
     case "resolve_duplicates": {
       const effects = (a.groups as { keep: string; remove: string[] }[]).map((g) => {

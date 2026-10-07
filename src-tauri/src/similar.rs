@@ -7,7 +7,7 @@
 use image::imageops::FilterType;
 use image::DynamicImage;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// How alike two images must be to land in the same group.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -93,6 +93,13 @@ fn find(parent: &mut [usize], mut i: usize) -> usize {
 /// Groups of indices into `entries` (two or more each) that look alike.
 /// Groups and their members keep the order of `entries`.
 pub fn groups(entries: &[Entry], level: Level) -> Vec<Vec<usize>> {
+    groups_except(entries, level, &HashSet::new())
+}
+
+/// Like `groups`, but pairs in `excluded` (smaller index first) are never
+/// joined directly. Grouping is transitive, so a third entry that looks like
+/// both can still bring them together.
+pub fn groups_except(entries: &[Entry], level: Level, excluded: &HashSet<(usize, usize)>) -> Vec<Vec<usize>> {
     let lim = level.limits();
     let n = entries.len();
     let mut parent: Vec<usize> = (0..n).collect();
@@ -118,6 +125,7 @@ pub fn groups(entries: &[Entry], level: Level) -> Vec<Vec<usize>> {
                     && ar <= lim.max_aspect_ratio
                     && ar >= 1.0 / lim.max_aspect_ratio
                     && colors_close(x.color, y.color, lim.max_color_diff)
+                    && !excluded.contains(&(i.min(j), i.max(j)))
                 {
                     let (ri, rj) = (find(&mut parent, i), find(&mut parent, j));
                     if ri != rj {
@@ -194,6 +202,23 @@ mod tests {
         // a~b and b~c join even though a and c are further apart.
         let entries = [e(0, 10, 10), e(0b11_1111, 10, 10), e(0b1111_1111_1111, 10, 10)];
         assert_eq!(groups(&entries, Level::Standard), vec![vec![0, 1, 2]]);
+    }
+
+    #[test]
+    fn excluded_pair_is_not_joined() {
+        let ex = |pairs: &[(usize, usize)]| pairs.iter().copied().collect::<HashSet<_>>();
+        // Chain: 0~1 and 1~2 are close, 0 and 2 are too far apart to join directly.
+        let chain = [e(0, 10, 10), e(0b11_1111, 10, 10), e(0b1111_1111_1111, 10, 10)];
+        assert_eq!(groups_except(&chain, Level::Standard, &ex(&[])), vec![vec![0, 1, 2]]);
+        // Excluding one link splits off that member; the other link still holds.
+        assert_eq!(groups_except(&chain, Level::Standard, &ex(&[(0, 1)])), vec![vec![1, 2]]);
+        // Excluding both leaves nothing to group.
+        assert!(groups_except(&chain, Level::Standard, &ex(&[(0, 1), (1, 2)])).is_empty());
+        // All three are mutually close: excluding one pair doesn't split them (transitive).
+        let tight = [e(0, 10, 10), e(0b11, 10, 10), e(0b111, 10, 10)];
+        assert_eq!(groups_except(&tight, Level::Standard, &ex(&[(0, 1)])), vec![vec![0, 1, 2]]);
+        // Excluding the pairs of a whole group leaves nothing.
+        assert!(groups_except(&tight, Level::Standard, &ex(&[(0, 1), (0, 2), (1, 2)])).is_empty());
     }
 
     #[test]

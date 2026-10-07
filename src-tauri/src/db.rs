@@ -3,14 +3,14 @@
 
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -172,6 +172,21 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         add_column(c, "smart_folders", "color", "TEXT")?;
         add_column(c, "tags", "color", "TEXT")?;
         Ok(())
+    })?;
+    // Groups of look-alikes the user marked "not duplicates", stored as pairs
+    // (a < b) so a new look-alike can still be proposed with the old members.
+    // `batch` identifies one dismiss action (one group).
+    step(7, &|c| {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS dismissed_pairs (
+               a TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               b TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               batch TEXT NOT NULL,
+               created_at INTEGER NOT NULL,
+               PRIMARY KEY (a, b)
+             );
+             CREATE INDEX IF NOT EXISTS dismissed_pairs_b ON dismissed_pairs(b);",
+        )
     })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
@@ -562,8 +577,22 @@ fn similar_groups(conn: &Connection, items: Vec<Item>, level: similar::Level) ->
             similar::Entry { hash: hash as u64, color, width: i.width, height: i.height }
         })
         .collect();
+    // Pairs the user dismissed, as entry indices (smaller first). Pairs with an
+    // item that isn't among the entries are skipped.
+    let index: HashMap<&str, usize> =
+        items.iter().flatten().enumerate().map(|(k, i)| (i.id.as_str(), k)).collect();
+    let mut excluded: HashSet<(usize, usize)> = HashSet::new();
+    let mut stmt = conn.prepare("SELECT a, b FROM dismissed_pairs")?;
+    let pairs = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    for pair in pairs {
+        let (a, b) = pair?;
+        if let (Some(&i), Some(&j)) = (index.get(a.as_str()), index.get(b.as_str())) {
+            excluded.insert((i.min(j), i.max(j)));
+        }
+    }
+    drop(stmt);
     let mut out = Vec::new();
-    for (n, group) in similar::groups(&entries, level).into_iter().enumerate() {
+    for (n, group) in similar::groups_except(&entries, level, &excluded).into_iter().enumerate() {
         let mut members: Vec<Item> = group.into_iter().filter_map(|k| items[k].take()).collect();
         members.sort_by_key(|i| {
             (std::cmp::Reverse(i.width as u64 * i.height as u64), std::cmp::Reverse(i.size), i.imported_at)
@@ -666,6 +695,52 @@ pub fn trash_items(conn: &Connection, ids: &[String]) -> DbResult<()> {
     );
     conn.execute(&sql, params_from_iter(args.iter().map(|b| b.as_ref())))?;
     Ok(())
+}
+
+/// Marks every pair among `ids` as "not duplicates" so they stop being proposed
+/// together. One call counts as one dismissed group.
+pub fn dismiss_duplicates(conn: &mut Connection, ids: &[String]) -> DbResult<()> {
+    if ids.len() < 2 {
+        return Ok(());
+    }
+    let batch = uuid::Uuid::new_v4().simple().to_string();
+    let now = now_ms();
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare(
+            "INSERT OR IGNORE INTO dismissed_pairs (a, b, batch, created_at) VALUES (?1, ?2, ?3, ?4)",
+        )?;
+        for (i, x) in ids.iter().enumerate() {
+            for y in &ids[i + 1..] {
+                let (a, b) = if x < y { (x, y) } else { (y, x) };
+                stmt.execute(params![a, b, batch, now])?;
+            }
+        }
+    }
+    tx.commit()
+}
+
+/// Takes the pairs among `ids` back out of the dismissed list.
+pub fn undismiss_duplicates(conn: &Connection, ids: &[String]) -> DbResult<()> {
+    let mut stmt = conn.prepare("DELETE FROM dismissed_pairs WHERE a = ?1 AND b = ?2")?;
+    for (i, x) in ids.iter().enumerate() {
+        for y in &ids[i + 1..] {
+            let (a, b) = if x < y { (x, y) } else { (y, x) };
+            stmt.execute(params![a, b])?;
+        }
+    }
+    Ok(())
+}
+
+pub fn clear_dismissed_duplicates(conn: &Connection) -> DbResult<()> {
+    conn.execute("DELETE FROM dismissed_pairs", [])?;
+    Ok(())
+}
+
+/// How many dismiss actions (groups) are still in effect.
+pub fn dismissed_duplicate_groups(conn: &Connection) -> DbResult<usize> {
+    conn.query_row("SELECT COUNT(DISTINCT batch) FROM dismissed_pairs", [], |r| r.get::<_, i64>(0))
+        .map(|n| n as usize)
 }
 
 #[derive(Debug, Deserialize)]
@@ -1375,6 +1450,44 @@ mod tests {
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| x.to_string()).collect()
+    }
+
+    #[test]
+    fn dismissed_group_leaves_similar_view() {
+        let mut conn = mem();
+        for (id, at) in [("a", 1), ("b", 2), ("c", 3)] {
+            add(&mut conn, id, id, at);
+        }
+        let hashes = |ids: &[&str]| -> Vec<(String, (u64, u32))> {
+            ids.iter().map(|i| (i.to_string(), (0x1234u64, 0u32))).collect()
+        };
+        set_phashes(&mut conn, &hashes(&["a", "b", "c"])).unwrap();
+        let groups = |conn: &Connection| query_items(conn, &q(View::Similar)).unwrap().len();
+        assert_eq!(groups(&conn), 3);
+        assert_eq!(dismissed_duplicate_groups(&conn).unwrap(), 0);
+
+        dismiss_duplicates(&mut conn, &s(&["c", "a", "b"])).unwrap();
+        assert_eq!(groups(&conn), 0);
+        assert_eq!(dismissed_duplicate_groups(&conn).unwrap(), 1);
+        // Dismissing again changes nothing; a single id is a no-op.
+        dismiss_duplicates(&mut conn, &s(&["a", "b"])).unwrap();
+        dismiss_duplicates(&mut conn, &s(&["a"])).unwrap();
+        assert_eq!(dismissed_duplicate_groups(&conn).unwrap(), 1);
+
+        // A new look-alike is proposed together with the old members.
+        add(&mut conn, "d", "d", 4);
+        set_phashes(&mut conn, &hashes(&["d"])).unwrap();
+        assert_eq!(groups(&conn), 4);
+
+        undismiss_duplicates(&conn, &s(&["a", "b", "c"])).unwrap();
+        assert_eq!(dismissed_duplicate_groups(&conn).unwrap(), 0);
+        assert_eq!(groups(&conn), 4);
+
+        dismiss_duplicates(&mut conn, &s(&["a", "b", "c", "d"])).unwrap();
+        assert_eq!(groups(&conn), 0);
+        clear_dismissed_duplicates(&conn).unwrap();
+        assert_eq!(dismissed_duplicate_groups(&conn).unwrap(), 0);
+        assert_eq!(groups(&conn), 4);
     }
 
     #[test]

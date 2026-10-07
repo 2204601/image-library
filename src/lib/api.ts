@@ -180,6 +180,12 @@ export const api = {
     }),
   supportedExts: () => invoke<string[]>("supported_exts"),
   indexSimilar: () => invoke<number>("index_similar"),
+  /** Treats these images as "not duplicates" so they aren't proposed together again. */
+  dismissDuplicates: (ids: string[]) => invoke<void>("dismiss_duplicates", { ids }),
+  undismissDuplicates: (ids: string[]) => invoke<void>("undismiss_duplicates", { ids }),
+  clearDismissedDuplicates: () => invoke<void>("clear_dismissed_duplicates"),
+  /** Number of dismissed groups still in effect. */
+  countDismissedDuplicates: () => invoke<number>("count_dismissed_duplicates"),
   /** What `resolveDuplicates` would carry over, without changing anything. */
   previewDuplicates: (groups: { keep: string; remove: string[] }[]) =>
     invoke<DuplicateEffect[]>("preview_duplicates", { groups }),

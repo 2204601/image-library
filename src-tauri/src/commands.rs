@@ -168,6 +168,28 @@ pub fn trash_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
     with_lib(&state, |lib| db::trash_items(&lib.conn, &ids).map_err(err))
 }
 
+/// Marks the images as "not duplicates" so they aren't proposed together again.
+#[tauri::command]
+pub fn dismiss_duplicates(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::dismiss_duplicates(&mut lib.conn, &ids).map_err(err))
+}
+
+#[tauri::command]
+pub fn undismiss_duplicates(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::undismiss_duplicates(&lib.conn, &ids).map_err(err))
+}
+
+#[tauri::command]
+pub fn clear_dismissed_duplicates(state: State<AppState>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::clear_dismissed_duplicates(&lib.conn).map_err(err))
+}
+
+/// How many dismissed groups are in effect.
+#[tauri::command]
+pub fn count_dismissed_duplicates(state: State<AppState>) -> CmdResult<usize> {
+    with_lib(&state, |lib| db::dismissed_duplicate_groups(&lib.conn).map_err(err))
+}
+
 /// What tidying these groups would carry over to the copies kept.
 #[tauri::command]
 pub fn preview_duplicates(

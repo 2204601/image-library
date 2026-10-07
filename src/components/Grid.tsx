@@ -15,6 +15,7 @@ import {
   pasteTags,
   keepPlan,
   keeperOf,
+  dismissDuplicates,
   reviewDuplicates,
   similarGroups,
   setRating,
@@ -673,9 +674,17 @@ function GroupHeader({ items, start, keepPick }: { items: Item[]; start: number;
       </span>
       <button
         onPointerDown={(e) => e.stopPropagation()}
+        onClick={() => dismissDuplicates(group.map((i) => i.id))}
+        title="このグループの画像は別物として扱い、今後は候補に出しません"
+        className="ml-auto rounded-md border border-line px-2 py-0.5 hover:bg-white/5"
+      >
+        重複ではない
+      </button>
+      <button
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={() => reviewDuplicates(keepPlan([group], keepPick))}
         title="残す1枚を確認してから、他をゴミ箱へ移動します"
-        className="ml-auto rounded-md border border-line px-2 py-0.5 hover:bg-white/5"
+        className="rounded-md border border-line px-2 py-0.5 hover:bg-white/5"
       >
         このグループを整理…
       </button>
