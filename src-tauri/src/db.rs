@@ -259,7 +259,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Kind::Image => "image",
             Kind::Font => "font",
@@ -1200,7 +1200,16 @@ pub struct Counts {
     pub font_categories: BTreeMap<String, i64>,
 }
 
-pub fn counts(conn: &Connection) -> DbResult<Counts> {
+/// SQL fragment keeping rows of `kind` (any kind when None), with the kind
+/// as the argument `?n`. `t` is the alias of the items table.
+fn kind_where(kind: Option<Kind>, n: usize, t: &str) -> (String, Box<dyn ToSql>) {
+    (format!("(?{n} IS NULL OR {t}.kind = ?{n})"), Box::new(kind.map(Kind::as_str)))
+}
+
+/// Totals for the sidebar. With `kind`, everything but `kinds` counts only
+/// items of that kind (the app shows one kind at a time; `kinds` is for
+/// switching between them).
+pub fn counts(conn: &Connection, kind: Option<Kind>) -> DbResult<Counts> {
     let mut stmt = conn.prepare_cached("SELECT kind, COUNT(*) FROM items WHERE deleted_at IS NULL GROUP BY kind")?;
     let kinds = stmt
         .query_map([], |r| Ok((Kind::parse(&r.get::<_, String>(0)?), r.get::<_, i64>(1)?)))?
@@ -1215,8 +1224,10 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
     };
     let font_scripts = by("items.font_script")?;
     let font_categories = by(FONT_CATEGORY)?;
+    let (of_kind, arg) = kind_where(kind, 1, "items");
     conn.query_row(
-        "SELECT
+        &format!(
+            "SELECT
            SUM(deleted_at IS NULL),
            SUM(deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM item_folders f WHERE f.item_id = items.id)),
            SUM(deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id)),
@@ -1224,8 +1235,9 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
            SUM(deleted_at IS NULL AND favorite = 1),
            SUM(deleted_at IS NULL AND pinned_at IS NOT NULL),
            SUM(deleted_at IS NULL AND EXISTS (SELECT 1 FROM tray WHERE tray.item_id = items.id))
-         FROM items",
-        [],
+         FROM items WHERE {of_kind}"
+        ),
+        [arg.as_ref()],
         |r| {
             Ok(Counts {
                 all: r.get::<_, Option<i64>>(0)?.unwrap_or(0),
@@ -1255,15 +1267,17 @@ pub struct Folder {
     pub color: Option<String>,
 }
 
-pub fn list_folders(conn: &Connection) -> DbResult<Vec<Folder>> {
-    let mut stmt = conn.prepare(
+/// Every folder; `count` is its live items (of `kind`, when given).
+pub fn list_folders(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<Folder>> {
+    let (of_kind, arg) = kind_where(kind, 1, "i");
+    let mut stmt = conn.prepare(&format!(
         "SELECT f.id, f.parent_id, f.name,
            (SELECT COUNT(*) FROM item_folders x JOIN items i ON i.id = x.item_id
-            WHERE x.folder_id = f.id AND i.deleted_at IS NULL),
+            WHERE x.folder_id = f.id AND i.deleted_at IS NULL AND {of_kind}),
            f.color
-         FROM folders f ORDER BY f.sort_order IS NULL, f.sort_order, f.name COLLATE NOCASE",
-    )?;
-    let rows = stmt.query_map([], |r| {
+         FROM folders f ORDER BY f.sort_order IS NULL, f.sort_order, f.name COLLATE NOCASE"
+    ))?;
+    let rows = stmt.query_map([arg.as_ref()], |r| {
         Ok(Folder {
             id: r.get(0)?,
             parent_id: r.get(1)?,
@@ -1421,9 +1435,13 @@ fn clean_rule(conn: &Connection, mut rule: Rule) -> Rule {
     rule
 }
 
-fn count_rule(conn: &Connection, rule: &Rule) -> DbResult<i64> {
+fn count_rule(conn: &Connection, rule: &Rule, kind: Option<Kind>) -> DbResult<i64> {
     let mut wheres = vec!["items.deleted_at IS NULL".to_string()];
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+    if let Some(k) = kind {
+        wheres.push("items.kind = ?".into());
+        args.push(Box::new(k.as_str()));
+    }
     push_rule(rule, &mut wheres, &mut args);
     conn.query_row(
         &format!("SELECT COUNT(*) FROM items WHERE {}", wheres.join(" AND ")),
@@ -1432,7 +1450,8 @@ fn count_rule(conn: &Connection, rule: &Rule) -> DbResult<i64> {
     )
 }
 
-pub fn list_smart_folders(conn: &Connection) -> DbResult<Vec<SmartFolder>> {
+/// Every smart folder; `count` is its live matches (of `kind`, when given).
+pub fn list_smart_folders(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<SmartFolder>> {
     let rows: Vec<(String, String, String, Option<String>)> = {
         let mut stmt =
             conn.prepare("SELECT id, name, rule, color FROM smart_folders ORDER BY sort_order, name")?;
@@ -1442,7 +1461,7 @@ pub fn list_smart_folders(conn: &Connection) -> DbResult<Vec<SmartFolder>> {
     rows.into_iter()
         .map(|(id, name, json, color)| {
             let rule = clean_rule(conn, serde_json::from_str(&json).unwrap_or_default());
-            let count = count_rule(conn, &rule)?;
+            let count = count_rule(conn, &rule, kind)?;
             Ok(SmartFolder { id, name, rule, count, color })
         })
         .collect()
@@ -1481,12 +1500,13 @@ pub fn delete_smart_folder(conn: &Connection, id: &str) -> DbResult<()> {
     Ok(())
 }
 
-/// File types in the library with counts (live items), for the filter bar.
-pub fn list_exts(conn: &Connection) -> DbResult<Vec<(String, i64)>> {
-    let mut stmt = conn.prepare(
-        "SELECT lower(ext), COUNT(*) FROM items WHERE deleted_at IS NULL GROUP BY lower(ext)",
-    )?;
-    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+/// File types in the library with counts (live items of `kind`, when given), for the filter bar.
+pub fn list_exts(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<(String, i64)>> {
+    let (of_kind, arg) = kind_where(kind, 1, "items");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT lower(ext), COUNT(*) FROM items WHERE deleted_at IS NULL AND {of_kind} GROUP BY lower(ext)"
+    ))?;
+    let rows = stmt.query_map([arg.as_ref()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
     let mut merged: Vec<(String, i64)> = Vec::new();
     for row in rows {
         let (ext, n) = row?;
@@ -1588,15 +1608,17 @@ pub struct Tag {
     pub color: Option<String>,
 }
 
-pub fn list_tags(conn: &Connection) -> DbResult<Vec<Tag>> {
-    let mut stmt = conn.prepare(
+/// Every tag; `count` is its live items (of `kind`, when given).
+pub fn list_tags(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<Tag>> {
+    let (of_kind, arg) = kind_where(kind, 1, "i");
+    let mut stmt = conn.prepare(&format!(
         "SELECT t.id, t.name,
            (SELECT COUNT(*) FROM item_tags x JOIN items i ON i.id = x.item_id
-            WHERE x.tag_id = t.id AND i.deleted_at IS NULL),
+            WHERE x.tag_id = t.id AND i.deleted_at IS NULL AND {of_kind}),
            t.color
-         FROM tags t ORDER BY t.name COLLATE NOCASE",
-    )?;
-    let rows = stmt.query_map([], |r| {
+         FROM tags t ORDER BY t.name COLLATE NOCASE"
+    ))?;
+    let rows = stmt.query_map([arg.as_ref()], |r| {
         Ok(Tag {
             id: r.get(0)?,
             name: r.get(1)?,
@@ -1871,7 +1893,7 @@ mod tests {
             s(&["a"])
         );
         assert_eq!(
-            counts(&conn).unwrap(),
+            counts(&conn, None).unwrap(),
             Counts {
                 all: 2,
                 unfiled: 1,
@@ -1887,8 +1909,8 @@ mod tests {
         );
 
         restore_items(&conn, &s(&["c"])).unwrap();
-        assert_eq!(counts(&conn).unwrap().trash, 0);
-        assert_eq!(counts(&conn).unwrap().all, 3);
+        assert_eq!(counts(&conn, None).unwrap().trash, 0);
+        assert_eq!(counts(&conn, None).unwrap().all, 3);
     }
 
     #[test]
@@ -1907,7 +1929,7 @@ mod tests {
         let planned = plan_duplicates(&conn, &group).unwrap();
         assert_eq!(planned[0].added_tags, ["x", "y"]);
         assert_eq!((planned[0].rating, planned[0].folder_id.as_deref()), (Some(4), Some(f.as_str())));
-        assert_eq!(counts(&conn).unwrap().all, 3, "planning changes nothing");
+        assert_eq!(counts(&conn, None).unwrap().all, 3, "planning changes nothing");
 
         let done = resolve_duplicates(&mut conn, &group).unwrap();
         assert_eq!(done, planned);
@@ -1918,7 +1940,7 @@ mod tests {
         names.sort();
         assert_eq!(names, ["x", "y"]);
         assert_eq!(get_items(&conn, &s(&["a"])).unwrap()[0].rating, 4);
-        assert_eq!(counts(&conn).unwrap().trash, 2);
+        assert_eq!(counts(&conn, None).unwrap().trash, 2);
     }
 
     #[test]
@@ -1942,16 +1964,16 @@ mod tests {
         let f = create_folder(&conn, "F", None).unwrap();
         let sf = create_smart_folder(&conn, "S", &Rule::default()).unwrap();
         add_tags(&mut conn, &s(&["a"]), &s(&["t"])).unwrap();
-        let tag = list_tags(&conn).unwrap()[0].id;
+        let tag = list_tags(&conn, None).unwrap()[0].id;
         set_color(&conn, ColorTarget::Folder, &f, Some("red")).unwrap();
         set_color(&conn, ColorTarget::SmartFolder, &sf, Some("blue")).unwrap();
         set_color(&conn, ColorTarget::Tag, &tag, Some("green")).unwrap();
-        assert_eq!(list_folders(&conn).unwrap()[0].color.as_deref(), Some("red"));
-        assert_eq!(list_smart_folders(&conn).unwrap()[0].color.as_deref(), Some("blue"));
-        assert_eq!(list_tags(&conn).unwrap()[0].color.as_deref(), Some("green"));
+        assert_eq!(list_folders(&conn, None).unwrap()[0].color.as_deref(), Some("red"));
+        assert_eq!(list_smart_folders(&conn, None).unwrap()[0].color.as_deref(), Some("blue"));
+        assert_eq!(list_tags(&conn, None).unwrap()[0].color.as_deref(), Some("green"));
         assert_eq!(selection_info(&conn, &s(&["a"])).unwrap().tags[0].color.as_deref(), Some("green"));
         set_color(&conn, ColorTarget::Folder, &f, None).unwrap();
-        assert_eq!(list_folders(&conn).unwrap()[0].color, None);
+        assert_eq!(list_folders(&conn, None).unwrap()[0].color, None);
         assert!(set_color(&conn, ColorTarget::Folder, &f, Some("chartreuse")).is_err());
     }
 
@@ -1968,7 +1990,7 @@ mod tests {
         file_unfiled(&conn, &s(&["a"]), &f).unwrap(); // already filed: stays in G
         assert_eq!(ids(query_items(&conn, &q(View::Folder { id: g })).unwrap()), s(&["a"]));
         remove_from_folder(&conn, &s(&["a"]), &f).unwrap(); // not in F: no-op
-        assert_eq!(counts(&conn).unwrap().unfiled, 0);
+        assert_eq!(counts(&conn, None).unwrap().unfiled, 0);
     }
 
     #[test]
@@ -1994,7 +2016,7 @@ mod tests {
         add(&mut conn, "c", "c.png", 3);
         add_tags(&mut conn, &s(&["a", "b"]), &s(&["red"])).unwrap();
         add_tags(&mut conn, &s(&["b", "c"]), &s(&["blue"])).unwrap();
-        let tags = list_tags(&conn).unwrap();
+        let tags = list_tags(&conn, None).unwrap();
         let id = |n: &str| tags.iter().find(|t| t.name == n).unwrap().id;
 
         let mut query = q(View::All);
@@ -2023,7 +2045,7 @@ mod tests {
         query.search = "anim".into(); // tag name
         assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "c"]));
 
-        let tags = list_tags(&conn).unwrap();
+        let tags = list_tags(&conn, None).unwrap();
         assert_eq!(tags.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), ["Animal", "pet"]);
         let pet = tags.iter().find(|t| t.name == "pet").unwrap().id;
         remove_tag(&conn, &s(&["c"]), pet).unwrap();
@@ -2044,9 +2066,9 @@ mod tests {
         add(&mut conn, "b", "b.png", 2);
         add_tags(&mut conn, &s(&["a"]), &s(&["red"])).unwrap();
         add_tags(&mut conn, &s(&["a", "b"]), &s(&["Rouge"])).unwrap();
-        let red = list_tags(&conn).unwrap().into_iter().find(|t| t.name == "red").unwrap();
+        let red = list_tags(&conn, None).unwrap().into_iter().find(|t| t.name == "red").unwrap();
         rename_tag(&mut conn, red.id, "rouge").unwrap(); // case-insensitive clash
-        let tags = list_tags(&conn).unwrap();
+        let tags = list_tags(&conn, None).unwrap();
         assert_eq!(tags.len(), 1);
         assert_eq!(tags[0].count, 2);
     }
@@ -2068,9 +2090,9 @@ mod tests {
         assert_eq!(info.folders, vec![FolderRef { id: c.clone(), count: 1 }]);
 
         delete_folder(&conn, &p).unwrap(); // cascades to child
-        assert!(list_folders(&conn).unwrap().is_empty());
-        assert_eq!(counts(&conn).unwrap().unfiled, 1);
-        assert_eq!(counts(&conn).unwrap().all, 1);
+        assert!(list_folders(&conn, None).unwrap().is_empty());
+        assert_eq!(counts(&conn, None).unwrap().unfiled, 1);
+        assert_eq!(counts(&conn, None).unwrap().all, 1);
     }
 
     #[test]
@@ -2154,10 +2176,10 @@ mod tests {
         set_pinned(&conn, &s(&["a"]), true).unwrap();
         assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a", "c", "b"]));
         assert_eq!(ids(query_items(&conn, &q(View::Pinned)).unwrap()), s(&["a", "c"]));
-        assert_eq!(counts(&conn).unwrap().pinned, 2);
+        assert_eq!(counts(&conn, None).unwrap().pinned, 2);
         set_pinned(&conn, &s(&["a", "c"]), false).unwrap();
         assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a", "b", "c"]));
-        assert_eq!(counts(&conn).unwrap().pinned, 0);
+        assert_eq!(counts(&conn, None).unwrap().pinned, 0);
     }
 
     #[test]
@@ -2178,7 +2200,7 @@ mod tests {
         assert_eq!(ids(query_items(&conn, &q(View::Tray)).unwrap()), s(&["a", "b", "c"]));
         assert!(query_items(&conn, &q(View::All)).unwrap().iter().any(|i| i.id == "a" && i.in_tray));
         assert!(!query_items(&conn, &q(View::All)).unwrap().iter().any(|i| i.id == "d" && i.in_tray));
-        assert_eq!(counts(&conn).unwrap().tray, 3);
+        assert_eq!(counts(&conn, None).unwrap().tray, 3);
 
         // The tray's own order ignores pins (it is the order things are handled in).
         set_pinned(&conn, &s(&["b"]), true).unwrap();
@@ -2191,14 +2213,14 @@ mod tests {
         // Trashed items leave the tray view but come back when restored.
         trash_items(&conn, &s(&["a"])).unwrap();
         assert_eq!(manual(&conn), s(&["b", "c"]));
-        assert_eq!(counts(&conn).unwrap().tray, 2);
+        assert_eq!(counts(&conn, None).unwrap().tray, 2);
         restore_items(&conn, &s(&["a"])).unwrap();
 
         remove_from_tray(&conn, &s(&["b"])).unwrap();
         assert_eq!(manual(&conn), s(&["a", "c"]));
         assert_eq!(clear_tray(&conn).unwrap(), s(&["a", "c"]));
         assert!(manual(&conn).is_empty());
-        assert_eq!(counts(&conn).unwrap().tray, 0);
+        assert_eq!(counts(&conn, None).unwrap().tray, 0);
     }
 
     #[test]
@@ -2314,7 +2336,7 @@ mod tests {
         assert_eq!(find(&conn, f(|f| f.kinds = vec![Kind::Font])), s(&["d"]));
         assert_eq!(find(&conn, f(|f| f.kinds = vec![Kind::Image])), s(&["a", "b", "c"]));
         assert_eq!(find(&conn, f(|f| f.kinds = vec![Kind::Image, Kind::Font])).len(), 4);
-        assert_eq!(counts(&conn).unwrap().kinds, BTreeMap::from([(Kind::Image, 3), (Kind::Font, 1)]));
+        assert_eq!(counts(&conn, None).unwrap().kinds, BTreeMap::from([(Kind::Image, 3), (Kind::Font, 1)]));
 
         // Fonts by writing system and style; the user's style wins over the guess.
         conn.execute("UPDATE items SET font_script = 'ja', font_category = 'gothic' WHERE id = 'd'", []).unwrap();
@@ -2324,7 +2346,7 @@ mod tests {
         assert_eq!(set_font_category(&conn, &s(&["a", "d"]), Some("mincho")).unwrap(), 1, "images are skipped");
         assert!(find(&conn, f(|f| f.font_categories = vec!["gothic".into()])).is_empty());
         assert_eq!(find(&conn, f(|f| f.font_categories = vec!["mincho".into()])), s(&["d"]));
-        let c = counts(&conn).unwrap();
+        let c = counts(&conn, None).unwrap();
         assert_eq!((c.font_scripts, c.font_categories), (
             BTreeMap::from([("ja".to_string(), 1)]),
             BTreeMap::from([("mincho".to_string(), 1)])
@@ -2333,9 +2355,49 @@ mod tests {
         conn.execute("UPDATE items SET font_category = NULL WHERE id = 'd'", []).unwrap();
         assert_eq!(find(&conn, f(|f| f.font_categories = vec!["none".into()])), s(&["d"]), "unknown style");
         assert_eq!(
-            list_exts(&conn).unwrap(),
+            list_exts(&conn, None).unwrap(),
             vec![("png".to_string(), 2), ("jpg".to_string(), 1), ("tif".to_string(), 1)]
         );
+    }
+
+    #[test]
+    fn counts_of_one_kind() {
+        let mut conn = mem();
+        add(&mut conn, "a", "cat.png", 1);
+        add(&mut conn, "b", "dog.png", 2);
+        add(&mut conn, "f", "font.ttf", 3);
+        conn.execute("UPDATE items SET kind = 'font', ext = 'ttf', width = 0, height = 0 WHERE id = 'f'", []).unwrap();
+        let folder = create_folder(&conn, "Mixed", None).unwrap();
+        move_to_folder(&conn, &s(&["a", "f"]), &folder).unwrap();
+        add_tags(&mut conn, &s(&["b", "f"]), &s(&["pet"])).unwrap();
+        set_favorite(&conn, &s(&["f"]), true).unwrap();
+        trash_items(&conn, &s(&["b"])).unwrap();
+        create_smart_folder(&conn, "Pets", &Rule { tag_ids: vec![1], ..Default::default() }).unwrap();
+
+        // Everything, as before.
+        let all = counts(&conn, None).unwrap();
+        assert_eq!((all.all, all.unfiled, all.untagged, all.trash, all.favorites), (2, 0, 1, 1, 1));
+        assert_eq!(all.kinds, BTreeMap::from([(Kind::Image, 1), (Kind::Font, 1)]));
+        assert_eq!(list_folders(&conn, None).unwrap()[0].count, 2);
+        assert_eq!(list_tags(&conn, None).unwrap()[0].count, 1, "b is in the trash");
+        assert_eq!(list_exts(&conn, None).unwrap().len(), 2);
+
+        // Fonts only: images don't count, but `kinds` still lists both.
+        let fonts = counts(&conn, Some(Kind::Font)).unwrap();
+        assert_eq!((fonts.all, fonts.unfiled, fonts.untagged, fonts.trash, fonts.favorites), (1, 0, 0, 0, 1));
+        assert_eq!(fonts.kinds, all.kinds);
+        assert_eq!(list_folders(&conn, Some(Kind::Font)).unwrap()[0].count, 1);
+        assert_eq!(list_tags(&conn, Some(Kind::Font)).unwrap()[0].count, 1);
+        assert_eq!(list_smart_folders(&conn, Some(Kind::Font)).unwrap()[0].count, 1);
+        assert_eq!(list_exts(&conn, Some(Kind::Font)).unwrap(), vec![("ttf".to_string(), 1)]);
+
+        // Images only.
+        let images = counts(&conn, Some(Kind::Image)).unwrap();
+        assert_eq!((images.all, images.unfiled, images.untagged, images.trash, images.favorites), (1, 0, 1, 1, 0));
+        assert_eq!(list_folders(&conn, Some(Kind::Image)).unwrap()[0].count, 1);
+        assert_eq!(list_tags(&conn, Some(Kind::Image)).unwrap()[0].count, 0);
+        assert_eq!(list_smart_folders(&conn, Some(Kind::Image)).unwrap()[0].count, 0);
+        assert_eq!(list_exts(&conn, Some(Kind::Image)).unwrap(), vec![("png".to_string(), 1)]);
     }
 
     #[test]
@@ -2346,11 +2408,11 @@ mod tests {
         add(&mut conn, "c", "cat2.png", 3);
         set_rating(&conn, &s(&["a", "b"]), 4).unwrap();
         add_tags(&mut conn, &s(&["a", "c"]), &s(&["pet"])).unwrap();
-        let pet = list_tags(&conn).unwrap()[0].id;
+        let pet = list_tags(&conn, None).unwrap()[0].id;
 
         let rule = Rule { min_rating: 3, ..Default::default() };
         let id = create_smart_folder(&conn, "Good", &rule).unwrap();
-        let list = list_smart_folders(&conn).unwrap();
+        let list = list_smart_folders(&conn, None).unwrap();
         assert_eq!((list[0].name.as_str(), list[0].count), ("Good", 2));
         assert_eq!(list[0].rule, rule);
 
@@ -2362,18 +2424,18 @@ mod tests {
 
         let rule = Rule { tag_ids: vec![pet], search: "cat".into(), ..Default::default() };
         update_smart_folder(&conn, &id, Some("Cats"), Some(&rule)).unwrap();
-        assert_eq!(list_smart_folders(&conn).unwrap()[0].count, 2);
+        assert_eq!(list_smart_folders(&conn, None).unwrap()[0].count, 2);
         // Trashed items don't count.
         trash_items(&conn, &s(&["c"])).unwrap();
-        assert_eq!(list_smart_folders(&conn).unwrap()[0].count, 1);
+        assert_eq!(list_smart_folders(&conn, None).unwrap()[0].count, 1);
         // A deleted tag drops out of the rule instead of matching nothing.
         delete_tag(&conn, pet).unwrap();
-        let sf = &list_smart_folders(&conn).unwrap()[0];
+        let sf = &list_smart_folders(&conn, None).unwrap()[0];
         assert!(sf.rule.tag_ids.is_empty());
         assert_eq!(sf.count, 1); // just "cat" now (c is trashed)
 
         delete_smart_folder(&conn, &id).unwrap();
-        assert!(list_smart_folders(&conn).unwrap().is_empty());
+        assert!(list_smart_folders(&conn, None).unwrap().is_empty());
         let query = q(View::Smart { id });
         assert!(query_items(&conn, &query).unwrap().is_empty(), "deleted smart folder shows nothing");
     }
@@ -2382,7 +2444,7 @@ mod tests {
     fn folder_order() {
         let mut conn = mem();
         let names = |conn: &Connection, parent: Option<&str>| -> Vec<String> {
-            list_folders(conn)
+            list_folders(conn, None)
                 .unwrap()
                 .into_iter()
                 .filter(|f| f.parent_id.as_deref() == parent)
@@ -2434,7 +2496,7 @@ mod tests {
         )
         .unwrap();
         migrate(&conn).unwrap();
-        let folders = list_folders(&conn).unwrap();
+        let folders = list_folders(&conn, None).unwrap();
         let under = |p: Option<&str>| -> Vec<&str> {
             folders.iter().filter(|f| f.parent_id.as_deref() == p).map(|f| f.name.as_str()).collect()
         };
@@ -2466,13 +2528,13 @@ mod tests {
 
         // Folder order (Zeta before Alpha, not re-seeded A→Z), manual item
         // order, smart folders and ratings all survive.
-        let names: Vec<String> = list_folders(&conn).unwrap().into_iter().map(|x| x.name).collect();
+        let names: Vec<String> = list_folders(&conn, None).unwrap().into_iter().map(|x| x.name).collect();
         assert_eq!(names, ["Zeta", "Alpha"]);
         let _ = g;
         let mut query = q(View::Folder { id: f });
         query.sort = SortKey::Manual;
         assert_eq!(ids(query_items(&conn, &query).unwrap()), s(&["b", "a"]));
-        assert_eq!(list_smart_folders(&conn).unwrap().len(), 1);
+        assert_eq!(list_smart_folders(&conn, None).unwrap().len(), 1);
         assert_eq!(get_items(&conn, &s(&["a"])).unwrap()[0].rating, 5);
     }
 
@@ -2530,7 +2592,7 @@ mod tests {
         let v: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
         assert_eq!(v, SCHEMA_VERSION);
         assert!(has_column(&conn, "items", "preview").unwrap());
-        assert!(list_smart_folders(&conn).unwrap().is_empty());
+        assert!(list_smart_folders(&conn, None).unwrap().is_empty());
         let (phash, pos): (i64, f64) = conn
             .query_row(
                 "SELECT phash, position FROM items JOIN item_folders ON item_id = id",

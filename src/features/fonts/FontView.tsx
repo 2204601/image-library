@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type FontInfo, type Item } from "../lib/api";
-import { countMissing, Sample } from "./FontSample";
+import type { Item } from "../../lib/api";
+import { fontApi, type FontInfo } from "./api";
+import { countMissing, Sample } from "./Sample";
 
 const SAMPLE_JA = "あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら";
 const SAMPLE_EN = "The quick brown fox jumps over the lazy dog 0123456789";
@@ -30,14 +31,14 @@ export function FontView({ item }: { item: Item }) {
     setInfo(null);
     setFamily(null);
     setFailed(false);
-    api
-      .fontInfo(item.id, face)
+    fontApi
+      .info(item.id, face)
       .then((i) => alive && setInfo(i))
       .catch(() => alive && setFailed(true));
     // A unique name per item and face, so fonts with the same family don't clash.
     const name = `il-font-${item.id}-${face}`;
-    api
-      .fontData(item.id, face)
+    fontApi
+      .data(item.id, face)
       .then((data) => new FontFace(name, data).load())
       .then((f) => {
         if (!alive) return;

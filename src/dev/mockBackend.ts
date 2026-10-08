@@ -384,6 +384,10 @@ function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
   return out;
 }
 
+/** Keeps items of `kind` (all when null), like the `kind` argument in db.rs. */
+const ofKind = (kind: string | null | undefined) => (xs: MockItem[]) =>
+  kind ? xs.filter((i) => i.kind === kind) : xs;
+
 function handle(cmd: string, a: any): unknown {
   switch (cmd) {
     case "open_last_library":
@@ -392,15 +396,16 @@ function handle(cmd: string, a: any): unknown {
       return { root: "/mock/Demo.library", name: "Demo (mock)" };
     case "query_items":
       return query(a.query);
-    case "get_counts":
+    case "get_counts": {
+      const of = ofKind(a.kind);
       return {
-        all: live().length,
-        unfiled: live().filter((i) => !folders.some((f) => inFolder(i.id, f.id))).length,
-        untagged: live().filter((i) => !tags.some((t) => hasTag(i.id, t.id))).length,
-        trash: items.length - live().length,
-        favorites: live().filter((i) => i.favorite).length,
-        pinned: live().filter((i) => i.pinnedAt !== null).length,
-        tray: live().filter((i) => tray.has(i.id)).length,
+        all: of(live()).length,
+        unfiled: of(live()).filter((i) => !folders.some((f) => inFolder(i.id, f.id))).length,
+        untagged: of(live()).filter((i) => !tags.some((t) => hasTag(i.id, t.id))).length,
+        trash: of(items).length - of(live()).length,
+        favorites: of(live()).filter((i) => i.favorite).length,
+        pinned: of(live()).filter((i) => i.pinnedAt !== null).length,
+        tray: of(live()).filter((i) => tray.has(i.id)).length,
         kinds: Object.fromEntries(
           (["image", "font"] as const)
             .map((k) => [k, live().filter((i) => i.kind === k).length])
@@ -412,6 +417,7 @@ function handle(cmd: string, a: any): unknown {
           (i) => i.fontCategoryUser ?? i.fontCategory ?? "none",
         ),
       };
+    }
     case "selection_info": {
       const ids: string[] = a.ids;
       return {
@@ -601,7 +607,7 @@ function handle(cmd: string, a: any): unknown {
       webImport.extensionDir = "/Users/mock/Library/Application Support/com.local.imagelibrary/chrome-extension";
       return webImport.extensionDir;
     case "list_folders":
-      return folders.map((f) => ({ ...f, count: live().filter((i) => inFolder(i.id, f.id)).length }));
+      return folders.map((f) => ({ ...f, count: ofKind(a.kind)(live()).filter((i) => inFolder(i.id, f.id)).length }));
     case "place_folder":
       return placeFolder(a.id, a.parentId ?? null, a.before ?? null);
     case "shift_folder": {
@@ -618,7 +624,7 @@ function handle(cmd: string, a: any): unknown {
       reorderSiblings(a.parentId ?? null, (sibs) => [...sibs].sort((x, y) => x.name.localeCompare(y.name)));
       return;
     case "list_smart_folders":
-      return smartFolders.map((f) => ({ ...f, count: applyRule(live(), f.rule).length }));
+      return smartFolders.map((f) => ({ ...f, count: applyRule(ofKind(a.kind)(live()), f.rule).length }));
     case "create_smart_folder": {
       const f = { id: id(), name: a.name, rule: a.rule, color: null };
       smartFolders.push(f);
@@ -635,7 +641,7 @@ function handle(cmd: string, a: any): unknown {
       return;
     case "list_exts": {
       const m = new Map<string, number>();
-      live().forEach((i) => m.set(aliases(i.ext), (m.get(aliases(i.ext)) ?? 0) + 1));
+      ofKind(a.kind)(live()).forEach((i) => m.set(aliases(i.ext), (m.get(aliases(i.ext)) ?? 0) + 1));
       return [...m.entries()].sort((x, y) => y[1] - x[1]);
     }
     case "create_folder": {
@@ -671,7 +677,7 @@ function handle(cmd: string, a: any): unknown {
     case "list_tags":
       return [...tags]
         .sort((x, y) => x.name.localeCompare(y.name))
-        .map((t) => ({ ...t, count: live().filter((i) => hasTag(i.id, t.id)).length })) satisfies Tag[];
+        .map((t) => ({ ...t, count: ofKind(a.kind)(live()).filter((i) => hasTag(i.id, t.id)).length })) satisfies Tag[];
     case "add_tags":
       addTags(a.ids, a.names);
       return;

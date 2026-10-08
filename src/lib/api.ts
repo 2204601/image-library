@@ -17,6 +17,9 @@ export const KINDS: { kind: ItemKind; label: string }[] = [
 
 export const kindLabel = (k: ItemKind) => KINDS.find((x) => x.kind === k)?.label ?? k;
 
+/** File types imported as fonts (src-tauri/src/formats.rs `is_font`). */
+export const FONT_EXTS = ["ttf", "otf", "woff", "woff2", "ttc", "otc"];
+
 /** Writing systems fonts are filed under (src-tauri/src/fonts.rs `SCRIPTS`). */
 export const FONT_SCRIPTS: { key: string; label: string }[] = [
   { key: "ja", label: "日本語" },
@@ -92,50 +95,6 @@ export interface Item {
   distance?: number;
 }
 
-export interface FontAxis {
-  /** e.g. "wght" (weight), "wdth" (width), "ital". */
-  tag: string;
-  name: string;
-  min: number;
-  default: number;
-  max: number;
-}
-
-export interface FontFaceInfo {
-  family: string;
-  style: string;
-  fullName: string;
-  weight: number;
-  italic: boolean;
-  glyphs: number;
-  /** Characters the font has (not counting spaces). */
-  charCount: number;
-  version: string;
-  /** Designer, else the foundry. */
-  designer: string;
-  /** Variation axes; empty unless it is a variable font. */
-  axes: FontAxis[];
-  /** Named styles of a variable font ("Thin", "Bold", ...). */
-  instances: string[];
-}
-
-/** What the list layout shows for a font. */
-export interface FontListPreview {
-  /** A sample line the font fully covers (or the characters it has). */
-  sample: string;
-  /** Style of the first font in the file, e.g. "Bold", "W3". */
-  style: string;
-  /** Fonts in the file (several for TTC / OTC). */
-  faces: number;
-}
-
-export interface FontInfo {
-  /** Every font in the file (several for TTC / OTC). */
-  faces: FontFaceInfo[];
-  /** Every character of the requested font (code points), in order. */
-  chars: number[];
-}
-
 /** "1200 × 800", or the kind for files without a pixel size. */
 export function sizeLabel(item: Pick<Item, "kind" | "width" | "height">): string {
   return item.kind === "font" ? "フォント" : `${item.width} × ${item.height}`;
@@ -172,7 +131,11 @@ export type Shape = "landscape" | "portrait" | "square";
 
 /** Attribute filters (the filter bar). Empty / null = no restriction. */
 export interface Filter {
-  /** Any of these kinds (the sidebar's "種類"). */
+  /**
+   * Any of these kinds. The app shows one kind at a time (store `mode`), so
+   * ad-hoc queries set this from the mode; smart folders keep the mode they
+   * were saved in here (empty = made before modes: shown in every mode).
+   */
   kinds: ItemKind[];
   /** Fonts of any of these writing systems / styles (sidebar, under "フォント"). */
   fontScripts: string[];
@@ -252,7 +215,7 @@ export interface Counts {
   pinned: number;
   /** Items on the work tray (not in the trash). */
   tray: number;
-  /** Items not in the trash, by kind (kinds with none are missing). */
+  /** Items not in the trash, by kind, whatever kind was asked for (the mode switch). */
   kinds: Partial<Record<ItemKind, number>>;
   /** Fonts not in the trash by writing system and by style ("none" = unknown). */
   fontScripts: Record<string, number>;
@@ -315,7 +278,8 @@ export const api = {
   openLibrary: (path: string) => invoke<LibraryInfo>("open_library", { path }),
 
   queryItems: (query: ItemQuery) => invoke<Item[]>("query_items", { query }),
-  getCounts: () => invoke<Counts>("get_counts"),
+  /** Totals for the sidebar; with `kind`, of that kind only (`kinds` always has every kind). */
+  getCounts: (kind?: ItemKind) => invoke<Counts>("get_counts", { kind: kind ?? null }),
   selectionInfo: (ids: string[]) => invoke<SelectionInfo>("selection_info", { ids }),
   setNote: (id: string, note: string) => invoke<void>("set_note", { id, note }),
   renameItem: (id: string, name: string) => invoke<void>("rename_item", { id, name }),
@@ -329,15 +293,6 @@ export const api = {
   setFavorite: (ids: string[], on: boolean) => invoke<void>("set_favorite", { ids, on }),
   /** Pinned items come first in every list. */
   setPinned: (ids: string[], on: boolean) => invoke<void>("set_pinned", { ids, on }),
-  fontInfo: (id: string, face: number) => invoke<FontInfo>("font_info", { id, face }),
-  fontListPreview: (id: string) => invoke<FontListPreview>("font_list_preview", { id }),
-  /** Sets fonts' typeface style by hand; null = back to the guess. */
-  setFontCategory: (ids: string[], category: string | null) =>
-    invoke<number>("set_font_category", { ids, category }),
-  /** Names and details of every font in the file, without the characters. */
-  fontFaces: (id: string) => invoke<FontFaceInfo[]>("font_faces", { id }),
-  /** One font of the file as plain OpenType data, for `new FontFace()`. */
-  fontData: (id: string, face: number) => invoke<ArrayBuffer>("font_data", { id, face }),
   orientItems: (ids: string[], op: OrientOp) => invoke<number>("orient_items", { ids, op }),
   copyItems: (ids: string[]) => invoke<number>("copy_items", { ids }),
   exportItems: (ids: string[], dest: string) => invoke<number>("export_items", { ids, dest }),
@@ -373,8 +328,6 @@ export const api = {
   /** Answers an extension's request to connect (the "web-pair" event). */
   answerWebPair: (id: string, allow: boolean) => invoke<void>("answer_web_pair", { id, allow }),
   indexSimilar: () => invoke<number>("index_similar"),
-  /** Reads the family of fonts imported before it was stored; returns how many. */
-  indexFonts: () => invoke<number>("index_fonts"),
   /** Treats these images as "not duplicates" so they aren't proposed together again. */
   dismissDuplicates: (ids: string[]) => invoke<void>("dismiss_duplicates", { ids }),
   undismissDuplicates: (ids: string[]) => invoke<void>("undismiss_duplicates", { ids }),
@@ -388,7 +341,8 @@ export const api = {
   resolveDuplicates: (groups: { keep: string; remove: string[] }[]) =>
     invoke<DuplicateEffect[]>("resolve_duplicates", { groups }),
 
-  listFolders: () => invoke<Folder[]>("list_folders"),
+  /** Folder counts are of `kind` when given (the mode). */
+  listFolders: (kind?: ItemKind) => invoke<Folder[]>("list_folders", { kind: kind ?? null }),
   createFolder: (name: string, parentId: string | null) =>
     invoke<string>("create_folder", { name, parentId }),
   renameFolder: (id: string, name: string) => invoke<void>("rename_folder", { id, name }),
@@ -404,16 +358,16 @@ export const api = {
   /** -1 / +1 = up / down one; very large values move to the top / bottom. */
   shiftFolder: (id: string, by: number) => invoke<void>("shift_folder", { id, by }),
   sortFoldersByName: (parentId: string | null) => invoke<void>("sort_folders_by_name", { parentId }),
-  listSmartFolders: () => invoke<SmartFolder[]>("list_smart_folders"),
+  listSmartFolders: (kind?: ItemKind) => invoke<SmartFolder[]>("list_smart_folders", { kind: kind ?? null }),
   createSmartFolder: (name: string, rule: Rule) => invoke<string>("create_smart_folder", { name, rule }),
   updateSmartFolder: (id: string, patch: { name?: string; rule?: Rule }) =>
     invoke<void>("update_smart_folder", { id, name: patch.name ?? null, rule: patch.rule ?? null }),
   deleteSmartFolder: (id: string) => invoke<void>("delete_smart_folder", { id }),
-  listExts: () => invoke<[string, number][]>("list_exts"),
+  listExts: (kind?: ItemKind) => invoke<[string, number][]>("list_exts", { kind: kind ?? null }),
   removeFromFolder: (ids: string[], folderId: string) =>
     invoke<void>("remove_from_folder", { ids, folderId }),
 
-  listTags: () => invoke<Tag[]>("list_tags"),
+  listTags: (kind?: ItemKind) => invoke<Tag[]>("list_tags", { kind: kind ?? null }),
   addTags: (ids: string[], names: string[]) => invoke<void>("add_tags", { ids, names }),
   removeTag: (ids: string[], tagId: number) => invoke<void>("remove_tag", { ids, tagId }),
   renameTag: (id: number, name: string) => invoke<void>("rename_tag", { id, name }),

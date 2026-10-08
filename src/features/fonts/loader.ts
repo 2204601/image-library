@@ -2,7 +2,7 @@
 // font row draws its sample in its own font. Only rows on screen ask, and the
 // least recently used fonts are dropped so scrolling through hundreds of
 // (often large, Japanese) fonts doesn't pile them all up in memory.
-import { api, type FontListPreview } from "./api";
+import { fontApi, type FontListPreview } from "./api";
 
 /** Fonts kept loaded at once (a screenful of rows, with room to scroll back). */
 const MAX_LOADED = 40;
@@ -23,8 +23,8 @@ export function loadFont(id: string): Promise<string> {
     return hit;
   }
   const name = `il-list-${id}`;
-  const p = api
-    .fontData(id, 0)
+  const p = fontApi
+    .data(id, 0)
     .then((data) => new FontFace(name, data).load())
     .then((f) => {
       // Dropped while loading: don't leave it in the page.
@@ -49,7 +49,7 @@ export function loadFont(id: string): Promise<string> {
 export function fontPreview(id: string): Promise<FontListPreview> {
   let p = previews.get(id);
   if (!p) {
-    p = api.fontListPreview(id);
+    p = fontApi.listPreview(id);
     p.catch(() => previews.delete(id));
     previews.set(id, p);
   }
@@ -65,7 +65,7 @@ export function fontChars(id: string): Promise<Set<number>> {
   if (p) {
     charSets.delete(id);
   } else {
-    p = api.fontInfo(id, 0).then((i) => new Set(i.chars));
+    p = fontApi.info(id, 0).then((i) => new Set(i.chars));
     p.catch(() => charSets.get(id) === p && charSets.delete(id));
   }
   charSets.set(id, p);

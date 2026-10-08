@@ -133,6 +133,8 @@ export function FilterBar() {
   const editing = useStore((s) => s.editingSmart);
   const active = useStore(activeConditions);
   const clearConditions = useStore((s) => s.clearConditions);
+  // Shape and pixel size are of images (fonts have none).
+  const sized = useStore((s) => s.mode === "image");
 
   const toggle = <K extends "exts" | "shapes">(key: K, v: Filter[K][number]) => {
     const cur = filter[key] as string[];
@@ -177,6 +179,7 @@ export function FilterBar() {
           }
         </Popover>
 
+        {sized && (
         <div className="flex h-7 overflow-hidden rounded-md border border-line text-xs">
           {(Object.keys(SHAPE_LABEL) as Shape[]).map((sh, i) => (
             <button
@@ -190,7 +193,9 @@ export function FilterBar() {
             </button>
           ))}
         </div>
+        )}
 
+        {sized && (
         <Popover
           label="画像サイズ"
           value={describeDims(filter)}
@@ -210,6 +215,7 @@ export function FilterBar() {
             </div>
           )}
         </Popover>
+        )}
 
         <Popover
           label="追加日"

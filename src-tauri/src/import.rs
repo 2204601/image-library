@@ -547,7 +547,7 @@ mod tests {
         let g = lib.lock().unwrap();
         let l = g.as_ref().unwrap();
         // The dropped directory is recreated as F/src/sub.
-        let folders = db::list_folders(&l.conn).unwrap();
+        let folders = db::list_folders(&l.conn, None).unwrap();
         let src = folders.iter().find(|f| f.name == "src").unwrap();
         let sub = folders.iter().find(|f| f.name == "sub").unwrap();
         assert_eq!(src.parent_id.as_deref(), Some(target.as_str()));
@@ -587,7 +587,7 @@ mod tests {
         let sum = run(&lib, collect_files(std::slice::from_ref(&dir)), None, |_, _| {}).unwrap();
         assert_eq!((sum.imported, sum.duplicates), (1, 1));
         let g = lib.lock().unwrap();
-        let folders = db::list_folders(&g.as_ref().unwrap().conn).unwrap();
+        let folders = db::list_folders(&g.as_ref().unwrap().conn, None).unwrap();
         assert_eq!(folders.len(), 1);
         assert_eq!(folders[0].count, 2);
     }

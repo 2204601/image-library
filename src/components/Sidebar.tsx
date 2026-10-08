@@ -35,9 +35,10 @@ import {
   shiftFolder,
   sortFoldersByName,
 } from "../lib/actions";
-import { api, FONT_CATEGORIES, FONT_SCRIPTS, KINDS, type Folder, type ItemKind, type View } from "../lib/api";
+import { FontFilters } from "../features/fonts/FontFilters";
+import { api, KINDS, kindLabel, type Folder, type ItemKind, type View } from "../lib/api";
 import { appVersion, checkForUpdate } from "../lib/update";
-import { activeConditions, useStore } from "../store";
+import { activeConditions, useStore, type Mode } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 import { colorHex } from "../lib/colors";
@@ -70,7 +71,7 @@ function useDropState(dropId: string | undefined) {
   return { over, flash };
 }
 
-function Row({
+export function Row({
   active,
   dropId,
   depth = 0,
@@ -342,7 +343,7 @@ function FolderTree() {
   );
 }
 
-function Section({
+export function Section({
   title,
   action,
   onContextMenu,
@@ -376,6 +377,7 @@ function SmartFolderList() {
   const startEditSmart = useStore((s) => s.startEditSmart);
   const run = useStore((s) => s.run);
   const hasConditions = useStore((s) => activeConditions(s) > 0);
+  const mode = useStore((s) => s.mode);
   const showMenu = useMenu((s) => s.show);
 
   return (
@@ -393,7 +395,7 @@ function SmartFolderList() {
     >
       {smartFolders.length === 0 && (
         <p className="px-2 py-1 text-xs leading-relaxed text-dim">
-          絞り込み（⌘⇧F）の条件を保存すると、当てはまる画像が自動で集まります
+          絞り込み（⌘⇧F）の条件を保存すると、当てはまる{kindLabel(mode)}が自動で集まります
         </p>
       )}
       {smartFolders.map((sf) => (
@@ -437,95 +439,29 @@ const KIND_ICON: Record<ItemKind, React.ReactNode> = {
   font: <Type size={15} />,
 };
 
-/** Clicking a filter row: only this one (again: none); ⌘ / Shift adds or removes it. */
-function pickFrom<T>(cur: T[], v: T, add: boolean): T[] {
-  if (add) return cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
-  return cur.length === 1 && cur[0] === v ? [] : [v];
-}
-
-const isAdd = (e: React.MouseEvent) => e.metaKey || e.ctrlKey || e.shiftKey;
-
-/**
- * Quick filter by kind, on top of the open view (like tags). A click shows
- * only that kind (again: all kinds); ⌘ / Shift + click adds or removes one.
- * With fonts shown, their writing systems and typeface styles appear below.
- */
-function KindList() {
-  const counts = useStore((s) => s.counts);
-  const filter = useStore((s) => s.filter);
-  const setFilter = useStore((s) => s.setFilter);
-  const { kinds, fontScripts, fontCategories } = filter;
-  const fontsOpen = kinds.includes("font");
-  const active = kinds.length + fontScripts.length + fontCategories.length > 0;
-
-  const pickKind = (k: ItemKind, add: boolean) => {
-    const next = pickFrom(kinds, k, add);
-    // The font filters only make sense while fonts are shown.
-    setFilter(next.includes("font") ? { kinds: next } : { kinds: next, fontScripts: [], fontCategories: [] });
-  };
-
-  const sub = (title: string, items: { key: string; label: string }[], counted: Record<string, number>, on: string[], set: (v: string[]) => void) => {
-    const shown = items.filter((x) => counted[x.key] || on.includes(x.key));
-    if (!shown.length) return null;
-    return (
-      <>
-        <div className="mt-1 mb-0.5 pl-9 text-[11px] text-dim">{title}</div>
-        {shown.map((x) => (
-          <Row
-            key={x.key}
-            depth={1}
-            active={on.includes(x.key)}
-            icon={<span className="block h-1.5 w-1.5 rounded-full bg-current" />}
-            label={x.label}
-            count={counted[x.key] ?? 0}
-            title="クリックでこれだけを表示（⌘・Shift+クリックで追加）"
-            onClick={(e) => set(pickFrom(on, x.key, isAdd(e)))}
-          />
-        ))}
-      </>
-    );
-  };
-
+/** Images or fonts: the app shows one kind at a time (⌘1 / ⌘2). */
+function ModeSwitch() {
+  const mode = useStore((s) => s.mode);
+  const setMode = useStore((s) => s.setMode);
+  const kinds = useStore((s) => s.counts.kinds);
   return (
-    <Section
-      title="種類"
-      action={
-        active && (
-          <button
-            title="種類の絞り込みを解除"
-            className="text-dim hover:text-fg"
-            onClick={() => setFilter({ kinds: [], fontScripts: [], fontCategories: [] })}
-          >
-            <X size={14} />
-          </button>
-        )
-      }
-    >
-      {KINDS.map(({ kind, label }) => (
-        <div key={kind}>
-          <Row
-            active={kinds.includes(kind)}
-            icon={KIND_ICON[kind]}
-            label={label}
-            count={counts.kinds[kind] ?? 0}
-            title={
-              kind === "font"
-                ? "クリックでフォントだけを表示。言語・書体で絞り込めます（⌘・Shift+クリックで追加）"
-                : "クリックでこの種類だけを表示（⌘・Shift+クリックで追加）"
-            }
-            onClick={(e) => pickKind(kind, isAdd(e))}
-          />
-          {kind === "font" && fontsOpen && (
-            <div className="animate-slide-down">
-              {sub("言語", FONT_SCRIPTS, counts.fontScripts, fontScripts, (v) => setFilter({ fontScripts: v }))}
-              {sub("書体", FONT_CATEGORIES, counts.fontCategories, fontCategories, (v) =>
-                setFilter({ fontCategories: v }),
-              )}
-            </div>
-          )}
-        </div>
+    <div className="mx-2 mb-1 flex h-8 items-stretch overflow-hidden rounded-md border border-line text-xs">
+      {KINDS.map(({ kind, label }, i) => (
+        <button
+          key={kind}
+          title={`${label}を表示（⌘${i + 1}）`}
+          aria-pressed={mode === kind}
+          onClick={() => setMode(kind as Mode)}
+          className={`flex flex-1 items-center justify-center gap-1.5 ${i > 0 ? "border-l border-line" : ""} ${
+            mode === kind ? "bg-accent/20 font-medium text-accent" : "text-dim hover:bg-white/5 hover:text-fg"
+          }`}
+        >
+          {KIND_ICON[kind]}
+          {label}
+          <span className={`tabular-nums ${mode === kind ? "text-accent/70" : "text-dim/70"}`}>{kinds[kind] ?? 0}</span>
+        </button>
       ))}
-    </Section>
+    </div>
   );
 }
 
@@ -612,6 +548,7 @@ export function Sidebar() {
   const counts = useStore((s) => s.counts);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
+  const mode = useStore((s) => s.mode);
   const showMenu = useMenu((s) => s.show);
 
   const smart: { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string }[] = [
@@ -628,7 +565,8 @@ export function Sidebar() {
       dropId: "tray",
       title: "まとめて出力・書き出しの前に、画像を一時的に集めておく場所（B キーで追加、ここへドラッグでも）",
     },
-    { view: { kind: "similar" }, label: "重複の候補", icon: <Copy size={15} /> },
+    // Look-alikes are found by image hash: images only.
+    ...(mode === "image" ? [{ view: { kind: "similar" } as View, label: "重複の候補", icon: <Copy size={15} /> }] : []),
     { view: { kind: "trash" }, label: "ゴミ箱", icon: <Trash2 size={15} />, count: counts.trash },
   ];
 
@@ -651,6 +589,7 @@ export function Sidebar() {
         <span className="min-w-0 flex-1 truncate font-semibold">{library?.name}</span>
         <ChevronDown size={14} className="text-dim" />
       </button>
+      <ModeSwitch />
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {smart.map((s) => (
           <Row
@@ -677,7 +616,7 @@ export function Sidebar() {
             }
           />
         ))}
-        <KindList />
+        {mode === "font" && <FontFilters />}
         <FolderTree />
         <SmartFolderList />
         <TagList />

@@ -30,32 +30,35 @@ import {
   sheetFromTray,
   similarGroups,
 } from "../lib/actions";
+import { SpecimenControls } from "../features/fonts/SpecimenControls";
 import { fontCategoryLabel, fontScriptLabel, kindLabel, type Folder, type SimilarLevel, type SmartFolder, type SortKey, type View } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
-import { activeConditions, useStore } from "../store";
+import { activeConditions, useStore, type Mode } from "../store";
 import { FilterBar } from "./FilterBar";
-import { DisplayMenu, GroupMenu, LayoutSwitch, SpecimenControls } from "./ViewMenu";
+import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
 
 /** Thin line between groups of controls. */
 const Divider = () => <div className="mx-0.5 h-5 w-px shrink-0 bg-line" />;
 
-const SORTS: { key: SortKey; label: string }[] = [
+/** Sort keys; `only` limits one to a mode (fonts have no pixel size). */
+const SORTS: { key: SortKey; label: string; only?: Mode }[] = [
   { key: "importedAt", label: "追加日" },
   { key: "name", label: "名前" },
   { key: "size", label: "ファイルサイズ" },
-  { key: "dimensions", label: "画像サイズ" },
+  { key: "dimensions", label: "画像サイズ", only: "image" },
   { key: "rating", label: "評価" },
   { key: "manual", label: "手動（ドラッグで並べ替え）" },
 ];
 
-const SEARCH_HELP = [
-  "名前・メモ・タグ・フォント名を検索",
-  "  空白区切り … すべてを含む",
-  "  -語 … 除外",
-  "  A OR B / A || B … どちらか",
-  "  ( ) … グループ化、\"語句\" … 完全一致",
-].join("\n");
+const searchHelp = (mode: Mode) =>
+  [
+    mode === "font" ? "名前・ファミリー名・メモ・タグを検索" : "名前・メモ・タグを検索",
+    "  空白区切り … すべてを含む",
+    "  -語 … 除外",
+    "  A OR B / A || B … どちらか",
+    "  ( ) … グループ化、\"語句\" … 完全一致",
+  ].join("\n");
 
 function viewTitle(view: View, folders: Folder[], smart: SmartFolder[]): string {
   switch (view.kind) {
@@ -110,6 +113,8 @@ export function Toolbar() {
   const editingSmart = useStore((s) => s.editingSmart);
   const startEditSmart = useStore((s) => s.startEditSmart);
   const conditions = useStore(activeConditions);
+  const mode = useStore((s) => s.mode);
+  const sorts = SORTS.filter((s) => !s.only || s.only === mode);
   const smart = view.kind === "smart" ? smartFolders.find((f) => f.id === view.id) : undefined;
   const isTrash = view.kind === "trash";
   const isFolder = view.kind === "folder";
@@ -164,7 +169,7 @@ export function Toolbar() {
         </div>
         <div className="flex min-w-0 items-center gap-2">
           <label
-            title={SEARCH_HELP}
+            title={searchHelp(mode)}
             className="flex h-8 w-60 min-w-28 shrink items-center gap-2 rounded-md border border-line bg-bg px-2 focus-within:border-accent @max-xl:w-auto @max-xl:min-w-0 @max-xl:flex-1"
           >
             <Search size={14} className="shrink-0 text-dim" />
@@ -239,7 +244,7 @@ export function Toolbar() {
             // One bordered group, like the other controls.
             <div className="flex h-8 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
               <button
-                title="画像を追加"
+                title={`${kindLabel(mode)}を追加`}
                 onClick={importFilesDialog}
                 className="flex items-center gap-1.5 px-2.5 whitespace-nowrap hover:bg-white/5"
               >
@@ -350,7 +355,7 @@ export function Toolbar() {
               onChange={(e) => setSort(e.target.value as SortKey, desc)}
               className="absolute inset-0 cursor-default opacity-0"
             >
-              {SORTS.map((s) => (
+              {sorts.map((s) => (
                 <option key={s.key} value={s.key} disabled={s.key === "manual" && !canManual}>
                   {s.key === "manual" && !canManual ? "手動（フォルダ・作業台のみ）" : s.label}
                 </option>
@@ -461,12 +466,6 @@ function ActiveFilters({ count }: { count: number }) {
     });
   });
   if (minRating) chips.push({ key: "rating", label: `★${minRating} 以上`, clear: () => setMinRating(0) });
-  if (filter.kinds.length)
-    chips.push({
-      key: "kinds",
-      label: `種類: ${filter.kinds.map(kindLabel).join("・")}`,
-      clear: () => setFilter({ kinds: [] }),
-    });
   if (filter.fontScripts.length)
     chips.push({
       key: "fontScripts",

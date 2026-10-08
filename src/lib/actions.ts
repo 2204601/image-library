@@ -1,6 +1,6 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, type Item, type OrientOp } from "./api";
+import { api, EMPTY_FILTER, FONT_EXTS, kindLabel, type Item, type OrientOp } from "./api";
 import { activeConditions, currentFolderId, useStore } from "../store";
 
 const st = () => useStore.getState();
@@ -51,12 +51,14 @@ export function importPaths(paths: string[], folderId?: string) {
   return guarded(async () => st().importDone(await api.importPaths(paths, folder)));
 }
 
+/** Picks files of the current mode's kind (any supported file can still be dropped). */
 export async function importFilesDialog() {
-  const exts = await api.supportedExts();
+  const mode = st().mode;
+  const exts = (await api.supportedExts()).filter((e) => FONT_EXTS.includes(e) === (mode === "font"));
   const picked = await open({
-    title: "画像を追加",
+    title: `${kindLabel(mode)}を追加`,
     multiple: true,
-    filters: [{ name: "画像・フォント", extensions: [...exts, ...exts.map((e) => e.toUpperCase())] }],
+    filters: [{ name: kindLabel(mode), extensions: [...exts, ...exts.map((e) => e.toUpperCase())] }],
   });
   if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
 }

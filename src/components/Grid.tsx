@@ -26,18 +26,8 @@ import {
   togglePinned,
   toggleTray,
 } from "../lib/actions";
-import {
-  api,
-  fontCategoryLabel,
-  fontCategoryOf,
-  fontScriptLabel,
-  formatBytes,
-  sizeLabel,
-  type FontListPreview,
-  type Item,
-} from "../lib/api";
-import { fontChars, fontPreview, loadFont } from "../lib/fontLoader";
-import { Sample } from "./FontSample";
+import { FontListCells, SpecimenRow } from "../features/fonts/FontRows";
+import { api, formatBytes, kindLabel, sizeLabel, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import type { Section } from "../lib/grouping";
 import {
@@ -51,7 +41,7 @@ import {
   visibleRange,
   type Placement,
 } from "../lib/layouts";
-import { activeConditions, currentFolderId, useStore, type ShowInfo } from "../store";
+import { activeConditions, currentFolderId, MODES, useStore, type Mode, type ShowInfo } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 
@@ -69,7 +59,7 @@ function focusIndex(s: { items: Item[]; focus: string | null }): number {
   return s.items.findIndex((i) => i.id === s.focus);
 }
 
-function onItemPointerDown(e: React.PointerEvent, item: Item, index: number) {
+export function onItemPointerDown(e: React.PointerEvent, item: Item, index: number) {
   if (e.button !== 0) return;
   e.stopPropagation();
   focusAt = index;
@@ -107,7 +97,7 @@ function Thumb({ item, fit }: { item: Item; fit: "cover" | "contain" }) {
   );
 }
 
-type CellProps = {
+export type CellProps = {
   item: Item;
   index: number;
   selected: boolean;
@@ -352,161 +342,7 @@ const ListRow = memo(function ListRow({
   );
 });
 
-/**
- * List row of a font: family and style, then a sample line drawn in the font
- * itself (loaded only while the row is on screen, see lib/fontLoader.ts).
- */
-function FontListCells({ item }: { item: Item }) {
-  const [family, setFamily] = useState<string | null>(null);
-  const [preview, setPreview] = useState<FontListPreview | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let live = true;
-    setFamily(null);
-    setPreview(null);
-    setFailed(false);
-    fontPreview(item.id)
-      .then((p) => live && setPreview(p))
-      .catch(() => live && setFailed(true));
-    loadFont(item.id)
-      .then((f) => live && setFamily(f))
-      .catch(() => live && setFailed(true));
-    return () => {
-      live = false;
-    };
-  }, [item.id]);
-  const style = [preview?.style, preview && preview.faces > 1 ? `ほか ${preview.faces - 1} 個` : ""]
-    .filter(Boolean)
-    .join(" · ");
-  return (
-    <>
-      <span className="flex w-36 shrink-0 flex-col leading-tight" title={item.name}>
-        <span className="truncate text-[13px]">{item.fontFamily || item.name}</span>
-        <span className="truncate text-[11px] text-dim">{style || item.name}</span>
-      </span>
-      {failed ? (
-        <span className="min-w-0 flex-1 truncate text-dim">見本を表示できません</span>
-      ) : (
-        <span
-          className={`min-w-0 flex-1 truncate text-[20px] leading-none transition-opacity duration-200 ${
-            family && preview ? "opacity-100" : "opacity-0"
-          }`}
-          style={{ fontFamily: family ? `"${family}"` : undefined }}
-        >
-          {preview?.sample}
-        </span>
-      )}
-    </>
-  );
-}
-
-/**
- * Specimen layout: a font as a row with its name and a sample line at the
- * chosen size, in the text typed above the list (or the font's own sample).
- * Characters the font lacks are marked. Other items show as list rows.
- */
-const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
-  const { item, index, selected, dimmed, width, height, reorderable, insert, flags } = props;
-  const text = useStore((s) => s.specimenText);
-  const size = useStore((s) => s.specimenSize);
-  const [family, setFamily] = useState<string | null>(null);
-  const [preview, setPreview] = useState<FontListPreview | null>(null);
-  const [has, setHas] = useState<Set<number> | null>(null);
-  const [failed, setFailed] = useState(false);
-  const isFont = item.kind === "font";
-
-  useEffect(() => {
-    if (!isFont) return;
-    let live = true;
-    setFamily(null);
-    setPreview(null);
-    setFailed(false);
-    fontPreview(item.id)
-      .then((p) => live && setPreview(p))
-      .catch(() => live && setFailed(true));
-    loadFont(item.id)
-      .then((f) => live && setFamily(f))
-      .catch(() => live && setFailed(true));
-    return () => {
-      live = false;
-    };
-  }, [item.id, isFont]);
-
-  // The characters are only needed to check typed text.
-  const typed = text.trim() !== "";
-  useEffect(() => {
-    if (!isFont || !typed) return;
-    let live = true;
-    setHas(null);
-    fontChars(item.id)
-      .then((c) => live && setHas(c))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [item.id, isFont, typed]);
-
-  if (!isFont) return <ListRow {...props} />;
-  const category = fontCategoryOf(item);
-  const style = [preview?.style, preview && preview.faces > 1 ? `ほか ${preview.faces - 1} 個` : ""]
-    .filter(Boolean)
-    .join(" · ");
-  return (
-    <div
-      className={`relative flex flex-col justify-center gap-1 overflow-hidden rounded-md border-b border-line/60 px-3 transition-opacity duration-200 ${
-        selected ? "bg-accent/25 text-white" : "hover:bg-white/5"
-      } ${dimmed ? "opacity-35" : ""}`}
-      style={{ width, height }}
-      onPointerDown={(e) => onItemPointerDown(e, item, index)}
-      onDoubleClick={() => useStore.getState().openViewer(index)}
-      onContextMenu={(e) => showItemMenu(e, item, index)}
-      data-drop={reorderable ? `item:${item.id}` : undefined}
-      data-axis="y"
-    >
-      <div className="flex min-w-0 items-baseline gap-2 text-xs">
-        <span className="truncate text-[13px] font-medium">{item.fontFamily || item.name}</span>
-        <span className="shrink-0 text-dim">{style}</span>
-        <span className="min-w-0 truncate text-dim/70">{item.name}</span>
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-dim">
-          {flags && item.pinnedAt !== null && <Pin size={11} className="text-accent" fill="currentColor" />}
-          {flags && item.inTray && <Layers size={11} className="text-emerald-400" />}
-          {flags && item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
-          {item.rating > 0 && <Stars n={item.rating} />}
-          {item.fontScript && <span className="rounded bg-white/8 px-1.5 py-px">{fontScriptLabel(item.fontScript)}</span>}
-          <span
-            className={`rounded px-1.5 py-px ${category === "none" ? "text-dim/70" : "bg-white/8"}`}
-            title={item.fontCategoryUser ? "手で設定した書体" : "自動で判定した書体（詳細パネルで変更できます）"}
-          >
-            {fontCategoryLabel(category)}
-            {item.fontCategoryUser && " ✎"}
-          </span>
-          <span className="uppercase">{item.ext}</span>
-        </span>
-      </div>
-      {failed ? (
-        <span className="text-dim">見本を表示できません</span>
-      ) : (
-        <Sample
-          text={typed ? text : (preview?.sample ?? "")}
-          has={typed ? has : null}
-          style={{ fontFamily: family ? `"${family}"` : undefined, fontSize: size, lineHeight: 1.15 }}
-          className={`block truncate whitespace-pre transition-opacity duration-200 ${
-            family && preview ? "opacity-100" : "opacity-0"
-          }`}
-        />
-      )}
-      {insert && (
-        <span
-          className={`pointer-events-none absolute right-2 left-2 h-0.5 rounded-full bg-accent shadow-[0_0_6px] shadow-accent ${
-            insert === "before" ? "-top-px" : "-bottom-px"
-          }`}
-        />
-      )}
-    </div>
-  );
-});
-
-function Stars({ n, size = 9 }: { n: number; size?: number }) {
+export function Stars({ n, size = 9 }: { n: number; size?: number }) {
   return (
     <span className="flex text-amber-400" title={`★${n}`}>
       {Array.from({ length: n }, (_, i) => (
@@ -516,7 +352,7 @@ function Stars({ n, size = 9 }: { n: number; size?: number }) {
   );
 }
 
-function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
+export function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
   const s = useStore.getState();
   if (!s.selected.has(item.id)) s.select(item.id, "only");
   const ids = [...useStore.getState().selected];
@@ -589,6 +425,7 @@ export function Grid() {
   const kind = useStore((s) => s.layout);
   const showInfo = useStore((s) => s.showInfo);
   const viewKind = useStore((s) => s.view.kind);
+  const mode = useStore((s) => s.mode);
   const keepPick = useStore((s) => s.keepPick);
   // Comparing copies needs their size and format at a glance.
   const info = useMemo(
@@ -757,6 +594,10 @@ export function Grid() {
       // Panels
       if (mod && e.altKey && e.code === "Digit1") return handled(), s.toggleSidebar();
       if (mod && e.altKey && e.code === "Digit2") return handled(), s.toggleInspector();
+      // ⌘1 / ⌘2: images / fonts.
+      if (mod && !e.altKey && !e.shiftKey && (e.code === "Digit1" || e.code === "Digit2")) {
+        return handled(), s.setMode(MODES[e.code === "Digit1" ? 0 : 1]);
+      }
       if (mod && !e.altKey && e.code === "KeyI") return handled(), s.toggleInspector();
       if (e.key === "Tab" && !mod && !e.shiftKey) return handled(), s.toggleSidebar();
 
@@ -868,7 +709,7 @@ export function Grid() {
       onPointerDown={onBackgroundPointerDown}
     >
       {items.length === 0 ? (
-        <Empty kind={viewKind} filtering={filtering} analyzing={analyzing} />
+        <Empty kind={viewKind} mode={mode} filtering={filtering} analyzing={analyzing} />
       ) : (
         <div style={{ height: placement.height, position: "relative" }}>
           {marquee && (
@@ -994,7 +835,8 @@ function GroupHeader({ items, section, keepPick }: { items: Item[]; section: Sec
   );
 }
 
-function Empty({ kind, filtering, analyzing }: { kind: string; filtering: boolean; analyzing: boolean }) {
+function Empty({ kind, mode, filtering, analyzing }: { kind: string; mode: Mode; filtering: boolean; analyzing: boolean }) {
+  const noun = kindLabel(mode);
   if (kind === "trash") return <p className="mt-24 text-center text-dim">ゴミ箱は空です</p>;
   if (kind === "similar")
     return (
@@ -1005,7 +847,7 @@ function Empty({ kind, filtering, analyzing }: { kind: string; filtering: boolea
   if (filtering)
     return (
       <div className="mt-24 flex flex-col items-center gap-3 text-dim">
-        <p>条件に一致する画像はありません</p>
+        <p>条件に一致する{noun}はありません</p>
         <button
           onClick={() => useStore.getState().clearConditions()}
           className="rounded-md bg-accent px-3 py-1.5 font-medium text-white hover:brightness-110"
@@ -1015,17 +857,17 @@ function Empty({ kind, filtering, analyzing }: { kind: string; filtering: boolea
       </div>
     );
   if (kind === "unfiled" || kind === "untagged")
-    return <p className="mt-24 text-center text-dim">該当する画像はありません</p>;
+    return <p className="mt-24 text-center text-dim">該当する{noun}はありません</p>;
   if (kind === "favorites")
     return (
       <p className="mt-24 text-center text-dim">
-        お気に入りはまだありません。画像を選んで F キー、またはサムネイルのハートで追加できます
+        お気に入りはまだありません。{noun}を選んで F キー、またはサムネイルのハートで追加できます
       </p>
     );
   if (kind === "pinned")
     return (
       <p className="mt-24 text-center text-dim">
-        ピン留めした画像はありません。画像を選んで P キーでピン留めすると、どの一覧でも先頭に表示されます
+        ピン留めした{noun}はありません。{noun}を選んで P キーでピン留めすると、どの一覧でも先頭に表示されます
       </p>
     );
   if (kind === "tray")
@@ -1044,19 +886,21 @@ function Empty({ kind, filtering, analyzing }: { kind: string; filtering: boolea
       <div className="mt-24 flex flex-col items-center gap-2 text-dim">
         <ImagePlus size={40} strokeWidth={1.25} />
         <p>このフォルダは空です</p>
-        <p className="text-xs">画像をサイドバーのフォルダへドラッグするか、ここにファイルをドロップして追加</p>
+        <p className="text-xs">{noun}をサイドバーのフォルダへドラッグするか、ここにファイルをドロップして追加</p>
       </div>
     );
   return (
     <div className="mt-24 flex flex-col items-center gap-3 text-dim">
       <ImagePlus size={40} strokeWidth={1.25} />
-      <p>画像やフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け</p>
+      <p>
+        {mode === "font" ? "フォントファイルやフォルダをここにドラッグ&ドロップ" : "画像やフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け"}
+      </p>
       <button
         onPointerDown={(e) => e.stopPropagation()}
         onClick={importFilesDialog}
         className="rounded-md bg-accent px-4 py-1.5 font-medium text-white hover:brightness-110"
       >
-        画像を選択して追加
+        {noun}を選択して追加
       </button>
     </div>
   );
