@@ -56,7 +56,7 @@ export async function importFilesDialog() {
   const picked = await open({
     title: "画像を追加",
     multiple: true,
-    filters: [{ name: "画像", extensions: [...exts, ...exts.map((e) => e.toUpperCase())] }],
+    filters: [{ name: "画像・フォント", extensions: [...exts, ...exts.map((e) => e.toUpperCase())] }],
   });
   if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
 }

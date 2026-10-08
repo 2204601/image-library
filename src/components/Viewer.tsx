@@ -14,10 +14,11 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { orient, setRating, toggleFavorite, togglePinned } from "../lib/actions";
-import { formatBytes, orientTransform, type Item } from "../lib/api";
+import { formatBytes, sizeLabel, orientTransform, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { folderPaths } from "../lib/grouping";
 import { useStore } from "../store";
+import { FontView } from "./FontView";
 import { FlagButtons } from "./Inspector";
 import { RatingStars } from "./RatingStars";
 
@@ -45,6 +46,8 @@ export function Viewer() {
   const suppressClick = useRef(false);
 
   const open = item !== undefined;
+  // Fonts get their own body (sample text) instead of the zoomable image.
+  const isFont = item?.kind === "font";
   useEffect(() => setZoom("fit"), [item?.id]);
 
   useLayoutEffect(() => {
@@ -54,7 +57,7 @@ export function Viewer() {
     ro.observe(el);
     setBox({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
-  }, [open]);
+  }, [open, isFont]);
 
   const pad = 32;
   const fitScale = item
@@ -210,38 +213,42 @@ export function Viewer() {
       <div className="flex items-center gap-3 px-4 py-2 text-sm text-white/80">
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
         <span className="text-xs text-white/40 tabular-nums">
-          {item.width} × {item.height}
+          {sizeLabel(item)}
         </span>
-        <div className="flex items-center gap-1">
-          <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw")}>
-            <RotateCcw size={15} />
-          </button>
-          <button className={tool} title="右に回転（⌘⇧R）" onClick={() => orient([item.id], "rotateCw")}>
-            <RotateCw size={15} />
-          </button>
-        </div>
-        <div className="flex items-center gap-1">
-          <button className={tool} title="縮小（⌘-）" onClick={() => zoomTo(scale / STEP)}>
-            <Minus size={16} />
-          </button>
-          <button
-            className="w-14 rounded px-1 text-center text-xs tabular-nums hover:bg-white/10"
-            title="実寸（⌘0）"
-            onClick={() => zoomTo(1)}
-          >
-            {Math.round(scale * 100)}%
-          </button>
-          <button className={tool} title="拡大（⌘+）" onClick={() => zoomTo(scale * STEP)}>
-            <Plus size={16} />
-          </button>
-          <button
-            className={`${tool} ${zoom === "fit" ? "text-accent" : ""}`}
-            title="全体を表示（⌘9）"
-            onClick={() => setZoom("fit")}
-          >
-            <Maximize size={15} />
-          </button>
-        </div>
+        {!isFont && (
+          <>
+            <div className="flex items-center gap-1">
+              <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw")}>
+                <RotateCcw size={15} />
+              </button>
+              <button className={tool} title="右に回転（⌘⇧R）" onClick={() => orient([item.id], "rotateCw")}>
+                <RotateCw size={15} />
+              </button>
+            </div>
+            <div className="flex items-center gap-1">
+              <button className={tool} title="縮小（⌘-）" onClick={() => zoomTo(scale / STEP)}>
+                <Minus size={16} />
+              </button>
+              <button
+                className="w-14 rounded px-1 text-center text-xs tabular-nums hover:bg-white/10"
+                title="実寸（⌘0）"
+                onClick={() => zoomTo(1)}
+              >
+                {Math.round(scale * 100)}%
+              </button>
+              <button className={tool} title="拡大（⌘+）" onClick={() => zoomTo(scale * STEP)}>
+                <Plus size={16} />
+              </button>
+              <button
+                className={`${tool} ${zoom === "fit" ? "text-accent" : ""}`}
+                title="全体を表示（⌘9）"
+                onClick={() => setZoom("fit")}
+              >
+                <Maximize size={15} />
+              </button>
+            </div>
+          </>
+        )}
         <span className="tabular-nums text-white/50">
           {index + 1} / {items.length}
         </span>
@@ -259,43 +266,47 @@ export function Viewer() {
       </div>
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1">
-          <div
-            ref={boxRef}
-            className={`absolute inset-0 flex overflow-auto ${larger ? "cursor-grab active:cursor-grabbing" : ""}`}
-            onPointerDown={larger ? onPointerDown : undefined}
-            onClick={(e) => {
-              // Clicking the empty backdrop closes, like before.
-              if (e.target === e.currentTarget && !suppressClick.current) openViewer(null);
-            }}
-          >
-            {/* The box has the displayed (turned) size; the original file inside is rotated to fill it. */}
+          {isFont ? (
+            <FontView item={item} />
+          ) : (
             <div
-              key={item.id}
+              ref={boxRef}
+              className={`absolute inset-0 flex overflow-auto ${larger ? "cursor-grab active:cursor-grabbing" : ""}`}
+              onPointerDown={larger ? onPointerDown : undefined}
               onClick={(e) => {
-                e.stopPropagation();
-                if (suppressClick.current) return;
-                // Click toggles fit ↔ 100% around the clicked point.
-                if (zoom === "fit" && fitScale < 1) zoomTo(1, e.clientX, e.clientY);
-                else setZoom("fit");
+                // Clicking the empty backdrop closes, like before.
+                if (e.target === e.currentTarget && !suppressClick.current) openViewer(null);
               }}
-              style={{ width: item.width * scale, height: item.height * scale }}
-              className={`relative m-auto shrink-0 animate-zoom-in ${
-                larger ? "" : zoom === "fit" && fitScale < 1 ? "cursor-zoom-in" : "cursor-zoom-out"
-              }`}
             >
-              <img
-                src={convertFileSrc(item.displayPath)}
-                alt={item.name}
-                draggable={false}
-                style={{
-                  width: (sideways ? item.height : item.width) * scale,
-                  height: (sideways ? item.width : item.height) * scale,
-                  transform: `translate(-50%, -50%) ${orientTransform(item)}`,
+              {/* The box has the displayed (turned) size; the original file inside is rotated to fill it. */}
+              <div
+                key={item.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (suppressClick.current) return;
+                  // Click toggles fit ↔ 100% around the clicked point.
+                  if (zoom === "fit" && fitScale < 1) zoomTo(1, e.clientX, e.clientY);
+                  else setZoom("fit");
                 }}
-                className="absolute top-1/2 left-1/2 max-w-none"
-              />
+                style={{ width: item.width * scale, height: item.height * scale }}
+                className={`relative m-auto shrink-0 animate-zoom-in ${
+                  larger ? "" : zoom === "fit" && fitScale < 1 ? "cursor-zoom-in" : "cursor-zoom-out"
+                }`}
+              >
+                <img
+                  src={convertFileSrc(item.displayPath)}
+                  alt={item.name}
+                  draggable={false}
+                  style={{
+                    width: (sideways ? item.height : item.width) * scale,
+                    height: (sideways ? item.width : item.height) * scale,
+                    transform: `translate(-50%, -50%) ${orientTransform(item)}`,
+                  }}
+                  className="absolute top-1/2 left-1/2 max-w-none"
+                />
+              </div>
             </div>
-          </div>
+          )}
           <button className={`${nav} left-4`} disabled={index === 0} onClick={() => show(index - 1)}>
             <ChevronLeft size={24} />
           </button>
@@ -331,9 +342,9 @@ function Details({ item, items }: { item: Item; items: Item[] }) {
           {item.name}
         </div>
         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-white/70">
-          <dt className="text-white/45">サイズ</dt>
+          <dt className="text-white/45">{item.kind === "font" ? "種類" : "サイズ"}</dt>
           <dd className="tabular-nums">
-            {item.width} × {item.height}
+            {sizeLabel(item)}
           </dd>
           <dt className="text-white/45">形式</dt>
           <dd>

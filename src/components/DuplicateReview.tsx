@@ -4,7 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { ArrowRight, Check, Trash2 } from "lucide-react";
 import { useEffect } from "react";
 import { confirmDuplicates } from "../lib/actions";
-import { formatBytes, type DuplicateEffect, type Item } from "../lib/api";
+import { formatBytes, sizeLabel, type DuplicateEffect, type Item } from "../lib/api";
 import { useStore } from "../store";
 
 export function DuplicateReview() {
@@ -157,7 +157,7 @@ function Card({ item, keep = false }: { item: Item; keep?: boolean }) {
         {item.name}
       </div>
       <div className="truncate text-dim tabular-nums">
-        {item.width} × {item.height}
+        {sizeLabel(item)}
       </div>
       <div className="truncate text-dim tabular-nums">
         {item.ext.toUpperCase()} · {formatBytes(item.size)}

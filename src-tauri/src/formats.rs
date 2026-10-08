@@ -11,7 +11,14 @@ use std::io::Cursor;
 
 pub const SUPPORTED_EXTS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif",
+    // Fonts (see fonts.rs).
+    "ttf", "otf", "woff", "woff2", "ttc", "otc",
 ];
+
+/// Font files are imported with a rendered sample as their thumbnail.
+pub fn is_font(ext: &str) -> bool {
+    matches!(ext, "ttf" | "otf" | "woff" | "woff2" | "ttc" | "otc")
+}
 
 /// Formats the web view can't show reliably on every platform (WebView2 has
 /// no HEIC / TIFF support), so a JPEG copy is kept for full-size display.

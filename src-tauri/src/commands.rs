@@ -282,6 +282,38 @@ pub async fn orient_items(app: AppHandle, ids: Vec<String>, op: crate::orient::O
     .map_err(err)?
 }
 
+/// The font file of a font item, unpacked (WOFF / WOFF2) and, for a
+/// collection, cut down to one font.
+fn font_sfnt(state: &AppState, id: &str) -> CmdResult<Vec<u8>> {
+    let (item, path) = item_paths(state, &[id.to_string()])?.pop().ok_or("フォントが見つかりません")?;
+    if item.kind != db::Kind::Font {
+        return Err("フォントではありません".into());
+    }
+    crate::fonts::to_sfnt(&fs::read(path).map_err(err)?, &item.ext)
+}
+
+/// Names of every font in the file and the characters of font `face`.
+#[tauri::command]
+pub async fn font_info(app: AppHandle, id: String, face: u32) -> CmdResult<crate::fonts::FontInfo> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::fonts::info(&font_sfnt(&app.state::<AppState>(), &id)?, face)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Font `face` as plain OpenType data, for `new FontFace()` in the viewer
+/// (web views can't load one font out of a collection).
+#[tauri::command]
+pub async fn font_data(app: AppHandle, id: String, face: u32) -> CmdResult<tauri::ipc::Response> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let sfnt = font_sfnt(&app.state::<AppState>(), &id)?;
+        Ok(tauri::ipc::Response::new(crate::fonts::extract_face(&sfnt, face)?))
+    })
+    .await
+    .map_err(err)?
+}
+
 /// Puts the files on the clipboard (paste into Finder / Explorer / chat apps).
 /// A single image is also put on as bitmap data for design tools.
 #[tauri::command]

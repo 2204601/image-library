@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod fonts;
 pub mod formats;
 pub mod import;
 pub mod library;
@@ -37,6 +38,8 @@ pub fn run() {
             set_favorite,
             set_pinned,
             orient_items,
+            font_info,
+            font_data,
             copy_items,
             export_items,
             reorder_in_folder,

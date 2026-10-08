@@ -3,6 +3,7 @@
 //! afterwards in a single transaction.
 
 use crate::db::{self, NewItem};
+use crate::fonts;
 use crate::formats;
 use crate::library::Library;
 use crate::orient::{self, OrientOp, Orientation};
@@ -152,6 +153,7 @@ pub fn orient(lib: &mut Library, ids: &[String], op: OrientOp) -> Result<usize, 
     let thumbs = lib.root.join("thumbs");
     let rendered: Vec<Result<(&db::Item, Orientation, String, (u32, u32)), String>> = items
         .par_iter()
+        .filter(|it| it.kind == db::Kind::Image)
         .filter_map(|it| {
             let from = Orientation::new(it.rotation, it.flipped);
             let to = from.then(op);
@@ -226,6 +228,9 @@ fn process(
         return Ok(Outcome::Duplicate(String::new())); // same file twice in this batch
     }
 
+    if formats::is_font(&ext) {
+        return process_font(name, ext, data, hash, root);
+    }
     let decoded = formats::decode(&data, &ext)?;
     let img = decoded.image;
     let id = uuid::Uuid::new_v4().simple().to_string();
@@ -264,6 +269,7 @@ fn process(
 
     Ok(Outcome::New(NewItem {
         id,
+        kind: db::Kind::Image,
         name,
         file_name,
         ext,
@@ -274,6 +280,35 @@ fn process(
         thumb,
         phash: Some(phash),
         preview,
+    }))
+}
+
+/// Fonts: stored as is, with a rendered sample as the thumbnail. They have no
+/// pixel size (0 × 0) and take no part in the look-alike search.
+fn process_font(name: String, ext: String, data: Vec<u8>, hash: String, root: &Path) -> Result<Outcome, String> {
+    let sfnt = fonts::to_sfnt(&data, &ext)?;
+    let sample = fonts::render_thumb(&sfnt)?;
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let file_name = sanitize(&name);
+    let item_dir = root.join("images").join(&id);
+    fs::create_dir_all(&item_dir).map_err(|e| e.to_string())?;
+    fs::write(item_dir.join(&file_name), &data).map_err(|e| e.to_string())?;
+    let thumb = write_thumb(&sample, &root.join("thumbs"), &id).inspect_err(|_| {
+        let _ = fs::remove_dir_all(&item_dir);
+    })?;
+    Ok(Outcome::New(NewItem {
+        id,
+        kind: db::Kind::Font,
+        name,
+        file_name,
+        ext,
+        width: 0,
+        height: 0,
+        size: data.len() as i64,
+        hash,
+        thumb,
+        phash: None,
+        preview: None,
     }))
 }
 
@@ -673,6 +708,42 @@ mod tests {
         let c = get(l);
         l.delete_items(&ids).unwrap();
         assert!(!l.thumb_path(&c).exists() && !l.thumb_path(&z).exists());
+    }
+
+    #[test]
+    fn imports_fonts_without_pixel_size() {
+        let Some(ttf) = fonts::tests::system_font(fonts::tests::SINGLE) else { return };
+        let (_tmp, lib) = setup();
+        let sources = vec![
+            Source::Bytes { name: "Sample.ttf".into(), data: ttf.clone() },
+            Source::Bytes { name: "Sample.woff".into(), data: fonts::tests::encode_woff(&ttf) },
+            Source::Bytes { name: "square.png".into(), data: png_bytes(DynamicImage::ImageRgb8(RgbImage::new(8, 8))) },
+        ];
+        let sum = run(&lib, sources, None, |_, _| {}).unwrap();
+        assert!(sum.failed.is_empty(), "{:?}", sum.failed);
+        assert_eq!(sum.imported, 3);
+
+        let mut g = lib.lock().unwrap();
+        let l = g.as_mut().unwrap();
+        let all = db::query_items(&l.conn, &db::ItemQuery { sort: db::SortKey::Name, ..Default::default() }).unwrap();
+        let ttf_item = all.iter().find(|i| i.name == "Sample.ttf").unwrap();
+        assert_eq!((ttf_item.kind, ttf_item.width, ttf_item.height), (db::Kind::Font, 0, 0));
+        assert_eq!(fs::read(l.file_path(ttf_item)).unwrap(), ttf, "stored as is");
+        let t = image::open(l.thumb_path(ttf_item)).unwrap();
+        assert_eq!((t.width(), t.height()), (fonts::THUMB_W, fonts::THUMB_H));
+
+        // 0 × 0 must not count as "square", and fonts are never hashed for look-alikes.
+        let square = db::ItemQuery {
+            filter: db::Filter { shapes: vec![db::Shape::Square], ..Default::default() },
+            ..Default::default()
+        };
+        let names: Vec<_> = db::query_items(&l.conn, &square).unwrap().into_iter().map(|i| i.name).collect();
+        assert_eq!(names, ["square.png"]);
+        assert!(db::missing_phashes(&l.conn).unwrap().is_empty());
+
+        // Rotating skips fonts.
+        let ids: Vec<String> = all.iter().map(|i| i.id.clone()).collect();
+        assert_eq!(orient(l, &ids, OrientOp::RotateCw).unwrap(), 1);
     }
 
     #[test]
