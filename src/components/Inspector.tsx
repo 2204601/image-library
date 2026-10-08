@@ -12,7 +12,7 @@ import {
   toggleFavorite,
   togglePinned,
 } from "../lib/actions";
-import { api, formatBytes, sizeLabel, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
+import { api, formatBytes, sizeLabel, type Folder, type FontFaceInfo, type Item, type SelectionInfo, type Tag } from "../lib/api";
 import { useStore } from "../store";
 import { RatingStars } from "./RatingStars";
 
@@ -275,6 +275,85 @@ export function FlagButtons({ ids, items }: { ids: string[]; items: Item[] }) {
   );
 }
 
+const AXIS_LABEL: Record<string, string> = {
+  wght: "太さ",
+  wdth: "幅",
+  ital: "イタリック",
+  slnt: "傾き",
+  opsz: "光学サイズ",
+};
+
+/** Rows of the details list for a font: names, styles, variable axes, maker. */
+function FontDetails({ id }: { id: string }) {
+  const [faces, setFaces] = useState<FontFaceInfo[] | null>(null);
+  useEffect(() => {
+    let live = true;
+    setFaces(null);
+    api
+      .fontFaces(id)
+      .then((f) => live && setFaces(f))
+      .catch(() => live && setFaces([]));
+    return () => {
+      live = false;
+    };
+  }, [id]);
+  if (!faces?.length) return null;
+
+  const f = faces[0];
+  const row = (label: string, value: React.ReactNode, title?: string) => (
+    <>
+      <dt className="text-dim">{label}</dt>
+      <dd className="min-w-0 break-words" title={title}>
+        {value}
+      </dd>
+    </>
+  );
+  const num = (n: number) => String(Math.round(n * 100) / 100);
+  return (
+    <>
+      {row("ファミリー", f.family || "—")}
+      {faces.length > 1
+        ? row(
+            `フォント（${faces.length}）`,
+            <ul className="flex flex-col gap-0.5">
+              {faces.map((x, i) => (
+                <li key={i}>
+                  {x.style || x.fullName}
+                  <span className="text-dim tabular-nums"> · {Math.round(x.weight)}</span>
+                </li>
+              ))}
+            </ul>,
+          )
+        : row(
+            "スタイル",
+            <>
+              {f.style || "—"}
+              <span className="text-dim tabular-nums"> · 太さ {Math.round(f.weight)}</span>
+            </>,
+          )}
+      {f.axes.length > 0 &&
+        row(
+          "可変",
+          <ul className="flex flex-col gap-0.5">
+            {f.axes.map((a) => (
+              <li key={a.tag} className="tabular-nums">
+                {AXIS_LABEL[a.tag] ?? (a.name || a.tag)} {num(a.min)}〜{num(a.max)}
+              </li>
+            ))}
+            {f.instances.length > 0 && (
+              <li className="text-dim" title={f.instances.join("、")}>
+                名前付きのスタイル {f.instances.length} 個
+              </li>
+            )}
+          </ul>,
+        )}
+      {row("文字", `${f.charCount.toLocaleString()} 字 · ${f.glyphs.toLocaleString()} グリフ`)}
+      {f.designer && row("製作", f.designer)}
+      {f.version && row("版", <span className="block truncate">{f.version.replace(/^Version\s*/i, "")}</span>, f.version)}
+    </>
+  );
+}
+
 export function Inspector() {
   const selected = useStore((s) => s.selected);
   const items = useStore((s) => s.items);
@@ -360,6 +439,7 @@ export function Inspector() {
             <dd>
               {single.ext.toUpperCase()} · {formatBytes(single.size)}
             </dd>
+            {single.kind === "font" && <FontDetails id={single.id} />}
             <dt className="text-dim">追加日</dt>
             <dd>{new Date(single.importedAt).toLocaleString("ja-JP")}</dd>
             {single.sourceUrl && (

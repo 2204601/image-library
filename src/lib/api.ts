@@ -6,10 +6,20 @@ export interface LibraryInfo {
   name: string;
 }
 
+/** What a file is. Fonts have no pixel size (0 × 0) and a rendered sample as the thumbnail. */
+export type ItemKind = "image" | "font";
+
+/** Kinds in the order the sidebar lists them. */
+export const KINDS: { kind: ItemKind; label: string }[] = [
+  { kind: "image", label: "画像" },
+  { kind: "font", label: "フォント" },
+];
+
+export const kindLabel = (k: ItemKind) => KINDS.find((x) => x.kind === k)?.label ?? k;
+
 export interface Item {
   id: string;
-  /** Fonts have no pixel size (0 × 0) and a rendered sample as the thumbnail. */
-  kind: "image" | "font";
+  kind: ItemKind;
   name: string;
   fileName: string;
   ext: string;
@@ -35,6 +45,9 @@ export interface Item {
   tagIds: number[];
   /** The web page the item was saved from with the browser extension. */
   sourceUrl: string | null;
+  /** Fonts: family shared by its styles (null until read) and weight 100-900. */
+  fontFamily: string | null;
+  fontWeight: number | null;
   filePath: string;
   thumbPath: string;
   /** What the viewer shows: the display copy if any, else the original. */
@@ -45,6 +58,15 @@ export interface Item {
   distance?: number;
 }
 
+export interface FontAxis {
+  /** e.g. "wght" (weight), "wdth" (width), "ital". */
+  tag: string;
+  name: string;
+  min: number;
+  default: number;
+  max: number;
+}
+
 export interface FontFaceInfo {
   family: string;
   style: string;
@@ -52,14 +74,32 @@ export interface FontFaceInfo {
   weight: number;
   italic: boolean;
   glyphs: number;
+  /** Characters the font has (not counting spaces). */
+  charCount: number;
+  version: string;
+  /** Designer, else the foundry. */
+  designer: string;
+  /** Variation axes; empty unless it is a variable font. */
+  axes: FontAxis[];
+  /** Named styles of a variable font ("Thin", "Bold", ...). */
+  instances: string[];
+}
+
+/** What the list layout shows for a font. */
+export interface FontListPreview {
+  /** A sample line the font fully covers (or the characters it has). */
+  sample: string;
+  /** Style of the first font in the file, e.g. "Bold", "W3". */
+  style: string;
+  /** Fonts in the file (several for TTC / OTC). */
+  faces: number;
 }
 
 export interface FontInfo {
   /** Every font in the file (several for TTC / OTC). */
   faces: FontFaceInfo[];
-  /** Characters of the requested font (code points), the first few thousand. */
+  /** Every character of the requested font (code points), in order. */
   chars: number[];
-  charCount: number;
 }
 
 /** "1200 × 800", or the kind for files without a pixel size. */
@@ -96,6 +136,8 @@ export type Shape = "landscape" | "portrait" | "square";
 
 /** Attribute filters (the filter bar). Empty / null = no restriction. */
 export interface Filter {
+  /** Any of these kinds (the sidebar's "種類"). */
+  kinds: ItemKind[];
   exts: string[];
   shapes: Shape[];
   minWidth: number | null;
@@ -111,6 +153,7 @@ export interface Filter {
 }
 
 export const EMPTY_FILTER: Filter = {
+  kinds: [],
   exts: [],
   shapes: [],
   minWidth: null,
@@ -166,6 +209,8 @@ export interface Counts {
   trash: number;
   favorites: number;
   pinned: number;
+  /** Items not in the trash, by kind (kinds with none are missing). */
+  kinds: Partial<Record<ItemKind, number>>;
 }
 
 export interface Folder {
@@ -239,6 +284,9 @@ export const api = {
   /** Pinned items come first in every list. */
   setPinned: (ids: string[], on: boolean) => invoke<void>("set_pinned", { ids, on }),
   fontInfo: (id: string, face: number) => invoke<FontInfo>("font_info", { id, face }),
+  fontListPreview: (id: string) => invoke<FontListPreview>("font_list_preview", { id }),
+  /** Names and details of every font in the file, without the characters. */
+  fontFaces: (id: string) => invoke<FontFaceInfo[]>("font_faces", { id }),
   /** One font of the file as plain OpenType data, for `new FontFace()`. */
   fontData: (id: string, face: number) => invoke<ArrayBuffer>("font_data", { id, face }),
   orientItems: (ids: string[], op: OrientOp) => invoke<number>("orient_items", { ids, op }),
@@ -261,6 +309,8 @@ export const api = {
   /** Answers an extension's request to connect (the "web-pair" event). */
   answerWebPair: (id: string, allow: boolean) => invoke<void>("answer_web_pair", { id, allow }),
   indexSimilar: () => invoke<number>("index_similar"),
+  /** Reads the family of fonts imported before it was stored; returns how many. */
+  indexFonts: () => invoke<number>("index_fonts"),
   /** Treats these images as "not duplicates" so they aren't proposed together again. */
   dismissDuplicates: (ids: string[]) => invoke<void>("dismiss_duplicates", { ids }),
   undismissDuplicates: (ids: string[]) => invoke<void>("undismiss_duplicates", { ids }),

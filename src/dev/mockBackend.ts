@@ -4,9 +4,14 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { Folder, Item, ItemQuery, Rule, SimilarLevel, Tag } from "../lib/api";
 
-type MockItem = Omit<Item, "filePath" | "thumbPath" | "displayPath" | "preview" | "folderId" | "tagIds" | "sourceUrl"> & {
+type MockItem = Omit<
+  Item,
+  "filePath" | "thumbPath" | "displayPath" | "preview" | "folderId" | "tagIds" | "sourceUrl" | "fontFamily" | "fontWeight"
+> & {
   hue: number;
   sourceUrl?: string;
+  fontFamily?: string;
+  fontWeight?: number;
 };
 
 const items: MockItem[] = [];
@@ -60,9 +65,19 @@ function seed() {
       ...(i % 6 === 1 ? { sourceUrl: `https://www.example.com/gallery/${i}?ref=web` } : {}),
     });
   }
-  // Fonts: no pixel size, a sample as the thumbnail.
-  for (const [i, file] of ["NotoSansJP-Regular.ttf", "Inter-Bold.woff2", "Hiragino.ttc"].entries()) {
+  // Fonts: no pixel size, a sample as the thumbnail. Noto Sans JP comes as
+  // one file per weight (grouped by family), Inter as one variable font.
+  const fontFiles: [string, string, number][] = [
+    ["NotoSansJP-Bold.ttf", "Noto Sans JP", 700],
+    ["NotoSansJP-Regular.ttf", "Noto Sans JP", 400],
+    ["Inter[wght].woff2", "Inter", 400],
+    ["Hiragino.ttc", "ヒラギノ角ゴシック", 300],
+    ["NotoSansJP-Light.ttf", "Noto Sans JP", 300],
+  ];
+  for (const [i, [file, fontFamily, fontWeight]] of fontFiles.entries()) {
     items.push({
+      fontFamily,
+      fontWeight,
       id: id(),
       kind: "font",
       name: file,
@@ -143,7 +158,7 @@ function similar(r: MockItem[], level: SimilarLevel): MockItem[] {
 
 /** Font thumbnail: "Aa" and a line of sample text, like fonts.rs renders it. */
 function fontSvg(it: MockItem) {
-  const weight = it.name.includes("Bold") ? 700 : 400;
+  const weight = it.fontWeight ?? 400;
   const s = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="384"><rect width="100%" height="100%" fill="#f4f4f5"/><g font-family="sans-serif" font-weight="${weight}" fill="#18181b" text-anchor="middle"><text x="256" y="215" font-size="170">Aa</text><text x="256" y="320" font-size="52">${it.ext === "woff2" ? "ABC abc 123" : "あア永"}</text></g></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
 }
@@ -166,7 +181,18 @@ const view = (it: MockItem): Item => {
   const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
   const tagIds = tags.filter((t) => hasTag(it.id, t.id)).map((t) => t.id);
   const thumbPath = it.kind === "font" ? fontSvg(it) : svg(it, 3, true);
-  return { ...it, sourceUrl: it.sourceUrl ?? null, preview: null, folderId, tagIds, filePath, displayPath: filePath, thumbPath };
+  return {
+    ...it,
+    sourceUrl: it.sourceUrl ?? null,
+    fontFamily: it.fontFamily ?? null,
+    fontWeight: it.fontWeight ?? null,
+    preview: null,
+    folderId,
+    tagIds,
+    filePath,
+    displayPath: filePath,
+    thumbPath,
+  };
 };
 const inFolder = (i: string, f: string) => itemFolders.has(`${i}|${f}`);
 const hasTag = (i: string, t: number) => itemTags.has(`${i}|${t}`);
@@ -197,6 +223,7 @@ function applyRule(r: MockItem[], rule: Rule): MockItem[] {
     const hit = (i: MockItem) =>
       i.name.toLowerCase().includes(w) ||
       i.note.toLowerCase().includes(w) ||
+      (i.fontFamily ?? "").toLowerCase().includes(w) ||
       tags.some((t) => hasTag(i.id, t.id) && t.name.toLowerCase().includes(w));
     r = r.filter((i) => hit(i) !== neg);
   }
@@ -208,6 +235,7 @@ function applyRule(r: MockItem[], rule: Rule): MockItem[] {
   if (rule.minRating) r = r.filter((i) => i.rating >= rule.minRating);
   const f = rule.filter;
   if (!f) return r;
+  if (f.kinds?.length) r = r.filter((i) => f.kinds.includes(i.kind));
   if (f.exts.length) r = r.filter((i) => f.exts.map(aliases).includes(aliases(i.ext)));
   // Shape and pixel size only apply to images (fonts are 0 × 0), as in db.rs.
   const sized = f.shapes.length || [f.minWidth, f.maxWidth, f.minHeight, f.maxHeight].some((v) => v != null);
@@ -314,6 +342,11 @@ function handle(cmd: string, a: any): unknown {
         trash: items.length - live().length,
         favorites: live().filter((i) => i.favorite).length,
         pinned: live().filter((i) => i.pinnedAt !== null).length,
+        kinds: Object.fromEntries(
+          (["image", "font"] as const)
+            .map((k) => [k, live().filter((i) => i.kind === k).length])
+            .filter(([, n]) => n),
+        ),
       };
     case "selection_info": {
       const ids: string[] = a.ids;
@@ -356,17 +389,29 @@ function handle(cmd: string, a: any): unknown {
     case "set_pinned":
       items.filter((i) => a.ids.includes(i.id)).forEach((i) => (i.pinnedAt = a.on ? (i.pinnedAt ?? Date.now()) : null));
       return;
-    case "font_info": {
+    case "font_info":
+    case "font_faces": {
       const it = items.find((i) => i.id === a.id)!;
       const ja = it.ext !== "woff2";
-      const faces =
-        it.ext === "ttc"
-          ? ["W3", "W6"].map((w) => ({ family: "ヒラギノ角ゴシック", style: w, fullName: `ヒラギノ角ゴシック ${w}`, weight: w === "W3" ? 300 : 600, italic: false, glyphs: 20339 }))
-          : [{ family: it.name.split(/[-.]/)[0], style: ja ? "Regular" : "Bold", fullName: it.name, weight: ja ? 400 : 700, italic: false, glyphs: ja ? 17000 : 2500 }];
       const latin = Array.from({ length: 94 }, (_, k) => 0x21 + k);
       const kana = Array.from({ length: 83 }, (_, k) => 0x3041 + k);
       const chars = ja ? [...latin, ...kana] : latin;
-      return { faces, chars, charCount: chars.length };
+      const face = { glyphs: ja ? 17000 : 2500, charCount: chars.length, italic: false, designer: "Mock Type Foundry", version: "Version 2.004" };
+      const faces =
+        it.ext === "ttc"
+          ? ["W3", "W6"].map((w) => ({ ...face, family: "ヒラギノ角ゴシック", style: w, fullName: `ヒラギノ角ゴシック ${w}`, weight: w === "W3" ? 300 : 600, axes: [], instances: [] }))
+          : ja
+            ? [{ ...face, family: it.fontFamily ?? "", style: it.name.split(/[-.]/)[1], fullName: it.name, weight: it.fontWeight ?? 400, axes: [], instances: [] }]
+            : [{ ...face, family: "Inter", style: "Regular", fullName: "Inter Regular", weight: 400, axes: [{ tag: "wght", name: "Weight", min: 100, default: 400, max: 900 }, { tag: "opsz", name: "Optical size", min: 14, default: 14, max: 32 }], instances: ["Thin", "ExtraLight", "Light", "Regular", "Medium", "SemiBold", "Bold", "ExtraBold", "Black"] }];
+      return cmd === "font_faces" ? faces : { faces, chars };
+    }
+    case "font_list_preview": {
+      const it = items.find((i) => i.id === a.id)!;
+      return {
+        sample: it.ext === "woff2" ? "The quick brown fox jumps over 0123" : "永遠の青い空 いろは アイウ Aa 123",
+        style: it.ext === "ttc" ? "W3" : (it.name.split(/[-.]/)[1] ?? "Regular"),
+        faces: it.ext === "ttc" ? 2 : 1,
+      };
     }
     case "font_data":
       // No font files in the browser mock: the viewer falls back to the system font.
@@ -392,6 +437,7 @@ function handle(cmd: string, a: any): unknown {
     case "export_items":
       return a.ids.length;
     case "index_similar":
+    case "index_fonts":
       return 0;
     case "dismiss_duplicates": {
       const batch = ++dismissSeq;

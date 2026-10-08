@@ -239,6 +239,7 @@ export function activeConditions(s: {
     (s.search.trim() ? 1 : 0) +
     (s.tagFilter.length ? 1 : 0) +
     (s.minRating ? 1 : 0) +
+    (f.kinds.length ? 1 : 0) +
     (f.exts.length ? 1 : 0) +
     (f.shapes.length ? 1 : 0) +
     (f.minWidth != null || f.maxWidth != null || f.minHeight != null || f.maxHeight != null ? 1 : 0) +
@@ -316,7 +317,7 @@ export const useStore = create<State>((set, get) => ({
   smartFolders: [],
   exts: [],
   tags: [],
-  counts: { all: 0, unfiled: 0, untagged: 0, trash: 0, favorites: 0, pinned: 0 },
+  counts: { all: 0, unfiled: 0, untagged: 0, trash: 0, favorites: 0, pinned: 0, kinds: {} },
   rev: 0,
 
   selected: new Set(),
@@ -348,7 +349,16 @@ export const useStore = create<State>((set, get) => ({
       focus: null,
       viewer: null,
     });
-    if (library) get().refresh();
+    if (library) {
+      get().refresh();
+      // Fonts imported by older versions have no family yet (grouping, search).
+      api
+        .indexFonts()
+        .then((n) => {
+          if (n > 0) get().refresh();
+        })
+        .catch(() => {});
+    }
   },
   setView: (view) => {
     // The similar view may take a moment to prepare; don't leave the old list up.

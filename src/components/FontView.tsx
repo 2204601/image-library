@@ -1,10 +1,64 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { api, type FontInfo, type Item } from "../lib/api";
 
 const SAMPLE_JA = "あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら";
 const SAMPLE_EN = "The quick brown fox jumps over the lazy dog 0123456789";
 /** Smaller sizes shown under the main sample. */
 const WATERFALL = [12, 16, 24, 36];
+/** The character list shows this many at most (more would make the page heavy). */
+const MAX_LISTED = 3000;
+
+/** Spaces, joiners and variation selectors: never "missing", whatever the font maps. */
+const neutral = (c: number) =>
+  c <= 0x20 ||
+  (c >= 0x200b && c <= 0x200d) ||
+  (c >= 0xfe00 && c <= 0xfe0f) ||
+  (c >= 0xe0100 && c <= 0xe01ef) ||
+  /\s/u.test(String.fromCodePoint(c));
+
+/**
+ * `text` in the font. Characters the font doesn't have would silently come
+ * out in a system font, so they are drawn in red with a dotted underline.
+ */
+function Sample({ text, has, style, className }: { text: string; has: Set<number> | null; style: CSSProperties; className?: string }) {
+  if (!has) return <span style={style} className={className}>{text}</span>;
+  const runs: { ok: boolean; s: string }[] = [];
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    const ok = neutral(c) ? (runs.at(-1)?.ok ?? true) : has.has(c);
+    if (runs.at(-1)?.ok === ok) runs.at(-1)!.s += ch;
+    else runs.push({ ok, s: ch });
+  }
+  return (
+    <span style={style} className={className}>
+      {runs.map((r, i) =>
+        r.ok ? (
+          r.s
+        ) : (
+          <span
+            key={i}
+            title="このフォントに無い文字（システムのフォントで表示）"
+            className="text-red-300 underline decoration-red-400/70 decoration-dotted"
+            style={{ fontFamily: "sans-serif" }}
+          >
+            {r.s}
+          </span>
+        ),
+      )}
+    </span>
+  );
+}
+
+/** How many characters of `text` the font lacks. */
+function countMissing(text: string, has: Set<number> | null): number {
+  if (!has) return 0;
+  let n = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    if (!neutral(c) && !has.has(c)) n++;
+  }
+  return n;
+}
 
 /**
  * Viewer body for a font: sample text at any size, the fonts in a collection,
@@ -50,8 +104,10 @@ export function FontView({ item }: { item: Item }) {
   }, [item.id, face]);
 
   const current = info?.faces[face];
-  const hasKana = info?.chars.includes(0x3042) ?? false; // "あ"
+  const has = useMemo(() => (info ? new Set(info.chars) : null), [info]);
+  const hasKana = has?.has(0x3042) ?? false; // "あ"
   const sample = text || (hasKana ? SAMPLE_JA : SAMPLE_EN);
+  const missing = countMissing(sample, has);
   const style = { fontFamily: family ? `"${family}", sans-serif` : "sans-serif" };
   const label = "mb-2 text-[11px] font-semibold text-white/45";
 
@@ -64,7 +120,7 @@ export function FontView({ item }: { item: Item }) {
             <div className="text-sm text-white/55">
               {current?.style}
               {current && ` · ${current.glyphs.toLocaleString()} グリフ`}
-              {info && ` · ${info.charCount.toLocaleString()} 文字`}
+              {info && ` · ${info.chars.length.toLocaleString()} 文字`}
             </div>
           </div>
           {info && info.faces.length > 1 && (
@@ -109,17 +165,19 @@ export function FontView({ item }: { item: Item }) {
           </label>
         </div>
 
-        <div style={{ ...style, fontSize: size }} className="leading-tight break-words">
-          {sample}
-        </div>
+        <Sample text={sample} has={has} style={{ ...style, fontSize: size }} className="block leading-tight break-words" />
+
+        {missing > 0 && (
+          <p className="-mt-3 text-xs text-red-300/90">
+            赤い {missing.toLocaleString()} 字はこのフォントに無いため、システムのフォントで表示しています
+          </p>
+        )}
 
         <div className="flex flex-col gap-2 border-t border-white/10 pt-4">
           {WATERFALL.map((px) => (
             <div key={px} className="flex items-baseline gap-3">
               <span className="w-10 shrink-0 text-right text-[11px] text-white/35 tabular-nums">{px}</span>
-              <span style={{ ...style, fontSize: px }} className="truncate">
-                {sample}
-              </span>
+              <Sample text={sample} has={has} style={{ ...style, fontSize: px }} className="truncate" />
             </div>
           ))}
         </div>
@@ -127,15 +185,15 @@ export function FontView({ item }: { item: Item }) {
         {info && (
           <div>
             <div className={label}>
-              文字（{info.chars.length < info.charCount
-                ? `最初の ${info.chars.length.toLocaleString()} 字 / 全 ${info.charCount.toLocaleString()} 字`
-                : `${info.charCount.toLocaleString()} 字`}）
+              文字（{info.chars.length > MAX_LISTED
+                ? `最初の ${MAX_LISTED.toLocaleString()} 字 / 全 ${info.chars.length.toLocaleString()} 字`
+                : `${info.chars.length.toLocaleString()} 字`}）
             </div>
             <div
               style={style}
               className="grid grid-cols-[repeat(auto-fill,minmax(44px,1fr))] gap-px overflow-hidden rounded-md bg-white/10"
             >
-              {info.chars.map((c) => {
+              {info.chars.slice(0, MAX_LISTED).map((c) => {
                 const ch = String.fromCodePoint(c);
                 return (
                   <div
