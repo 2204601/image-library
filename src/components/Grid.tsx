@@ -24,7 +24,8 @@ import {
   toggleFavorite,
   togglePinned,
 } from "../lib/actions";
-import { api, formatBytes, sizeLabel, type Item } from "../lib/api";
+import { api, formatBytes, sizeLabel, type FontListPreview, type Item } from "../lib/api";
+import { fontPreview, loadFont } from "../lib/fontLoader";
 import { colorHex } from "../lib/colors";
 import type { Section } from "../lib/grouping";
 import {
@@ -273,10 +274,14 @@ const ListRow = memo(function ListRow({
       data-drop={reorderable ? `item:${item.id}` : undefined}
       data-axis="y"
     >
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-raised">
-        <Thumb item={item} fit="contain" />
-      </div>
-      <span className="min-w-0 flex-1 truncate text-[13px]">
+      {item.kind === "font" ? (
+        <FontListCells item={item} />
+      ) : (
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-raised">
+          <Thumb item={item} fit="contain" />
+        </div>
+      )}
+      <span className={`min-w-0 truncate text-[13px] ${item.kind === "font" ? "hidden" : "flex-1"}`}>
         {item.name}
         {similar && (
           <span
@@ -312,7 +317,7 @@ const ListRow = memo(function ListRow({
       </span>
       <span className="w-12 shrink-0 text-dim uppercase">{item.ext}</span>
       <span className="w-20 shrink-0 text-right text-dim tabular-nums">{formatBytes(item.size)}</span>
-      <span className="w-24 shrink-0 text-right text-dim tabular-nums @max-3xl:hidden">
+      <span className="w-24 shrink-0 text-right text-dim tabular-nums @max-4xl:hidden">
         {new Date(item.importedAt).toLocaleDateString("ja-JP")}
       </span>
       {insert && (
@@ -325,6 +330,54 @@ const ListRow = memo(function ListRow({
     </div>
   );
 });
+
+/**
+ * List row of a font: family and style, then a sample line drawn in the font
+ * itself (loaded only while the row is on screen, see lib/fontLoader.ts).
+ */
+function FontListCells({ item }: { item: Item }) {
+  const [family, setFamily] = useState<string | null>(null);
+  const [preview, setPreview] = useState<FontListPreview | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setFamily(null);
+    setPreview(null);
+    setFailed(false);
+    fontPreview(item.id)
+      .then((p) => live && setPreview(p))
+      .catch(() => live && setFailed(true));
+    loadFont(item.id)
+      .then((f) => live && setFamily(f))
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [item.id]);
+  const style = [preview?.style, preview && preview.faces > 1 ? `ほか ${preview.faces - 1} 個` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <>
+      <span className="flex w-36 shrink-0 flex-col leading-tight" title={item.name}>
+        <span className="truncate text-[13px]">{item.fontFamily || item.name}</span>
+        <span className="truncate text-[11px] text-dim">{style || item.name}</span>
+      </span>
+      {failed ? (
+        <span className="min-w-0 flex-1 truncate text-dim">見本を表示できません</span>
+      ) : (
+        <span
+          className={`min-w-0 flex-1 truncate text-[20px] leading-none transition-opacity duration-200 ${
+            family && preview ? "opacity-100" : "opacity-0"
+          }`}
+          style={{ fontFamily: family ? `"${family}"` : undefined }}
+        >
+          {preview?.sample}
+        </span>
+      )}
+    </>
+  );
+}
 
 function Stars({ n, size = 9 }: { n: number; size?: number }) {
   return (
@@ -753,14 +806,16 @@ function SectionHeader({ items, section }: { items: Item[]; section: Section }) 
       style={{ height: HEADER - 8, marginLeft: PAD, marginRight: PAD, marginBottom: 8 }}
       onPointerDown={(e) => e.stopPropagation()}
       onClick={() => useStore.getState().setSelection(items.slice(start, end).map((i) => i.id))}
-      title="クリックでこの区切りの画像をすべて選択"
+      title="クリックでこの区切りをすべて選択"
     >
       {rating !== undefined && rating > 0 ? <Stars n={rating} size={12} /> : null}
       {hex && <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: hex }} />}
       <span className={`truncate font-semibold ${rating === 0 ? "text-dim" : ""}`}>
         {rating !== undefined && rating > 0 ? "" : title}
       </span>
-      <span className="shrink-0 text-dim tabular-nums">{end - start} 枚</span>
+      <span className="shrink-0 text-dim tabular-nums">
+        {end - start} {items.slice(start, end).every((i) => i.kind === "image") ? "枚" : "件"}
+      </span>
     </div>
   );
 }

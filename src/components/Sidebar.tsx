@@ -6,6 +6,7 @@ import {
   FolderPlus,
   FolderSearch,
   Heart,
+  Image as ImageIcon,
   Images,
   Inbox,
   Library,
@@ -13,6 +14,7 @@ import {
   Tag as TagIcon,
   Tags,
   Trash2,
+  Type,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -29,7 +31,7 @@ import {
   shiftFolder,
   sortFoldersByName,
 } from "../lib/actions";
-import { api, type Folder, type View } from "../lib/api";
+import { api, KINDS, type Folder, type ItemKind, type View } from "../lib/api";
 import { appVersion, checkForUpdate } from "../lib/update";
 import { activeConditions, useStore } from "../store";
 import { useMenu } from "./ContextMenu";
@@ -426,6 +428,57 @@ function SmartFolderList() {
   );
 }
 
+const KIND_ICON: Record<ItemKind, React.ReactNode> = {
+  image: <ImageIcon size={15} />,
+  font: <Type size={15} />,
+};
+
+/**
+ * Quick filter by kind, on top of the open view (like tags). A click shows
+ * only that kind (again: all kinds); ⌘ / Shift + click adds or removes one.
+ */
+function KindList() {
+  const counts = useStore((s) => s.counts.kinds);
+  const kinds = useStore((s) => s.filter.kinds);
+  const setFilter = useStore((s) => s.setFilter);
+
+  const pick = (k: ItemKind, add: boolean) =>
+    setFilter({
+      kinds: add
+        ? kinds.includes(k)
+          ? kinds.filter((x) => x !== k)
+          : [...kinds, k]
+        : kinds.length === 1 && kinds[0] === k
+          ? []
+          : [k],
+    });
+
+  return (
+    <Section
+      title="種類"
+      action={
+        kinds.length > 0 && (
+          <button title="種類の絞り込みを解除" className="text-dim hover:text-fg" onClick={() => setFilter({ kinds: [] })}>
+            <X size={14} />
+          </button>
+        )
+      }
+    >
+      {KINDS.map(({ kind, label }) => (
+        <Row
+          key={kind}
+          active={kinds.includes(kind)}
+          icon={KIND_ICON[kind]}
+          label={label}
+          count={counts[kind] ?? 0}
+          title="クリックでこの種類だけを表示（⌘・Shift+クリックで追加）"
+          onClick={(e) => pick(kind, e.metaKey || e.ctrlKey || e.shiftKey)}
+        />
+      ))}
+    </Section>
+  );
+}
+
 function TagList() {
   const tags = useStore((s) => s.tags);
   const tagFilter = useStore((s) => s.tagFilter);
@@ -556,6 +609,7 @@ export function Sidebar() {
             }
           />
         ))}
+        <KindList />
         <FolderTree />
         <SmartFolderList />
         <TagList />

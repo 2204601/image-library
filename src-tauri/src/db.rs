@@ -3,14 +3,14 @@
 
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql, Transaction};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 11;
+const SCHEMA_VERSION: i32 = 12;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -213,6 +213,13 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         add_column(c, "items", "source_url", "TEXT")?;
         Ok(())
     })?;
+    // A font's family and weight (fonts.rs), to group the styles of a family.
+    // NULL for images, and for fonts until `missing_font_names` fills them in.
+    step(12, &|c| {
+        add_column(c, "items", "font_family", "TEXT")?;
+        add_column(c, "items", "font_weight", "INTEGER")?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -223,7 +230,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
 
 // ---------------------------------------------------------------- items
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Kind {
     #[default]
@@ -276,6 +283,10 @@ pub struct Item {
     pub tag_ids: Vec<i64>,
     /// The web page the item was saved from (browser extension).
     pub source_url: Option<String>,
+    /// Fonts: the family (shared by its styles) and weight (100-900) of the
+    /// first font in the file.
+    pub font_family: Option<String>,
+    pub font_weight: Option<u32>,
     /// Similar view only: which group of look-alikes the item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<u32>,
@@ -300,6 +311,8 @@ pub struct NewItem {
     /// Perceptual hash and average colour (see similar.rs).
     pub phash: Option<(u64, u32)>,
     pub preview: Option<String>,
+    /// Fonts: family and weight (see `Item::font_family`).
+    pub font: Option<(String, u32)>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -331,6 +344,8 @@ pub enum Shape {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Filter {
+    /// Any of these kinds (the sidebar's "種類").
+    pub kinds: Vec<Kind>,
     /// File types, e.g. "jpg" (also matches .jpeg), "png".
     pub exts: Vec<String>,
     /// Any of these shapes. Square = sides within 5% of each other.
@@ -415,7 +430,7 @@ const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items
      items.favorite, items.pinned_at, \
      (SELECT folder_id FROM item_folders WHERE item_id = items.id LIMIT 1), \
      (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id), \
-     items.rotation, items.flipped, items.kind, items.source_url";
+     items.rotation, items.flipped, items.kind, items.source_url, items.font_family, items.font_weight";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     let tag_ids: Option<String> = r.get(16)?;
@@ -443,6 +458,8 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
             .map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect())
             .unwrap_or_default(),
         source_url: r.get(20)?,
+        font_family: r.get(21)?,
+        font_weight: r.get(22)?,
         group: None,
         distance: None,
     })
@@ -488,8 +505,9 @@ fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql
             let pat = escape_like(word);
             args.push(Box::new(pat.clone()));
             args.push(Box::new(pat.clone()));
+            args.push(Box::new(pat.clone()));
             args.push(Box::new(pat));
-            "(items.name LIKE ? ESCAPE '\\' OR items.note LIKE ? ESCAPE '\\' OR EXISTS (
+            "(items.name LIKE ? ESCAPE '\\' OR items.note LIKE ? ESCAPE '\\' OR IFNULL(items.font_family, '') LIKE ? ESCAPE '\\' OR EXISTS (
                SELECT 1 FROM item_tags it JOIN tags t ON t.id = it.tag_id
                WHERE it.item_id = items.id AND t.name LIKE ? ESCAPE '\\'))"
                 .into()
@@ -515,6 +533,10 @@ fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql
     }
 
     let f = &rule.filter;
+    if !f.kinds.is_empty() {
+        wheres.push(format!("items.kind IN ({})", placeholders(f.kinds.len())));
+        args.extend(f.kinds.iter().map(|k| Box::new(k.as_str()) as Box<dyn ToSql>));
+    }
     if !f.exts.is_empty() {
         let exts: Vec<String> = f.exts.iter().flat_map(|e| ext_aliases(e)).collect();
         wheres.push(format!("lower(items.ext) IN ({})", placeholders(exts.len())));
@@ -706,6 +728,25 @@ pub fn missing_phashes(conn: &Connection) -> DbResult<Vec<(String, String)>> {
     rows.collect()
 }
 
+/// Fonts whose family hasn't been read yet (imported before it was stored),
+/// trash included: (id, file name, extension).
+pub fn missing_font_names(conn: &Connection) -> DbResult<Vec<(String, String, String)>> {
+    let mut stmt = conn.prepare("SELECT id, file_name, lower(ext) FROM items WHERE kind = 'font' AND font_family IS NULL")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    rows.collect()
+}
+
+pub fn set_font_names(conn: &mut Connection, names: &[(String, (String, u32))]) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare("UPDATE items SET font_family = ?2, font_weight = ?3 WHERE id = ?1")?;
+        for (id, (family, weight)) in names {
+            stmt.execute(params![id, family, weight])?;
+        }
+    }
+    tx.commit()
+}
+
 pub fn set_phashes(conn: &mut Connection, hashes: &[(String, (u64, u32))]) -> DbResult<()> {
     let tx = conn.transaction()?;
     {
@@ -739,8 +780,9 @@ pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
 
 pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
     tx.execute(
-        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview, kind)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview, kind,
+           font_family, font_weight)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             it.id,
             it.name,
@@ -755,7 +797,9 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
             it.phash.map(|(h, _)| h as i64),
             it.phash.map(|(_, c)| c),
             it.preview,
-            it.kind.as_str()
+            it.kind.as_str(),
+            it.font.as_ref().map(|(f, _)| f),
+            it.font.as_ref().map(|(_, w)| w)
         ],
     )?;
     Ok(())
@@ -1014,9 +1058,15 @@ pub struct Counts {
     pub trash: i64,
     pub favorites: i64,
     pub pinned: i64,
+    /// Items not in the trash, by kind (kinds with none are left out).
+    pub kinds: BTreeMap<Kind, i64>,
 }
 
 pub fn counts(conn: &Connection) -> DbResult<Counts> {
+    let mut stmt = conn.prepare_cached("SELECT kind, COUNT(*) FROM items WHERE deleted_at IS NULL GROUP BY kind")?;
+    let kinds = stmt
+        .query_map([], |r| Ok((Kind::parse(&r.get::<_, String>(0)?), r.get::<_, i64>(1)?)))?
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     conn.query_row(
         "SELECT
            SUM(deleted_at IS NULL),
@@ -1035,6 +1085,7 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
                 trash: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 favorites: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
                 pinned: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                kinds,
             })
         },
     )
@@ -1571,6 +1622,7 @@ mod tests {
                 thumb: format!("{id}.jpg"),
                 phash: None,
                 preview: None,
+                font: None,
             },
             at,
         )
@@ -1668,7 +1720,15 @@ mod tests {
         );
         assert_eq!(
             counts(&conn).unwrap(),
-            Counts { all: 2, unfiled: 1, untagged: 1, trash: 1, favorites: 0, pinned: 0 }
+            Counts {
+                all: 2,
+                unfiled: 1,
+                untagged: 1,
+                trash: 1,
+                favorites: 0,
+                pinned: 0,
+                kinds: BTreeMap::from([(Kind::Image, 2)])
+            }
         );
 
         restore_items(&conn, &s(&["c"])).unwrap();
@@ -2054,6 +2114,11 @@ mod tests {
         assert_eq!(find(&conn, f(|f| { f.imported_after = Some(2_000); f.imported_before = Some(4_000) })), s(&["b", "c"]));
         assert_eq!(find(&conn, f(|f| f.max_size = Some(50_000))), s(&["b", "d"]));
         assert_eq!(find(&conn, f(|f| f.min_size = Some(1_000_000))), s(&["c"]));
+        conn.execute("UPDATE items SET kind = 'font', width = 0, height = 0 WHERE id = 'd'", []).unwrap();
+        assert_eq!(find(&conn, f(|f| f.kinds = vec![Kind::Font])), s(&["d"]));
+        assert_eq!(find(&conn, f(|f| f.kinds = vec![Kind::Image])), s(&["a", "b", "c"]));
+        assert_eq!(find(&conn, f(|f| f.kinds = vec![Kind::Image, Kind::Font])).len(), 4);
+        assert_eq!(counts(&conn).unwrap().kinds, BTreeMap::from([(Kind::Image, 3), (Kind::Font, 1)]));
         assert_eq!(
             list_exts(&conn).unwrap(),
             vec![("png".to_string(), 2), ("jpg".to_string(), 1), ("tif".to_string(), 1)]

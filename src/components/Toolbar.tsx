@@ -26,12 +26,15 @@ import {
   reviewDuplicates,
   similarGroups,
 } from "../lib/actions";
-import type { Folder, SimilarLevel, SmartFolder, SortKey, View } from "../lib/api";
+import { kindLabel, type Folder, type SimilarLevel, type SmartFolder, type SortKey, type View } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
 import { activeConditions, useStore } from "../store";
 import { FilterBar } from "./FilterBar";
-import { ViewMenu } from "./ViewMenu";
+import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
+
+/** Thin line between groups of controls. */
+const Divider = () => <div className="mx-0.5 h-5 w-px shrink-0 bg-line" />;
 
 const SORTS: { key: SortKey; label: string }[] = [
   { key: "importedAt", label: "追加日" },
@@ -43,7 +46,7 @@ const SORTS: { key: SortKey; label: string }[] = [
 ];
 
 const SEARCH_HELP = [
-  "名前・メモ・タグを検索",
+  "名前・メモ・タグ・フォント名を検索",
   "  空白区切り … すべてを含む",
   "  -語 … 除外",
   "  A OR B / A || B … どちらか",
@@ -169,34 +172,6 @@ export function Toolbar() {
               </button>
             )}
           </label>
-          {/* Native select for the menu, laid over a label sized to the current
-              choice so long names aren't clipped and the arrow matches the UI. */}
-          <label
-            title="並び順"
-            className="relative flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line bg-bg pr-2 pl-2.5 whitespace-nowrap hover:bg-white/5 focus-within:border-accent"
-          >
-            {manual ? "手動" : sortLabel}
-            <ChevronDown size={14} className="text-dim" />
-            <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as SortKey, desc)}
-              className="absolute inset-0 cursor-default opacity-0"
-            >
-              {SORTS.map((s) => (
-                <option key={s.key} value={s.key} disabled={s.key === "manual" && !isFolder}>
-                  {s.key === "manual" && !isFolder ? "手動（フォルダ表示時のみ）" : s.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            title={manual ? "手動の並びは昇順のみ" : desc ? "降順" : "昇順"}
-            disabled={manual}
-            onClick={() => setSort(sort, !desc)}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line enabled:hover:bg-white/5 disabled:opacity-40"
-          >
-            {desc ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
-          </button>
           <button
             title="絞り込み（⌘⇧F）"
             onClick={toggleFilterOpen}
@@ -211,17 +186,7 @@ export function Toolbar() {
               </span>
             )}
           </button>
-          <ViewMenu />
-          <input
-            type="range"
-            min={80}
-            max={360}
-            step={10}
-            value={thumbSize}
-            onChange={(e) => setThumbSize(Number(e.target.value))}
-            title="サムネイルサイズ（⌘+ / ⌘-）"
-            className="w-20 shrink-0 accent-accent @max-2xl:hidden"
-          />
+          <Divider />
           {isTrash ? (
             <button
               title="ゴミ箱を空にする"
@@ -262,7 +227,6 @@ export function Toolbar() {
           <InspectorToggle className="flex @max-xl:hidden" />
         </div>
       </div>
-      {(filterOpen || editingSmart) && <FilterBar />}
       <div className="flex min-h-6 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
         {smart && (
           <div className="flex min-w-0 items-center gap-1.5">
@@ -331,7 +295,53 @@ export function Toolbar() {
         {manual && isFolder && !showSubfolders && (
           <span className="text-dim">画像をドラッグして並べ替えできます</span>
         )}
+        {/* How the list looks, at the right end of the second row. */}
+        <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+          {/* Native select for the menu, laid over a label sized to the current
+              choice so long names aren't clipped and the arrow matches the UI. */}
+          <label
+            title="並び順"
+            className="relative flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-line bg-bg pr-2 pl-2.5 whitespace-nowrap hover:bg-white/5 focus-within:border-accent"
+          >
+            {manual ? "手動" : sortLabel}
+            <ChevronDown size={14} className="text-dim" />
+            <select
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey, desc)}
+              className="absolute inset-0 cursor-default opacity-0"
+            >
+              {SORTS.map((s) => (
+                <option key={s.key} value={s.key} disabled={s.key === "manual" && !isFolder}>
+                  {s.key === "manual" && !isFolder ? "手動（フォルダ表示時のみ）" : s.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            title={manual ? "手動の並びは昇順のみ" : desc ? "降順" : "昇順"}
+            disabled={manual}
+            onClick={() => setSort(sort, !desc)}
+            className="flex h-7 w-8 shrink-0 items-center justify-center rounded-md border border-line enabled:hover:bg-white/5 disabled:opacity-40"
+          >
+            {desc ? <ArrowDownWideNarrow size={15} /> : <ArrowUpNarrowWide size={15} />}
+          </button>
+          <GroupMenu />
+          <Divider />
+          <LayoutSwitch />
+          <DisplayMenu />
+          <input
+            type="range"
+            min={80}
+            max={360}
+            step={10}
+            value={thumbSize}
+            onChange={(e) => setThumbSize(Number(e.target.value))}
+            title="サムネイルサイズ（⌘+ / ⌘-）"
+            className="w-20 shrink-0 accent-accent @max-2xl:hidden"
+          />
+        </div>
       </div>
+      {(filterOpen || editingSmart) && <FilterBar />}
       {conditions > 0 && !editingSmart && <ActiveFilters count={count} />}
     </header>
   );
@@ -411,6 +421,12 @@ function ActiveFilters({ count }: { count: number }) {
     });
   });
   if (minRating) chips.push({ key: "rating", label: `★${minRating} 以上`, clear: () => setMinRating(0) });
+  if (filter.kinds.length)
+    chips.push({
+      key: "kinds",
+      label: `種類: ${filter.kinds.map(kindLabel).join("・")}`,
+      clear: () => setFilter({ kinds: [] }),
+    });
   if (filter.exts.length)
     chips.push({ key: "exts", label: `形式: ${filter.exts.join(", ")}`, clear: () => setFilter({ exts: [] }) });
   if (filter.shapes.length)

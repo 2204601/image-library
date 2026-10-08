@@ -1,21 +1,24 @@
-// Layout (justified / grid / waterfall / list) and what to show per image.
-import { Check, LayoutDashboard, LayoutGrid, LayoutList, Rows3 } from "lucide-react";
+// Toolbar controls for how the list looks, each on its own: the layout
+// (one click), grouping into sections, and what to show per thumbnail.
+import { Check, ChevronDown, Columns3, Eye, Layers, LayoutGrid, LayoutList, Rows3 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { GroupBy } from "../lib/grouping";
 import { useStore, type Layout, type ShowInfo } from "../store";
 
 const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
-  { key: "none", label: "なし", hint: "区切りなしで並べる" },
-  { key: "rating", label: "評価ごと", hint: "★5 から未評価までの区切りを付ける" },
-  { key: "tag", label: "タグごと", hint: "タグごとにまとめる（複数のタグがある画像は各タグに表示）" },
-  { key: "folder", label: "フォルダごと", hint: "フォルダごとにまとめる（すべて・サブフォルダ表示時に便利）" },
+  { key: "none", label: "なし", hint: "区切らずに並べる" },
+  { key: "rating", label: "評価", hint: "★5 から未評価まで" },
+  { key: "tag", label: "タグ", hint: "複数のタグがある画像は各タグに出る" },
+  { key: "folder", label: "フォルダ", hint: "「すべて」やサブフォルダ表示で便利" },
+  { key: "kind", label: "種類", hint: "画像・フォント" },
+  { key: "family", label: "フォントのファミリー", hint: "同じフォントの太さ違いをまとめる（細い順）" },
 ];
 
 export const LAYOUTS: { key: Layout; label: string; icon: React.ReactNode; hint: string }[] = [
-  { key: "justified", label: "ジャスティファイ", icon: <Rows3 size={15} />, hint: "行の高さをそろえて縦横比どおりに並べる" },
-  { key: "waterfall", label: "ウォーターフォール", icon: <LayoutDashboard size={15} />, hint: "列の幅をそろえて石垣状に並べる" },
-  { key: "grid", label: "グリッド", icon: <LayoutGrid size={15} />, hint: "同じ大きさの枠に並べる" },
-  { key: "list", label: "リスト", icon: <LayoutList size={15} />, hint: "1 行ずつ詳細を表示" },
+  { key: "justified", label: "標準", icon: <Rows3 size={15} />, hint: "行の高さをそろえ、縦横比のまま並べる" },
+  { key: "waterfall", label: "Pinterest風", icon: <Columns3 size={15} />, hint: "列の幅をそろえ、縦に詰めて並べる" },
+  { key: "grid", label: "グリッド", icon: <LayoutGrid size={15} />, hint: "同じ大きさの枠に収めて並べる" },
+  { key: "list", label: "リスト", icon: <LayoutList size={15} />, hint: "1 行ずつ詳しく表示。フォントは見本の文字を表示" },
 ];
 
 const INFO: { key: keyof ShowInfo; label: string }[] = [
@@ -25,17 +28,23 @@ const INFO: { key: keyof ShowInfo; label: string }[] = [
   { key: "meta", label: "形式・容量" },
 ];
 
-export function ViewMenu() {
-  const layout = useStore((s) => s.layout);
-  const setLayout = useStore((s) => s.setLayout);
-  const showInfo = useStore((s) => s.showInfo);
-  const setShowInfo = useStore((s) => s.setShowInfo);
-  const groupBy = useStore((s) => s.groupBy);
-  const setGroupBy = useStore((s) => s.setGroupBy);
-  const isSimilar = useStore((s) => s.view.kind === "similar");
+/** A toolbar button with a dropdown that closes on Escape or a click elsewhere. */
+function Dropdown({
+  button,
+  title,
+  active,
+  width,
+  children,
+}: {
+  button: React.ReactNode;
+  title: string;
+  /** Highlighted: the setting differs from the default. */
+  active?: boolean;
+  width: string;
+  children: React.ReactNode;
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
-
   useEffect(() => {
     if (!open) return;
     const away = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
@@ -47,72 +56,162 @@ export function ViewMenu() {
       window.removeEventListener("keydown", esc);
     };
   }, [open]);
-
-  const current = LAYOUTS.find((l) => l.key === layout)!;
   return (
     <div ref={ref} className="relative shrink-0">
       <button
-        title={`表示：${current.label}${groupBy !== "none" ? ` / ${GROUPS.find((g) => g.key === groupBy)?.label}` : ""}`}
+        title={title}
         onClick={() => setOpen((o) => !o)}
-        className={`relative flex h-8 w-8 items-center justify-center rounded-md border hover:bg-white/5 ${
+        className={`flex h-7 items-center gap-1.5 rounded-md border px-2 whitespace-nowrap hover:bg-white/5 ${
           open ? "bg-white/5" : ""
-        } ${groupBy !== "none" && !isSimilar ? "border-accent/60 text-accent" : "border-line"}`}
+        } ${active ? "border-accent/60 text-accent" : "border-line"}`}
       >
-        {current.icon}
+        {button}
       </button>
       {open && (
-        <div className="absolute top-full right-0 z-40 mt-1 w-60 animate-slide-down rounded-lg border border-line bg-raised p-1 text-xs shadow-xl">
-          <div className="px-2 pt-1 pb-1 text-[11px] font-semibold text-dim">レイアウト</div>
-          {LAYOUTS.map((l) => (
-            <button
-              key={l.key}
-              title={l.hint}
-              onClick={() => setLayout(l.key)}
-              className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-white/8 ${
-                layout === l.key ? "text-fg" : "text-dim"
-              }`}
-            >
-              <span className={layout === l.key ? "text-accent" : ""}>{l.icon}</span>
-              <span className="flex-1">{l.label}</span>
-              {layout === l.key && <Check size={13} className="text-accent" />}
-            </button>
-          ))}
-          <div className="mx-1.5 my-1 border-t border-line" />
-          <div className="px-2 pt-1 pb-1 text-[11px] font-semibold text-dim">
-            グループ分け{isSimilar && <span className="ml-1 font-normal">（重複の候補では無効）</span>}
-          </div>
-          {GROUPS.map((g) => (
-            <button
-              key={g.key}
-              title={g.hint}
-              disabled={isSimilar}
-              onClick={() => setGroupBy(g.key)}
-              className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left enabled:hover:bg-white/8 disabled:opacity-40 ${
-                groupBy === g.key ? "text-fg" : "text-dim"
-              }`}
-            >
-              <span className="flex-1">{g.label}</span>
-              {groupBy === g.key && <Check size={13} className="text-accent" />}
-            </button>
-          ))}
-          <div className="mx-1.5 my-1 border-t border-line" />
-          <div className="px-2 pt-1 pb-1 text-[11px] font-semibold text-dim">表示する情報</div>
-          {INFO.map((i) => (
-            <label
-              key={i.key}
-              className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 hover:bg-white/8"
-            >
-              <input
-                type="checkbox"
-                checked={showInfo[i.key]}
-                onChange={(e) => setShowInfo({ [i.key]: e.target.checked })}
-                className="accent-accent"
-              />
-              {i.label}
-            </label>
-          ))}
+        <div
+          className={`absolute top-full right-0 z-40 mt-1 ${width} animate-slide-down rounded-lg border border-line bg-raised p-1 text-xs shadow-xl`}
+          onClick={(e) => (e.target as HTMLElement).closest("[data-close]") && setOpen(false)}
+        >
+          {children}
         </div>
       )}
     </div>
+  );
+}
+
+const heading = "px-2 pt-1 pb-1 text-[11px] font-semibold text-dim";
+
+/** Layouts always on the toolbar; the others are in the display menu. */
+const PRIMARY: Layout[] = ["justified", "waterfall"];
+
+/**
+ * The everyday layouts side by side, one click to switch. Grid / list sit in
+ * the display menu, and show up here only while one of them is in use.
+ */
+export function LayoutSwitch() {
+  const layout = useStore((s) => s.layout);
+  const setLayout = useStore((s) => s.setLayout);
+  const shown = LAYOUTS.filter((l) => PRIMARY.includes(l.key) || l.key === layout);
+  return (
+    <div className="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
+      {shown.map((l, i) => (
+        <button
+          key={l.key}
+          title={`${l.label}：${l.hint}`}
+          aria-label={l.label}
+          aria-pressed={layout === l.key}
+          onClick={() => setLayout(l.key)}
+          className={`flex w-8 items-center justify-center ${i > 0 ? "border-l border-line" : ""} ${
+            layout === l.key ? "bg-accent/20 text-accent" : "text-dim hover:bg-white/5 hover:text-fg"
+          }`}
+        >
+          {l.icon}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Splitting the list into sections. */
+export function GroupMenu() {
+  const groupBy = useStore((s) => s.groupBy);
+  const setGroupBy = useStore((s) => s.setGroupBy);
+  const isSimilar = useStore((s) => s.view.kind === "similar");
+  const current = GROUPS.find((g) => g.key === groupBy)!;
+  const on = groupBy !== "none" && !isSimilar;
+  return (
+    <Dropdown
+      title={isSimilar ? "グループ分け（重複の候補では使えません）" : `グループ分け：${current.label}`}
+      active={on}
+      width="w-64"
+      button={
+        <>
+          <Layers size={15} />
+          <span>{on ? current.label : "グループ"}</span>
+          <ChevronDown size={13} className="text-dim" />
+        </>
+      }
+    >
+      <div className={heading}>
+        グループ分け{isSimilar && <span className="ml-1 font-normal">（重複の候補では無効）</span>}
+      </div>
+      {GROUPS.map((g) => (
+        <button
+          key={g.key}
+          data-close
+          disabled={isSimilar}
+          onClick={() => setGroupBy(g.key)}
+          className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left enabled:hover:bg-white/8 disabled:opacity-40 ${
+            groupBy === g.key ? "text-fg" : "text-dim"
+          }`}
+        >
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span>{g.label}</span>
+            {g.key !== "none" && <span className="text-[11px] text-dim">{g.hint}</span>}
+          </span>
+          {groupBy === g.key && <Check size={13} className="shrink-0 text-accent" />}
+        </button>
+      ))}
+    </Dropdown>
+  );
+}
+
+/** Thumbnail size and the information shown under each thumbnail. */
+export function DisplayMenu() {
+  const showInfo = useStore((s) => s.showInfo);
+  const setShowInfo = useStore((s) => s.setShowInfo);
+  const thumbSize = useStore((s) => s.thumbSize);
+  const setThumbSize = useStore((s) => s.setThumbSize);
+  const layout = useStore((s) => s.layout);
+  const setLayout = useStore((s) => s.setLayout);
+  return (
+    <Dropdown title="表示（レイアウト・サムネイルの大きさ・表示する情報）" width="w-64" button={<Eye size={15} />}>
+      <div className={heading}>レイアウト</div>
+      {LAYOUTS.map((l) => (
+        <button
+          key={l.key}
+          data-close
+          onClick={() => setLayout(l.key)}
+          className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-white/8 ${
+            layout === l.key ? "text-fg" : "text-dim"
+          }`}
+        >
+          <span className={`shrink-0 ${layout === l.key ? "text-accent" : ""}`}>{l.icon}</span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span>{l.label}</span>
+            <span className="text-[11px] text-dim">{l.hint}</span>
+          </span>
+          {layout === l.key && <Check size={13} className="shrink-0 text-accent" />}
+        </button>
+      ))}
+      <div className="mx-1.5 my-1 border-t border-line" />
+      <div className={heading}>サムネイルの大きさ</div>
+      <label className="flex items-center gap-2 px-2 py-1.5" title="⌘+ / ⌘-">
+        <input
+          type="range"
+          min={80}
+          max={360}
+          step={10}
+          value={thumbSize}
+          disabled={layout === "list"}
+          onChange={(e) => setThumbSize(Number(e.target.value))}
+          className="min-w-0 flex-1 accent-accent disabled:opacity-40"
+        />
+        <span className="w-10 text-right text-dim tabular-nums">{thumbSize}</span>
+      </label>
+      <div className="mx-1.5 my-1 border-t border-line" />
+      <div className={heading}>サムネイルの下に表示</div>
+      {INFO.map((i) => (
+        <label key={i.key} className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 hover:bg-white/8">
+          <input
+            type="checkbox"
+            checked={showInfo[i.key]}
+            onChange={(e) => setShowInfo({ [i.key]: e.target.checked })}
+            className="accent-accent"
+          />
+          {i.label}
+        </label>
+      ))}
+    </Dropdown>
   );
 }

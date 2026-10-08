@@ -12,8 +12,6 @@ use std::io::Read;
 /// Thumbnail canvas (4:3).
 pub const THUMB_W: u32 = 512;
 pub const THUMB_H: u32 = 384;
-/// At most this many characters are listed in the viewer.
-const MAX_CHARS: usize = 3000;
 
 fn be16(d: &[u8], at: usize) -> Result<u16, String> {
     d.get(at..at + 2).map(|b| u16::from_be_bytes([b[0], b[1]])).ok_or_else(|| "フォントが壊れています".into())
@@ -134,16 +132,35 @@ pub struct FaceInfo {
     pub weight: f32,
     pub italic: bool,
     pub glyphs: u16,
+    /// Characters (code points) the face maps, not counting spaces / controls.
+    pub char_count: usize,
+    /// e.g. "Version 2.004".
+    pub version: String,
+    /// Designer, else the foundry.
+    pub designer: String,
+    /// Variation axes; empty unless it is a variable font.
+    pub axes: Vec<AxisInfo>,
+    /// Named styles of a variable font ("Thin", "Bold", ...).
+    pub instances: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AxisInfo {
+    /// e.g. "wght", "wdth", "ital".
+    pub tag: String,
+    pub name: String,
+    pub min: f32,
+    pub default: f32,
+    pub max: f32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontInfo {
     pub faces: Vec<FaceInfo>,
-    /// Characters of the requested face (code points), at most `MAX_CHARS`.
+    /// Every character of the requested face (code points), in order.
     pub chars: Vec<u32>,
-    /// How many characters the face has in all.
-    pub char_count: usize,
 }
 
 /// A name, Japanese if the font has one, else English, else whatever is
@@ -168,6 +185,19 @@ fn face_ref(sfnt: &[u8], index: u32) -> Result<FontRef<'_>, String> {
     FontRef::from_index(sfnt, index).map_err(|e| format!("フォントを読めません: {e}"))
 }
 
+/// The characters a face maps (code points, sorted), without spaces and controls.
+fn chars(font: &FontRef) -> Vec<u32> {
+    let mut chars: Vec<u32> = font
+        .charmap()
+        .mappings()
+        .map(|(c, _)| c)
+        .filter(|&c| char::from_u32(c).is_some_and(|ch| !ch.is_control() && !ch.is_whitespace()))
+        .collect();
+    chars.sort_unstable();
+    chars.dedup();
+    chars
+}
+
 fn face_info(font: &FontRef) -> FaceInfo {
     let attrs = font.attributes();
     FaceInfo {
@@ -177,25 +207,45 @@ fn face_info(font: &FontRef) -> FaceInfo {
         weight: attrs.weight.value(),
         italic: attrs.style != skrifa::attribute::Style::Normal,
         glyphs: font.maxp().map(|m| m.num_glyphs()).unwrap_or(0),
+        char_count: chars(font).len(),
+        version: name(font, &[StringId::VERSION_STRING]),
+        designer: name(font, &[StringId::DESIGNER, StringId::MANUFACTURER]),
+        axes: font
+            .axes()
+            .iter()
+            .map(|a| AxisInfo {
+                tag: a.tag().to_string(),
+                name: name(font, &[a.name_id()]),
+                min: a.min_value(),
+                default: a.default_value(),
+                max: a.max_value(),
+            })
+            .collect(),
+        instances: font
+            .named_instances()
+            .iter()
+            .map(|i| name(font, &[i.subfamily_name_id()]))
+            .filter(|n| !n.is_empty())
+            .collect(),
     }
 }
 
-/// Names of every face, and the characters of face `index`.
+/// Names and details of every face in the file.
+pub fn faces(sfnt: &[u8]) -> Result<Vec<FaceInfo>, String> {
+    (0..face_count(sfnt)?).map(|i| face_ref(sfnt, i).map(|f| face_info(&f))).collect()
+}
+
+/// Family and weight of the first face: what groups the styles of a family
+/// (e.g. "Noto Sans JP" Light / Regular / Bold, each in its own file).
+pub fn family(sfnt: &[u8]) -> Result<(String, u32), String> {
+    let font = face_ref(sfnt, 0)?;
+    let family = name(&font, &[StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME]);
+    Ok((family, font.attributes().weight.value().round() as u32))
+}
+
+/// Every face, and the characters of face `index`.
 pub fn info(sfnt: &[u8], index: u32) -> Result<FontInfo, String> {
-    let faces = (0..face_count(sfnt)?)
-        .map(|i| face_ref(sfnt, i).map(|f| face_info(&f)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut chars: Vec<u32> = face_ref(sfnt, index)?
-        .charmap()
-        .mappings()
-        .map(|(c, _)| c)
-        .filter(|&c| char::from_u32(c).is_some_and(|ch| !ch.is_control() && !ch.is_whitespace()))
-        .collect();
-    chars.sort_unstable();
-    chars.dedup();
-    let char_count = chars.len();
-    chars.truncate(MAX_CHARS);
-    Ok(FontInfo { faces, chars, char_count })
+    Ok(FontInfo { faces: faces(sfnt)?, chars: chars(&face_ref(sfnt, index)?) })
 }
 
 /// Sample lines for the thumbnail: "Aa" and Japanese / Latin text, using
@@ -218,6 +268,44 @@ fn sample_lines(font: &FontRef) -> (String, String) {
         .map(str::to_string)
         .unwrap_or_default();
     (big, small)
+}
+
+/// A line of sample text for the list layout: the first candidate the font
+/// fully covers, else whatever characters it has.
+pub fn list_sample(sfnt: &[u8]) -> Result<String, String> {
+    const CANDIDATES: &[&str] = &[
+        "永遠の青い空 いろは アイウ Aa 123",
+        "いろはにほへと アイウエオ Aa 123",
+        "The quick brown fox jumps over 0123",
+        "ABC abc 123",
+    ];
+    let font = face_ref(sfnt, 0)?;
+    let cmap = font.charmap();
+    let covered = |s: &str| s.chars().filter(|c| !c.is_whitespace()).all(|c| cmap.map(c).is_some());
+    if let Some(s) = CANDIDATES.iter().find(|s| covered(s)) {
+        return Ok(s.to_string());
+    }
+    Ok(chars(&font).into_iter().filter_map(char::from_u32).take(24).collect())
+}
+
+/// What the list layout shows for a font: a sample line and the style of the
+/// first font in the file.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListPreview {
+    pub sample: String,
+    pub style: String,
+    /// Fonts in the file (several for TTC / OTC).
+    pub faces: u32,
+}
+
+pub fn list_preview(sfnt: &[u8]) -> Result<ListPreview, String> {
+    let font = face_ref(sfnt, 0)?;
+    Ok(ListPreview {
+        sample: list_sample(sfnt)?,
+        style: name(&font, &[StringId::TYPOGRAPHIC_SUBFAMILY_NAME, StringId::SUBFAMILY_NAME]),
+        faces: face_count(sfnt)?,
+    })
 }
 
 fn xml_escape(s: &str) -> String {
@@ -266,6 +354,11 @@ pub mod tests {
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Geneva.ttf",
         "C:\\Windows\\Fonts\\arial.ttf",
+    ];
+    pub const VARIABLE: &[&str] = &[
+        "/System/Library/Fonts/SFNS.ttf",
+        "/System/Library/Fonts/Supplemental/Skia.ttf",
+        "C:\\Windows\\Fonts\\bahnschrift.ttf",
     ];
     pub const COLLECTION: &[&str] = &[
         "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
@@ -322,13 +415,20 @@ pub mod tests {
         assert!(!info.faces[0].family.is_empty());
         assert!(info.chars.contains(&('A' as u32)));
         assert!(info.faces[0].glyphs > 50);
+        assert_eq!(info.faces[0].char_count, info.chars.len());
+        assert_eq!(family(&ttf).unwrap(), (info.faces[0].family.clone(), info.faces[0].weight.round() as u32));
+        assert!(!info.faces[0].version.is_empty());
 
         let woff = encode_woff(&ttf);
         let back = to_sfnt(&woff, "woff").unwrap();
         // Rebuilt with sorted tables, so compare what the font contains.
         let again = super::info(&back, 0).unwrap();
-        assert_eq!((again.faces[0].family.as_str(), again.char_count), (info.faces[0].family.as_str(), info.char_count));
+        assert_eq!((again.faces[0].family.as_str(), again.chars.len()), (info.faces[0].family.as_str(), info.chars.len()));
         assert!(ink(&render_thumb(&back).unwrap()) > 0.02, "the sample is drawn");
+        // A Latin font gets the Latin line, every character of it covered.
+        let p = list_preview(&ttf).unwrap();
+        assert_eq!((p.sample.as_str(), p.faces), ("The quick brown fox jumps over 0123", 1));
+        assert!(!p.style.is_empty());
     }
 
     #[test]
@@ -343,6 +443,21 @@ pub mod tests {
         assert_eq!(info(&last, 0).unwrap().faces[0].full_name, all.faces[n as usize - 1].full_name);
         assert!(extract_face(&ttc, n).is_err());
         assert!(ink(&render_thumb(&ttc).unwrap()) > 0.02);
+        let p = list_preview(&ttc).unwrap();
+        assert_eq!(p.faces, n);
+        assert!(p.sample.chars().filter(|c| !c.is_whitespace()).count() >= 3);
+    }
+
+    #[test]
+    fn variable_font() {
+        let Some(ttf) = system_font(VARIABLE) else { return };
+        let face = &faces(&ttf).unwrap()[0];
+        let wght = face.axes.iter().find(|a| a.tag == "wght").expect("a weight axis");
+        assert!(wght.min < wght.default && wght.default <= wght.max);
+        assert!(face.instances.len() >= 2, "named styles: {:?}", face.instances);
+        // A plain font has neither.
+        let Some(plain) = system_font(SINGLE) else { return };
+        assert!(faces(&plain).unwrap()[0].axes.is_empty());
     }
 
     #[test]

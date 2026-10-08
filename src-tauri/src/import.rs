@@ -284,6 +284,7 @@ fn process(
         thumb,
         phash: Some(phash),
         preview,
+        font: None,
     }))
 }
 
@@ -292,6 +293,7 @@ fn process(
 fn process_font(name: String, ext: String, data: Vec<u8>, hash: String, root: &Path) -> Result<Outcome, String> {
     let sfnt = fonts::to_sfnt(&data, &ext)?;
     let sample = fonts::render_thumb(&sfnt)?;
+    let family = fonts::family(&sfnt)?;
     let id = uuid::Uuid::new_v4().simple().to_string();
     let file_name = sanitize(&name);
     let item_dir = root.join("images").join(&id);
@@ -313,6 +315,7 @@ fn process_font(name: String, ext: String, data: Vec<u8>, hash: String, root: &P
         thumb,
         phash: None,
         preview: None,
+        font: Some(family),
     }))
 }
 
@@ -384,6 +387,40 @@ pub fn compute_missing_phashes(lib: &Mutex<Option<Library>>) -> Result<usize, St
     }
     db::set_phashes(&mut l.conn, &hashes).map_err(|e| e.to_string())?;
     Ok(hashes.len())
+}
+
+/// Reads the family and weight of fonts imported before they were stored.
+/// Like `compute_missing_phashes`, the library is locked only at the ends.
+/// Returns how many were read.
+pub fn compute_missing_font_names(lib: &Mutex<Option<Library>>) -> Result<usize, String> {
+    let (root, missing) = {
+        let guard = lib.lock().unwrap();
+        let l = guard.as_ref().ok_or("ライブラリが開かれていません")?;
+        (l.root.clone(), db::missing_font_names(&l.conn).map_err(|e| e.to_string())?)
+    };
+    if missing.is_empty() {
+        return Ok(0);
+    }
+    let names: Vec<(String, (String, u32))> = missing
+        .par_iter()
+        .map(|(id, file_name, ext)| {
+            let path = root.join("images").join(id).join(file_name);
+            // A file that can't be read gets an empty family, so it isn't retried every time.
+            let name = fs::read(&path)
+                .map_err(|e| e.to_string())
+                .and_then(|d| fonts::to_sfnt(&d, ext))
+                .and_then(|s| fonts::family(&s))
+                .unwrap_or_default();
+            (id.clone(), name)
+        })
+        .collect();
+    let mut guard = lib.lock().unwrap();
+    let l = guard.as_mut().ok_or("ライブラリが開かれていません")?;
+    if l.root != root {
+        return Err("読み込み中にライブラリが切り替わりました".into());
+    }
+    db::set_font_names(&mut l.conn, &names).map_err(|e| e.to_string())?;
+    Ok(names.len())
 }
 
 fn commit(
@@ -753,9 +790,26 @@ mod tests {
         assert_eq!(names, ["square.png"]);
         assert!(db::missing_phashes(&l.conn).unwrap().is_empty());
 
+        // The family is stored, so the TTF and the WOFF of one font group and search together.
+        let family = fonts::family(&ttf).unwrap().0;
+        let fonts_of = |conn: &rusqlite::Connection| -> Vec<(Option<String>, Option<u32>)> {
+            let q = db::ItemQuery { search: format!("\"{family}\""), sort: db::SortKey::Name, ..Default::default() };
+            db::query_items(conn, &q).unwrap().into_iter().map(|i| (i.font_family, i.font_weight)).collect()
+        };
+        let found = fonts_of(&l.conn);
+        assert_eq!(found.len(), 2, "found by family name");
+        assert!(found.iter().all(|f| f.0.as_deref() == Some(family.as_str()) && f.1.is_some_and(|w| w >= 100)));
+
         // Rotating skips fonts.
         let ids: Vec<String> = all.iter().map(|i| i.id.clone()).collect();
         assert_eq!(orient(l, &ids, OrientOp::RotateCw).unwrap(), 1);
+
+        // Fonts imported before the family was stored get it filled in.
+        l.conn.execute("UPDATE items SET font_family = NULL, font_weight = NULL", []).unwrap();
+        drop(g);
+        assert_eq!(compute_missing_font_names(&lib).unwrap(), 2);
+        assert_eq!(compute_missing_font_names(&lib).unwrap(), 0);
+        assert_eq!(fonts_of(&lib.lock().unwrap().as_ref().unwrap().conn), found);
     }
 
     #[test]

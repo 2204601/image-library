@@ -325,6 +325,24 @@ pub async fn font_info(app: AppHandle, id: String, face: u32) -> CmdResult<crate
     .map_err(err)?
 }
 
+/// Names and details of every font in the file (the details panel).
+#[tauri::command]
+pub async fn font_faces(app: AppHandle, id: String) -> CmdResult<Vec<crate::fonts::FaceInfo>> {
+    tauri::async_runtime::spawn_blocking(move || crate::fonts::faces(&font_sfnt(&app.state::<AppState>(), &id)?))
+        .await
+        .map_err(err)?
+}
+
+/// A sample line and the style of a font, for the list layout.
+#[tauri::command]
+pub async fn font_list_preview(app: AppHandle, id: String) -> CmdResult<crate::fonts::ListPreview> {
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::fonts::list_preview(&font_sfnt(&app.state::<AppState>(), &id)?)
+    })
+    .await
+    .map_err(err)?
+}
+
 /// Font `face` as plain OpenType data, for `new FontFace()` in the viewer
 /// (web views can't load one font out of a collection).
 #[tauri::command]
@@ -431,6 +449,17 @@ pub async fn import_paths(
 pub async fn index_similar(app: AppHandle) -> CmdResult<usize> {
     tauri::async_runtime::spawn_blocking(move || {
         import::compute_missing_phashes(&app.state::<AppState>().lib)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Reads the family of fonts imported before it was stored (grouping by
+/// family, search). Returns how many were read.
+#[tauri::command]
+pub async fn index_fonts(app: AppHandle) -> CmdResult<usize> {
+    tauri::async_runtime::spawn_blocking(move || {
+        import::compute_missing_font_names(&app.state::<AppState>().lib)
     })
     .await
     .map_err(err)?

@@ -165,7 +165,7 @@ export function FilterBar() {
         <Popover label="形式" value={filter.exts.join(", ")} onClear={() => setFilter({ exts: [] })}>
           {() =>
             exts.length === 0 ? (
-              <p className="px-2 py-1 text-dim">画像がありません</p>
+              <p className="px-2 py-1 text-dim">ファイルがありません</p>
             ) : (
               exts.map(([ext, n]) => (
                 <Option key={ext} on={filter.exts.includes(ext)} onClick={() => toggle("exts", ext)}>

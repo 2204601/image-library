@@ -1,11 +1,12 @@
-// Splits the list into sections (rating bands, tags, folders) for the grid.
+// Splits the list into sections (rating bands, tags, folders, kinds, font
+// families) for the grid.
 // The result is a flattened display list plus the [start, end) of each
 // section, so layouts and navigation keep working on plain indices.
-import type { Folder, Item, Tag } from "./api";
+import { KINDS, type Folder, type Item, type Tag } from "./api";
 
-export type GroupBy = "none" | "rating" | "tag" | "folder";
+export type GroupBy = "none" | "rating" | "tag" | "folder" | "kind" | "family";
 
-export const GROUP_BYS: GroupBy[] = ["none", "rating", "tag", "folder"];
+export const GROUP_BYS: GroupBy[] = ["none", "rating", "tag", "folder", "kind", "family"];
 
 export interface Section {
   /** Index of the first item, and one past the last. */
@@ -88,6 +89,10 @@ export function groupItems(items: Item[], by: GroupBy, tags: Tag[], folders: Fol
       { items: items.filter((i) => i.tagIds.length === 0), title: "タグなし" },
     ]);
   }
+  if (by === "kind") {
+    return build(KINDS.map((k) => ({ items: items.filter((i) => i.kind === k.kind), title: k.label })));
+  }
+  if (by === "family") return byFamily(items);
   return build([
     ...folderPaths(folders).map(({ folder, path }) => ({
       items: items.filter((i) => i.folderId === folder.id),
@@ -95,5 +100,28 @@ export function groupItems(items: Item[], by: GroupBy, tags: Tag[], folders: Fol
       color: folder.color,
     })),
     { items: items.filter((i) => i.folderId === null), title: "未分類" },
+  ]);
+}
+
+/**
+ * One section per font family, families by name, the styles of a family from
+ * thin to black (then by the list order); everything else last.
+ */
+function byFamily(items: Item[]): Grouped {
+  const families = new Map<string, Item[]>();
+  for (const i of items) {
+    if (i.kind !== "font") continue;
+    const f = i.fontFamily || "";
+    if (!families.has(f)) families.set(f, []);
+    families.get(f)!.push(i);
+  }
+  const names = [...families.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : a.localeCompare(b, "ja")));
+  return build([
+    ...names.map((f) => ({
+      // A stable sort keeps the list order among fonts of the same weight.
+      items: families.get(f)!.sort((a, b) => (a.fontWeight ?? 400) - (b.fontWeight ?? 400)),
+      title: f || "ファミリー不明",
+    })),
+    { items: items.filter((i) => i.kind !== "font"), title: "フォント以外" },
   ]);
 }
