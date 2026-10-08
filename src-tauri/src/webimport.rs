@@ -53,17 +53,36 @@ struct Shared {
 }
 
 pub struct Server {
-    http: Arc<tiny_http::Server>,
+    http: Option<Arc<tiny_http::Server>>,
     thread: Option<JoinHandle<()>>,
     port: u16,
 }
 
+/// tiny_http closes the listening socket on its own thread after the server is
+/// dropped, without waiting for it: the port can stay open for a moment.
+const CLOSE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
 impl Server {
     /// Starts listening on `127.0.0.1:port` (0 = any free port, for tests).
     pub fn start(port: u16, token: String, host: Arc<dyn Host>) -> Result<Self, String> {
-        let http = tiny_http::Server::http(("127.0.0.1", port)).map_err(|e| {
-            format!("127.0.0.1:{port} で待ち受けできませんでした（ほかのアプリが使用中の可能性があります）: {e}")
-        })?;
+        // Restarting (a new key) can come right after the old server let go of the port.
+        let started = std::time::Instant::now();
+        let http = loop {
+            match tiny_http::Server::http(("127.0.0.1", port)) {
+                Ok(h) => break h,
+                Err(e)
+                    if started.elapsed() < CLOSE_WAIT
+                        && e.downcast_ref::<std::io::Error>().map(|e| e.kind()) == Some(std::io::ErrorKind::AddrInUse) =>
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                Err(e) => {
+                    return Err(format!(
+                        "127.0.0.1:{port} で待ち受けできませんでした（ほかのアプリが使用中の可能性があります）: {e}"
+                    ))
+                }
+            }
+        };
         let http = Arc::new(http);
         let port = http.server_addr().to_ip().map(|a| a.port()).unwrap_or(port);
         let shared = Arc::new(Shared { token, pairing: AtomicBool::new(false) });
@@ -75,7 +94,7 @@ impl Server {
                 std::thread::spawn(move || serve(req, port, &shared, &*host));
             }
         });
-        Ok(Self { http, thread: Some(thread), port })
+        Ok(Self { http: Some(http), thread: Some(thread), port })
     }
 
     pub fn port(&self) -> u16 {
@@ -84,10 +103,18 @@ impl Server {
 }
 
 impl Drop for Server {
+    /// Returns once the port is closed, so it can be listened on again at once.
     fn drop(&mut self) {
-        self.http.unblock();
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
+        if let Some(http) = self.http.take() {
+            http.unblock();
+            if let Some(t) = self.thread.take() {
+                let _ = t.join();
+            }
+            drop(http); // the last reference: tiny_http starts closing the socket
+        }
+        let started = std::time::Instant::now();
+        while started.elapsed() < CLOSE_WAIT && std::net::TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
         }
     }
 }
@@ -496,10 +523,16 @@ mod tests {
 
     #[test]
     fn stops_listening_when_dropped() {
-        let (_tmp, _host, server) = setup();
+        let (_tmp, host, server) = setup();
         let p = server.port();
         drop(server);
         assert!(TcpStream::connect(("127.0.0.1", p)).is_err());
+        // Restarting on the same port (a new key) works straight away, again and again.
+        for _ in 0..5 {
+            let again = Server::start(p, TOKEN.into(), host.clone()).unwrap();
+            assert_eq!(again.port(), p);
+            drop(again);
+        }
     }
 
     #[test]
