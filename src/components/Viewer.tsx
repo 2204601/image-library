@@ -8,11 +8,13 @@ import {
   Maximize,
   Minus,
   Plus,
+  RotateCcw,
+  RotateCw,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { setRating, toggleFavorite, togglePinned } from "../lib/actions";
-import { formatBytes, type Item } from "../lib/api";
+import { orient, setRating, toggleFavorite, togglePinned } from "../lib/actions";
+import { formatBytes, orientTransform, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { folderPaths } from "../lib/grouping";
 import { useStore } from "../store";
@@ -140,6 +142,9 @@ export function Viewer() {
       } else if (e.key === "End") {
         e.preventDefault();
         show(items.length - 1);
+      } else if (mod && e.shiftKey && (e.code === "KeyR" || e.code === "KeyL")) {
+        e.preventDefault();
+        void orient([item.id], e.code === "KeyR" ? "rotateCw" : "rotateCcw");
       } else if (!mod && !e.shiftKey && e.code === "KeyZ") {
         setZoom((z) => (z === "fit" ? 1 : "fit"));
       } else if (!mod && !e.shiftKey && e.code === "KeyF") {
@@ -197,6 +202,8 @@ export function Viewer() {
   const tool = "rounded p-1 text-white/70 hover:bg-white/10 hover:text-white";
   const toggle = (on: boolean) => `${tool} ${on ? "bg-white/10 text-accent hover:text-accent" : ""}`;
   const larger = item.width * scale > box.w || item.height * scale > box.h;
+  // Turned a quarter: the file's own width is the displayed height.
+  const sideways = item.rotation % 2 === 1;
 
   return (
     <div className="fixed inset-0 z-40 flex animate-fade-in flex-col bg-black/95">
@@ -205,6 +212,14 @@ export function Viewer() {
         <span className="text-xs text-white/40 tabular-nums">
           {item.width} × {item.height}
         </span>
+        <div className="flex items-center gap-1">
+          <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw")}>
+            <RotateCcw size={15} />
+          </button>
+          <button className={tool} title="右に回転（⌘⇧R）" onClick={() => orient([item.id], "rotateCw")}>
+            <RotateCw size={15} />
+          </button>
+        </div>
         <div className="flex items-center gap-1">
           <button className={tool} title="縮小（⌘-）" onClick={() => zoomTo(scale / STEP)}>
             <Minus size={16} />
@@ -253,11 +268,9 @@ export function Viewer() {
               if (e.target === e.currentTarget && !suppressClick.current) openViewer(null);
             }}
           >
-            <img
+            {/* The box has the displayed (turned) size; the original file inside is rotated to fill it. */}
+            <div
               key={item.id}
-              src={convertFileSrc(item.displayPath)}
-              alt={item.name}
-              draggable={false}
               onClick={(e) => {
                 e.stopPropagation();
                 if (suppressClick.current) return;
@@ -266,10 +279,22 @@ export function Viewer() {
                 else setZoom("fit");
               }}
               style={{ width: item.width * scale, height: item.height * scale }}
-              className={`m-auto max-w-none shrink-0 animate-zoom-in ${
+              className={`relative m-auto shrink-0 animate-zoom-in ${
                 larger ? "" : zoom === "fit" && fitScale < 1 ? "cursor-zoom-in" : "cursor-zoom-out"
               }`}
-            />
+            >
+              <img
+                src={convertFileSrc(item.displayPath)}
+                alt={item.name}
+                draggable={false}
+                style={{
+                  width: (sideways ? item.height : item.width) * scale,
+                  height: (sideways ? item.width : item.height) * scale,
+                  transform: `translate(-50%, -50%) ${orientTransform(item)}`,
+                }}
+                className="absolute top-1/2 left-1/2 max-w-none"
+              />
+            </div>
           </div>
           <button className={`${nav} left-4`} disabled={index === 0} onClick={() => show(index - 1)}>
             <ChevronLeft size={24} />
@@ -368,6 +393,7 @@ function Details({ item, items }: { item: Item; items: Item[] }) {
       <p className="mt-auto pt-2 text-[11px] leading-5 text-white/35">
         1〜5 で評価、0 で解除、Shift+数字で評価して次へ
         <br />F お気に入り / P ピン留め / I 詳細 / T サムネイル
+        <br />⌘⇧L / ⌘⇧R 左右に回転
       </p>
     </aside>
   );

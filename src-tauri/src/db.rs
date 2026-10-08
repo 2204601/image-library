@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 8;
+const SCHEMA_VERSION: i32 = 9;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -195,6 +195,13 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         add_column(c, "items", "pinned_at", "INTEGER")?;
         Ok(())
     })?;
+    // Non-destructive rotate / flip (see orient.rs). width / height are the
+    // displayed size, so they are swapped while the item is turned sideways.
+    step(9, &|c| {
+        add_column(c, "items", "rotation", "INTEGER NOT NULL DEFAULT 0")?;
+        add_column(c, "items", "flipped", "INTEGER NOT NULL DEFAULT 0")?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -212,6 +219,7 @@ pub struct Item {
     pub name: String,
     pub file_name: String,
     pub ext: String,
+    /// Displayed size (after rotation), see `rotation`.
     pub width: u32,
     pub height: u32,
     pub size: i64,
@@ -226,6 +234,10 @@ pub struct Item {
     pub favorite: bool,
     /// When the item was pinned to the top of lists; None = not pinned.
     pub pinned_at: Option<i64>,
+    /// Clockwise quarter turns (0..=3), applied after `flipped` (see orient.rs).
+    pub rotation: u8,
+    /// Mirrored horizontally (before rotating).
+    pub flipped: bool,
     /// The folder the item is in (an item is in one at most).
     pub folder_id: Option<String>,
     pub tag_ids: Vec<i64>,
@@ -366,7 +378,8 @@ const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items
      items.size, items.thumb, items.note, items.rating, items.imported_at, items.deleted_at, items.preview, \
      items.favorite, items.pinned_at, \
      (SELECT folder_id FROM item_folders WHERE item_id = items.id LIMIT 1), \
-     (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id)";
+     (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id), \
+     items.rotation, items.flipped";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     let tag_ids: Option<String> = r.get(16)?;
@@ -386,6 +399,8 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         preview: r.get(12)?,
         favorite: r.get::<_, i64>(13)? != 0,
         pinned_at: r.get(14)?,
+        rotation: r.get(17)?,
+        flipped: r.get::<_, i64>(18)? != 0,
         folder_id: r.get(15)?,
         tag_ids: tag_ids
             .map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect())
@@ -636,10 +651,11 @@ fn similar_groups(conn: &Connection, items: Vec<Item>, level: similar::Level) ->
     Ok(out)
 }
 
-/// Live items whose perceptual hash hasn't been computed: (id, thumbnail file).
+/// Live items whose perceptual hash hasn't been computed: (id, unrotated
+/// thumbnail file), so the hash doesn't depend on the orientation.
 pub fn missing_phashes(conn: &Connection) -> DbResult<Vec<(String, String)>> {
     let mut stmt = conn.prepare("SELECT id, thumb FROM items WHERE phash IS NULL AND deleted_at IS NULL")?;
-    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, crate::orient::base_thumb(&r.get::<_, String>(1)?))))?;
     rows.collect()
 }
 
@@ -730,6 +746,22 @@ pub fn set_pinned(conn: &Connection, ids: &[String], on: bool) -> DbResult<()> {
     for id in ids {
         stmt.execute(params![id, now])?;
     }
+    Ok(())
+}
+
+/// Stores a new orientation with the matching displayed size and thumbnail.
+pub fn set_orientation(
+    conn: &Connection,
+    id: &str,
+    o: crate::orient::Orientation,
+    width: u32,
+    height: u32,
+    thumb: &str,
+) -> DbResult<()> {
+    conn.execute(
+        "UPDATE items SET rotation = ?2, flipped = ?3, width = ?4, height = ?5, thumb = ?6 WHERE id = ?1",
+        params![id, o.rotation, o.flipped as i64, width, height, thumb],
+    )?;
     Ok(())
 }
 

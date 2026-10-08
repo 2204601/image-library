@@ -3,6 +3,7 @@ pub mod db;
 pub mod formats;
 pub mod import;
 pub mod library;
+pub mod orient;
 pub mod search;
 pub mod similar;
 
@@ -35,6 +36,7 @@ pub fn run() {
             set_rating,
             set_favorite,
             set_pinned,
+            orient_items,
             copy_items,
             export_items,
             reorder_in_folder,

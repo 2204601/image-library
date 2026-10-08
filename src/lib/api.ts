@@ -24,6 +24,10 @@ export interface Item {
   favorite: boolean;
   /** When the item was pinned to the top of lists; null = not pinned. */
   pinnedAt: number | null;
+  /** Clockwise quarter turns (0-3), applied after `flipped`. width / height are already the turned size. */
+  rotation: number;
+  /** Mirrored horizontally (before rotating). */
+  flipped: boolean;
   /** The folder the item is in, if any (one at most). */
   folderId: string | null;
   tagIds: number[];
@@ -35,6 +39,20 @@ export interface Item {
   group?: number;
   /** Similar view only: differing hash bits (of 64) from the group's best copy. */
   distance?: number;
+}
+
+/** Rotate / flip, applied on top of the current orientation (the file is never changed). */
+export type OrientOp = "rotateCw" | "rotateCcw" | "flipH" | "flipV" | "reset";
+
+/**
+ * CSS transform that shows the original file with the item's orientation.
+ * Flip first, then rotate — the same order as src-tauri/src/orient.rs.
+ */
+export function orientTransform(item: Pick<Item, "rotation" | "flipped">): string {
+  const parts = [];
+  if (item.rotation) parts.push(`rotate(${item.rotation * 90}deg)`);
+  if (item.flipped) parts.push("scaleX(-1)");
+  return parts.join(" ");
 }
 
 export type View =
@@ -182,6 +200,7 @@ export const api = {
   setFavorite: (ids: string[], on: boolean) => invoke<void>("set_favorite", { ids, on }),
   /** Pinned items come first in every list. */
   setPinned: (ids: string[], on: boolean) => invoke<void>("set_pinned", { ids, on }),
+  orientItems: (ids: string[], op: OrientOp) => invoke<number>("orient_items", { ids, op }),
   copyItems: (ids: string[]) => invoke<number>("copy_items", { ids }),
   exportItems: (ids: string[], dest: string) => invoke<number>("export_items", { ids, dest }),
 
