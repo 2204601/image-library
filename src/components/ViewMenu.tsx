@@ -1,6 +1,6 @@
 // Toolbar controls for how the list looks, each on its own: the layout
 // (one click), grouping into sections, and what to show per thumbnail.
-import { Check, ChevronDown, Columns3, Eye, Layers, LayoutGrid, LayoutList, Rows3 } from "lucide-react";
+import { Check, ChevronDown, Columns3, Layers, LayoutGrid, LayoutList, Rows3, SlidersHorizontal } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { GroupBy } from "../lib/grouping";
 import { useStore, type Layout, type ShowInfo } from "../store";
@@ -165,7 +165,7 @@ export function DisplayMenu() {
   const layout = useStore((s) => s.layout);
   const setLayout = useStore((s) => s.setLayout);
   return (
-    <Dropdown title="表示（レイアウト・サムネイルの大きさ・表示する情報）" width="w-64" button={<Eye size={15} />}>
+    <Dropdown title="表示（レイアウト・サムネイルの大きさ・表示する情報）" width="w-64" button={<SlidersHorizontal size={15} />}>
       <div className={heading}>レイアウト</div>
       {LAYOUTS.map((l) => (
         <button
