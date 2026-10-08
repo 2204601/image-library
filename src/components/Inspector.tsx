@@ -1,5 +1,6 @@
 import { colorHex } from "../lib/colors";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Folder as FolderIcon, Heart, Pin, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -123,6 +124,16 @@ function TagInput({ onAdd, exclude }: { onAdd: (names: string[]) => void; exclud
 }
 
 const btn = "h-8 rounded-md border border-line hover:bg-white/5";
+
+/** "example.com/path" for showing a URL compactly. */
+function hostOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.host.replace(/^www\./, "") + (u.pathname === "/" ? "" : decodeURI(u.pathname));
+  } catch {
+    return url;
+  }
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -351,6 +362,20 @@ export function Inspector() {
             </dd>
             <dt className="text-dim">追加日</dt>
             <dd>{new Date(single.importedAt).toLocaleString("ja-JP")}</dd>
+            {single.sourceUrl && (
+              <>
+                <dt className="text-dim">元のページ</dt>
+                <dd className="min-w-0">
+                  <button
+                    className="block max-w-full truncate text-left text-accent hover:underline"
+                    title={single.sourceUrl}
+                    onClick={() => openUrl(single.sourceUrl!).catch((e) => useStore.getState().toast(String(e), true))}
+                  >
+                    {hostOf(single.sourceUrl)}
+                  </button>
+                </dd>
+              </>
+            )}
           </dl>
         </>
       ) : (

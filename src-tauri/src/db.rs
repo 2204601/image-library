@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 10;
+const SCHEMA_VERSION: i32 = 11;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -208,6 +208,11 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         add_column(c, "items", "kind", "TEXT NOT NULL DEFAULT 'image'")?;
         Ok(())
     })?;
+    // The web page an item was saved from with the browser extension (webimport.rs).
+    step(11, &|c| {
+        add_column(c, "items", "source_url", "TEXT")?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -269,6 +274,8 @@ pub struct Item {
     /// The folder the item is in (an item is in one at most).
     pub folder_id: Option<String>,
     pub tag_ids: Vec<i64>,
+    /// The web page the item was saved from (browser extension).
+    pub source_url: Option<String>,
     /// Similar view only: which group of look-alikes the item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<u32>,
@@ -408,7 +415,7 @@ const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items
      items.favorite, items.pinned_at, \
      (SELECT folder_id FROM item_folders WHERE item_id = items.id LIMIT 1), \
      (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id), \
-     items.rotation, items.flipped, items.kind";
+     items.rotation, items.flipped, items.kind, items.source_url";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     let tag_ids: Option<String> = r.get(16)?;
@@ -435,6 +442,7 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         tag_ids: tag_ids
             .map(|s| s.split(',').filter_map(|t| t.parse().ok()).collect())
             .unwrap_or_default(),
+        source_url: r.get(20)?,
         group: None,
         distance: None,
     })
@@ -802,6 +810,16 @@ pub fn set_orientation(
         "UPDATE items SET rotation = ?2, flipped = ?3, width = ?4, height = ?5, thumb = ?6 WHERE id = ?1",
         params![id, o.rotation, o.flipped as i64, width, height, thumb],
     )?;
+    Ok(())
+}
+
+/// Records the page the items came from. Items that already have one keep it
+/// (saving a known image again from another page doesn't change its origin).
+pub fn set_source_url(conn: &Connection, ids: &[String], url: &str) -> DbResult<()> {
+    let mut stmt = conn.prepare("UPDATE items SET source_url = ?2 WHERE id = ?1 AND source_url IS NULL")?;
+    for id in ids {
+        stmt.execute(params![id, url])?;
+    }
     Ok(())
 }
 

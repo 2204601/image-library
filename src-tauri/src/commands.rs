@@ -4,6 +4,7 @@
 use crate::db::{self, Counts, Folder, Item, ItemQuery, SelectionInfo, Tag};
 use crate::import::{self, ImportSummary, Source};
 use crate::library::Library;
+use crate::webimport;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -15,6 +16,15 @@ pub type CmdResult<T> = Result<T, String>;
 #[derive(Default)]
 pub struct AppState {
     pub lib: Mutex<Option<Library>>,
+    /// Saving from the browser extension (webimport.rs).
+    pub web: Mutex<WebServer>,
+}
+
+#[derive(Default)]
+pub struct WebServer {
+    server: Option<webimport::Server>,
+    /// Why the server couldn't start.
+    error: Option<String>,
 }
 
 fn err(e: impl ToString) -> String {
@@ -30,9 +40,18 @@ fn with_lib<T>(state: &AppState, f: impl FnOnce(&mut Library) -> CmdResult<T>) -
 // ------------------------------------------------------------- settings
 
 #[derive(Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", default)]
 struct Settings {
     last_library: Option<PathBuf>,
+    web_import: WebImportSettings,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct WebImportSettings {
+    enabled: bool,
+    /// Shared secret the extension sends with every request.
+    token: String,
 }
 
 fn settings_path(app: &AppHandle) -> CmdResult<PathBuf> {
@@ -76,7 +95,9 @@ fn activate(app: &AppHandle, state: &AppState, lib: Library) -> CmdResult<Librar
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default(),
     };
-    save_settings(app, &Settings { last_library: Some(lib.root.clone()) })?;
+    let mut settings = load_settings(app);
+    settings.last_library = Some(lib.root.clone());
+    save_settings(app, &settings)?;
     *state.lib.lock().unwrap() = Some(lib);
     Ok(info)
 }
@@ -439,7 +460,7 @@ pub async fn import_bytes(app: AppHandle, request: tauri::ipc::Request<'_>) -> C
 }
 
 /// Headers are ASCII-only, so the frontend sends `encodeURIComponent` values.
-fn percent_decode(s: &str) -> String {
+pub(crate) fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
@@ -455,6 +476,162 @@ fn percent_decode(s: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+// ----------------------------------------------------- browser extension
+
+struct TauriHost(AppHandle);
+
+impl webimport::Host for TauriHost {
+    fn library(&self) -> &Mutex<Option<Library>> {
+        &self.0.state::<AppState>().inner().lib
+    }
+
+    fn imported(&self, summary: &ImportSummary) {
+        let _ = self.0.emit("web-import", summary);
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebImportStatus {
+    enabled: bool,
+    running: bool,
+    port: u16,
+    /// Why the server isn't running although it's turned on.
+    error: Option<String>,
+    /// Where the extension was put by `install_extension`, if it was.
+    extension_dir: Option<String>,
+}
+
+fn extension_dir(app: &AppHandle) -> CmdResult<PathBuf> {
+    Ok(app.path().app_data_dir().map_err(err)?.join("chrome-extension"))
+}
+
+fn new_token() -> String {
+    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+}
+
+/// Tells an installed copy of the extension where and how to connect.
+fn write_extension_config(dir: &std::path::Path, token: &str) -> CmdResult<()> {
+    let config = serde_json::json!({ "port": webimport::PORT, "token": token });
+    fs::write(dir.join("config.json"), serde_json::to_vec_pretty(&config).map_err(err)?).map_err(err)
+}
+
+/// Starts or stops the server to match the settings (restarting it picks up a new token).
+fn apply_web_import(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut web = state.web.lock().unwrap();
+    *web = WebServer::default(); // stops a running server first, freeing the port
+    let s = load_settings(app).web_import;
+    if s.enabled && !s.token.is_empty() {
+        match webimport::Server::start(webimport::PORT, s.token, std::sync::Arc::new(TauriHost(app.clone()))) {
+            Ok(server) => web.server = Some(server),
+            Err(e) => web.error = Some(e),
+        }
+    }
+}
+
+/// At startup: runs the server if the user turned it on earlier.
+pub fn start_web_import(app: &AppHandle) {
+    if load_settings(app).web_import.enabled {
+        apply_web_import(app);
+    }
+}
+
+fn web_status(app: &AppHandle) -> CmdResult<WebImportStatus> {
+    let enabled = load_settings(app).web_import.enabled;
+    let state = app.state::<AppState>();
+    let web = state.web.lock().unwrap();
+    let dir = extension_dir(app)?;
+    Ok(WebImportStatus {
+        enabled,
+        running: web.server.is_some(),
+        port: webimport::PORT,
+        error: web.error.clone(),
+        extension_dir: dir.join("manifest.json").is_file().then(|| dir.display().to_string()),
+    })
+}
+
+#[tauri::command]
+pub fn web_import_status(app: AppHandle) -> CmdResult<WebImportStatus> {
+    web_status(&app)
+}
+
+#[tauri::command]
+pub async fn set_web_import(app: AppHandle, enabled: bool) -> CmdResult<WebImportStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut settings = load_settings(&app);
+        settings.web_import.enabled = enabled;
+        if settings.web_import.token.is_empty() {
+            settings.web_import.token = new_token();
+        }
+        save_settings(&app, &settings)?;
+        apply_web_import(&app);
+        web_status(&app)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Makes a new connection key: extensions set up before stop working until
+/// they get the new one (the installed copy is updated here).
+#[tauri::command]
+pub async fn reset_web_import_token(app: AppHandle) -> CmdResult<WebImportStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut settings = load_settings(&app);
+        settings.web_import.token = new_token();
+        save_settings(&app, &settings)?;
+        let dir = extension_dir(&app)?;
+        if dir.join("manifest.json").is_file() {
+            write_extension_config(&dir, &settings.web_import.token)?;
+        }
+        apply_web_import(&app);
+        web_status(&app)
+    })
+    .await
+    .map_err(err)?
+}
+
+fn copy_dir(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Puts the extension (bundled with the app) in a folder Chrome can load
+/// unpacked, with its connection settings, and shows it in Finder / Explorer.
+/// Doing it again updates the files in place, so Chrome keeps the extension.
+#[tauri::command]
+pub async fn install_extension(app: AppHandle) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = app.path().resource_dir().map_err(err)?.join("extension");
+        if !src.join("manifest.json").is_file() {
+            return Err(format!("拡張機能のファイルが見つかりません: {}", src.display()));
+        }
+        let mut settings = load_settings(&app);
+        if settings.web_import.token.is_empty() {
+            settings.web_import.token = new_token();
+            save_settings(&app, &settings)?;
+            apply_web_import(&app);
+        }
+        let dir = extension_dir(&app)?;
+        let _ = fs::remove_dir_all(&dir);
+        copy_dir(&src, &dir).map_err(err)?;
+        write_extension_config(&dir, &settings.web_import.token)?;
+        let _ = tauri_plugin_opener::reveal_item_in_dir(&dir);
+        Ok(dir.display().to_string())
+    })
+    .await
+    .map_err(err)?
 }
 
 /// The proxy the OS uses for `url` (PAC included), for the updater: its

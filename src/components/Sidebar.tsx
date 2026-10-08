@@ -531,6 +531,7 @@ export function Sidebar() {
             { label: "別のライブラリを開く…", onClick: openLibraryDialog },
             { label: "新しいライブラリを作成…", onClick: createLibraryDialog },
             { separator: true },
+            { label: "ブラウザ拡張と連携…", onClick: () => useStore.getState().setWebImportOpen(true) },
             { label: "アップデートを確認…", hint: appVersion(), onClick: () => checkForUpdate(true) },
           ])
         }

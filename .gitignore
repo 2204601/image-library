@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Written by the app into its installed copy of the extension only.
+extension/config.json

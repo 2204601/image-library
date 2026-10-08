@@ -33,6 +33,8 @@ export interface Item {
   /** The folder the item is in, if any (one at most). */
   folderId: string | null;
   tagIds: number[];
+  /** The web page the item was saved from with the browser extension. */
+  sourceUrl: string | null;
   filePath: string;
   thumbPath: string;
   /** What the viewer shows: the display copy if any, else the original. */
@@ -204,6 +206,18 @@ export interface ImportSummary {
   failed: string[];
 }
 
+/** Saving from the browser extension (src-tauri/src/webimport.rs). */
+export interface WebImportStatus {
+  enabled: boolean;
+  /** The local server is listening. */
+  running: boolean;
+  port: number;
+  /** Why it isn't running although enabled (e.g. the port is taken). */
+  error: string | null;
+  /** Where the extension was put for Chrome, once set up. */
+  extensionDir: string | null;
+}
+
 export const api = {
   openLastLibrary: () => invoke<LibraryInfo | null>("open_last_library"),
   createLibrary: (path: string) => invoke<LibraryInfo>("create_library", { path }),
@@ -238,6 +252,12 @@ export const api = {
       headers: { "x-name": encodeURIComponent(name), "x-folder": folderId ?? "" },
     }),
   supportedExts: () => invoke<string[]>("supported_exts"),
+  webImportStatus: () => invoke<WebImportStatus>("web_import_status"),
+  setWebImport: (enabled: boolean) => invoke<WebImportStatus>("set_web_import", { enabled }),
+  /** A new connection key: extensions set up elsewhere stop working until set up again. */
+  resetWebImportToken: () => invoke<WebImportStatus>("reset_web_import_token"),
+  /** Copies the extension to a folder Chrome can load and shows it; returns the folder. */
+  installExtension: () => invoke<string>("install_extension"),
   indexSimilar: () => invoke<number>("index_similar"),
   /** Treats these images as "not duplicates" so they aren't proposed together again. */
   dismissDuplicates: (ids: string[]) => invoke<void>("dismiss_duplicates", { ids }),

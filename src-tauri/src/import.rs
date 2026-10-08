@@ -59,6 +59,10 @@ pub struct ImportSummary {
     pub imported: usize,
     pub duplicates: usize,
     pub failed: Vec<String>,
+    /// The library items the sources ended up as (new and already known), in
+    /// import order, for follow-up changes such as tagging.
+    #[serde(skip)]
+    pub ids: Vec<String>,
 }
 
 fn ext_of(name: &str) -> Option<String> {
@@ -312,6 +316,11 @@ fn process_font(name: String, ext: String, data: Vec<u8>, hash: String, root: &P
     }))
 }
 
+/// One import at a time: two running at once could each miss the other's
+/// files when checking for duplicates (the browser extension imports while
+/// the user may be dropping files).
+static RUN_LOCK: Mutex<()> = Mutex::new(());
+
 /// Runs the import. `lib` is locked only briefly at the start and end so the
 /// UI stays responsive while files are processed.
 pub fn run(
@@ -320,6 +329,7 @@ pub fn run(
     folder_id: Option<String>,
     on_progress: impl Fn(usize, usize) + Sync,
 ) -> Result<ImportSummary, String> {
+    let _running = RUN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (root, known) = {
         let guard = lib.lock().unwrap();
         let l = guard.as_ref().ok_or("ライブラリが開かれていません")?;
@@ -425,6 +435,7 @@ fn commit(
             };
             folder = Some(next);
         }
+        summary.ids.push(id.clone());
         match placed.iter_mut().find(|(f, k, _)| *f == folder && *k == known) {
             Some((_, _, ids)) => ids.push(id),
             None => placed.push((folder, known, vec![id])),
@@ -560,6 +571,7 @@ mod tests {
         };
         let sum = run(&lib, src(), None, |_, _| {}).unwrap();
         assert_eq!((sum.imported, sum.duplicates), (0, 1));
+        assert_eq!(sum.ids, std::slice::from_ref(&id), "a known image reports the existing item");
         let g = lib.lock().unwrap();
         let conn = &g.as_ref().unwrap().conn;
         assert!(db::trashed_ids(conn).unwrap().is_empty());

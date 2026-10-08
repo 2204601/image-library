@@ -26,6 +26,68 @@ pub fn needs_preview(ext: &str) -> bool {
     matches!(ext, "heic" | "heif" | "tif" | "tiff")
 }
 
+/// The file type from the content (magic bytes), for data whose name may not
+/// say it: images saved from the web often have no or a wrong extension.
+pub fn sniff(data: &[u8]) -> Option<&'static str> {
+    let head = |n: usize| data.get(..n);
+    match head(4)? {
+        b"wOFF" => return Some("woff"),
+        b"wOF2" => return Some("woff2"),
+        b"ttcf" => return Some("ttc"),
+        b"OTTO" => return Some("otf"),
+        &[0, 1, 0, 0] | b"true" => return Some("ttf"),
+        _ => {}
+    }
+    // ISO media (HEIF / AVIF): `ftyp` box with the major and compatible brands.
+    if data.get(4..8) == Some(b"ftyp") && data.len() >= 16 {
+        let len = (u32::from_be_bytes(data[..4].try_into().ok()?) as usize).clamp(16, data.len().min(256));
+        let brands: Vec<&[u8]> = data[8..len].chunks_exact(4).collect();
+        if brands.iter().any(|b| matches!(*b, b"avif" | b"avis")) {
+            return Some("avif");
+        }
+        if brands.iter().any(|b| matches!(*b, b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"mif1" | b"msf1")) {
+            return Some("heic");
+        }
+        return None;
+    }
+    if let Ok(f) = image::guess_format(data) {
+        use image::ImageFormat::*;
+        return match f {
+            Jpeg => Some("jpg"),
+            Png => Some("png"),
+            Gif => Some("gif"),
+            WebP => Some("webp"),
+            Bmp => Some("bmp"),
+            Tiff => Some("tiff"),
+            _ => None,
+        };
+    }
+    let text = String::from_utf8_lossy(&data[..data.len().min(4096)]);
+    let text = text.trim_start_matches('\u{feff}').trim_start();
+    (text.starts_with('<') && text.contains("<svg")).then_some("svg")
+}
+
+/// `name` with the extension the content really has (see `sniff`): a wrong
+/// supported extension is replaced, anything else gets one appended.
+pub fn name_for_content(name: &str, data: &[u8]) -> String {
+    let Some(real) = sniff(data) else { return name.to_string() };
+    let family = |e: &str| match e {
+        "jpeg" => "jpg",
+        "tif" => "tiff",
+        "heif" => "heic",
+        "otc" => "ttc",
+        e => e,
+    }
+    .to_string();
+    let path = std::path::Path::new(name);
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
+    match ext {
+        Some(e) if family(&e) == family(real) => name.to_string(),
+        Some(e) if SUPPORTED_EXTS.contains(&e.as_str()) => format!("{}.{real}", &name[..name.len() - e.len() - 1]),
+        _ => format!("{name}.{real}"),
+    }
+}
+
 /// Longest side of an SVG rasterisation (thumbnails and hashing only).
 const SVG_RASTER_MAX: f32 = 1024.0;
 
@@ -172,6 +234,30 @@ mod tests {
         img.write_to(&mut buf, image::ImageFormat::Tiff).unwrap();
         let d = decode(buf.get_ref(), "tiff").unwrap();
         assert_eq!((d.width, d.height), (30, 20));
+    }
+
+    #[test]
+    fn names_follow_the_content() {
+        let mut png = Cursor::new(Vec::new());
+        DynamicImage::ImageRgb8(image::RgbImage::new(2, 2)).write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let png = png.into_inner();
+        assert_eq!(sniff(&png), Some("png"));
+        assert_eq!(name_for_content("a.png", &png), "a.png");
+        assert_eq!(name_for_content("a.PNG", &png), "a.PNG");
+        assert_eq!(name_for_content("a.jpg", &png), "a.png", "wrong extension replaced");
+        assert_eq!(name_for_content("photo", &png), "photo.png");
+        assert_eq!(name_for_content("image.php", &png), "image.php.png");
+        assert_eq!(name_for_content("x.txt", b"plain text"), "x.txt", "unknown content keeps its name");
+
+        assert_eq!(sniff(b"\xff\xd8\xff\xe0rest"), Some("jpg"));
+        assert_eq!(name_for_content("a.jpeg", b"\xff\xd8\xff\xe0rest"), "a.jpeg");
+        assert_eq!(sniff(b"\xef\xbb\xbf  <?xml version=\"1.0\"?><svg/>"), Some("svg"));
+        assert_eq!(sniff(b"<html><body>no</body></html>"), None);
+        assert_eq!(sniff(b"wOF2...."), Some("woff2"));
+        assert_eq!(sniff(b"\0\0\0\x1cftypavif\0\0\0\0avifmif1miaf"), Some("avif"));
+        assert_eq!(sniff(b"\0\0\0\x18ftypheic\0\0\0\0mif1heic"), Some("heic"));
+        assert_eq!(sniff(b"\0\0\0\x18ftypisom\0\0\0\0isommp41"), None, "MP4 is not an image");
+        assert_eq!(sniff(b""), None);
     }
 
     #[cfg(target_os = "macos")]
