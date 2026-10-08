@@ -2146,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "image-library"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "clipboard-rs",
  "core-foundation-sys",
