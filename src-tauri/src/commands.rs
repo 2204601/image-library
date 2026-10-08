@@ -271,6 +271,17 @@ pub fn set_pinned(state: State<AppState>, ids: Vec<String>, on: bool) -> CmdResu
     with_lib(&state, |lib| db::set_pinned(&lib.conn, &ids, on).map_err(err))
 }
 
+/// Rotates / flips without touching the files (see orient.rs). Runs off the
+/// main thread because thumbnails are re-rendered. Returns how many changed.
+#[tauri::command]
+pub async fn orient_items(app: AppHandle, ids: Vec<String>, op: crate::orient::OrientOp) -> CmdResult<usize> {
+    tauri::async_runtime::spawn_blocking(move || {
+        with_lib(&app.state::<AppState>(), |lib| import::orient(lib, &ids, op))
+    })
+    .await
+    .map_err(err)?
+}
+
 /// Puts the files on the clipboard (paste into Finder / Explorer / chat apps).
 /// A single image is also put on as bitmap data for design tools.
 #[tauri::command]

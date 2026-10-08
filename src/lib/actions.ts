@@ -1,6 +1,6 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, type Item } from "./api";
+import { api, EMPTY_FILTER, type Item, type OrientOp } from "./api";
 import { activeConditions, currentFolderId, useStore } from "../store";
 
 const st = () => useStore.getState();
@@ -310,6 +310,12 @@ export async function togglePinned(ids: string[]) {
   const on = !allHave(ids, (i) => i.pinnedAt !== null);
   await st().run(() => api.setPinned(ids, on));
   if (on) st().toast(`${ids.length} 件をピン留めしました（一覧の先頭に表示）`);
+}
+
+/** Rotates / flips the images without changing the files. */
+export async function orient(ids: string[], op: OrientOp) {
+  if (!ids.length) return;
+  await st().run(() => api.orientItems(ids, op));
 }
 
 /** Manual order: move `ids` in front of `before` (null = end) in the open folder. */

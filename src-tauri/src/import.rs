@@ -5,6 +5,7 @@
 use crate::db::{self, NewItem};
 use crate::formats;
 use crate::library::Library;
+use crate::orient::{self, OrientOp, Orientation};
 use crate::similar;
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ImageFormat};
@@ -139,6 +140,67 @@ fn write_thumb(thumb: &DynamicImage, dir: &Path, id: &str) -> Result<String, Str
         let name = format!("{id}.jpg");
         write_jpeg(thumb, &dir.join(&name), 85)?;
         Ok(name)
+    }
+}
+
+/// Rotates / flips items (see orient.rs): writes the thumbnail for the new
+/// orientation from the unrotated one, then stores it. The unrotated
+/// thumbnail is kept; the previous rotated one is removed. Returns how many
+/// items changed.
+pub fn orient(lib: &mut Library, ids: &[String], op: OrientOp) -> Result<usize, String> {
+    let items = db::get_items(&lib.conn, ids).map_err(|e| e.to_string())?;
+    let thumbs = lib.root.join("thumbs");
+    let rendered: Vec<Result<(&db::Item, Orientation, String, (u32, u32)), String>> = items
+        .par_iter()
+        .filter_map(|it| {
+            let from = Orientation::new(it.rotation, it.flipped);
+            let to = from.then(op);
+            (to != from).then_some((it, from, to))
+        })
+        .map(|(it, from, to)| {
+            let base = orient::base_thumb(&it.thumb);
+            let name = to.thumb_name(&base);
+            if !to.is_identity() {
+                let img = image::open(thumbs.join(&base)).map_err(|e| format!("{}: {e}", it.name))?;
+                let out = to.apply(&img);
+                let path = thumbs.join(&name);
+                if name.ends_with(".png") {
+                    out.save_with_format(&path, ImageFormat::Png).map_err(|e| e.to_string())?;
+                } else {
+                    write_jpeg(&out, &path, 85)?;
+                }
+            }
+            // width / height are the displayed size: swap when going between upright and sideways.
+            let size = if from.swaps_axes() != to.swaps_axes() { (it.height, it.width) } else { (it.width, it.height) };
+            Ok((it, to, name, size))
+        })
+        .collect();
+
+    let mut first_err = None;
+    let mut stale = Vec::new();
+    let tx = lib.conn.transaction().map_err(|e| e.to_string())?;
+    let mut changed = 0;
+    for r in rendered {
+        match r {
+            Ok((it, to, name, (w, h))) => {
+                db::set_orientation(&tx, &it.id, to, w, h, &name).map_err(|e| e.to_string())?;
+                if it.thumb != name && it.thumb != orient::base_thumb(&it.thumb) {
+                    stale.push(thumbs.join(&it.thumb));
+                }
+                changed += 1;
+            }
+            Err(e) => {
+                first_err.get_or_insert(e);
+            }
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    for p in stale {
+        let _ = fs::remove_file(p);
+    }
+    match first_err {
+        Some(e) if changed == 0 => Err(e),
+        _ => Ok(changed),
     }
 }
 
@@ -571,6 +633,46 @@ mod tests {
         let preview = l.display_path(tif);
         l.delete_items(std::slice::from_ref(&tif.id)).unwrap();
         assert!(!preview.exists());
+    }
+
+    #[test]
+    fn orient_rewrites_thumbnail_and_size_only() {
+        let (_tmp, lib) = setup();
+        let data = png_bytes(DynamicImage::ImageRgb8(RgbImage::from_pixel(1200, 600, Rgb([10, 200, 10]))));
+        run(&lib, vec![Source::Bytes { name: "wide.png".into(), data: data.clone() }], None, |_, _| {}).unwrap();
+        let mut g = lib.lock().unwrap();
+        let l = g.as_mut().unwrap();
+        let get = |l: &Library| db::query_items(&l.conn, &db::ItemQuery::default()).unwrap().remove(0);
+        let it = get(l);
+        let ids = vec![it.id.clone()];
+        let base = it.thumb.clone();
+
+        assert_eq!(orient(l, &ids, OrientOp::RotateCw).unwrap(), 1);
+        let r = get(l);
+        assert_eq!((r.width, r.height, r.rotation, r.flipped), (600, 1200, 1, false));
+        assert_ne!(r.thumb, base);
+        let t = image::open(l.thumb_path(&r)).unwrap();
+        assert_eq!((t.width(), t.height()), (256, 512));
+        assert_eq!(fs::read(l.file_path(&r)).unwrap(), data, "the original file is untouched");
+
+        // Flipping a sideways image keeps it sideways; the old rotated thumbnail goes away.
+        orient(l, &ids, OrientOp::FlipH).unwrap();
+        let f = get(l);
+        assert_eq!((f.width, f.height, f.rotation, f.flipped), (600, 1200, 3, true));
+        assert!(!l.thumb_path(&r).exists());
+
+        // Reset returns to the unrotated thumbnail, which was kept.
+        orient(l, &ids, OrientOp::Reset).unwrap();
+        let z = get(l);
+        assert_eq!((z.width, z.height, z.thumb.as_str()), (1200, 600, base.as_str()));
+        assert!(!l.thumb_path(&f).exists());
+        assert_eq!(orient(l, &ids, OrientOp::Reset).unwrap(), 0, "no-op");
+
+        // Deleting removes both thumbnails.
+        orient(l, &ids, OrientOp::RotateCcw).unwrap();
+        let c = get(l);
+        l.delete_items(&ids).unwrap();
+        assert!(!l.thumb_path(&c).exists() && !l.thumb_path(&z).exists());
     }
 
     #[test]

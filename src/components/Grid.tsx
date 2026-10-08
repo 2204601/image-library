@@ -12,6 +12,7 @@ import {
   exportSelection,
   importFilesDialog,
   openSelection,
+  orient,
   pasteTags,
   keepPlan,
   keeperOf,
@@ -351,6 +352,7 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
   const all = (flag: (i: Item) => boolean) => ids.every((id) => flag(s.rawItems.find((i) => i.id === id)!));
   const allFav = all((i) => i.favorite);
   const allPinned = all((i) => i.pinnedAt !== null);
+  const turned = !all((i) => i.rotation === 0 && !i.flipped);
   useMenu.getState().show(e, [
     { label: "表示", hint: "Enter", onClick: () => s.openViewer(index) },
     { label: "既定のアプリで開く", onClick: () => openSelection(ids) },
@@ -358,6 +360,12 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
     { separator: true },
     { label: allFav ? `お気に入りから外す${many}` : `お気に入りに追加${many}`, hint: "F", onClick: () => toggleFavorite(ids) },
     { label: allPinned ? `ピン留めを解除${many}` : `ピン留め${many}`, hint: "P", onClick: () => togglePinned(ids) },
+    { separator: true },
+    { label: `左に回転${many}`, hint: "⌘⇧L", onClick: () => orient(ids, "rotateCcw") },
+    { label: `右に回転${many}`, hint: "⌘⇧R", onClick: () => orient(ids, "rotateCw") },
+    { label: `左右反転${many}`, onClick: () => orient(ids, "flipH") },
+    { label: `上下反転${many}`, onClick: () => orient(ids, "flipV") },
+    ...(turned ? [{ label: `元の向きに戻す${many}`, onClick: () => orient(ids, "reset") }] : []),
     { separator: true },
     { label: `コピー${many}`, hint: "⌘C", onClick: () => copySelection(ids) },
     { label: `書き出し…${many}`, onClick: () => exportSelection(ids) },
@@ -588,6 +596,10 @@ export function Grid() {
       }
       if (!mod && !e.shiftKey && !e.altKey && e.code === "KeyP" && s.view.kind !== "trash") {
         return handled(), void togglePinned(sel());
+      }
+      // Rotate (before ⌘R = rename). The files are not changed.
+      if (mod && e.shiftKey && !e.altKey && (e.code === "KeyR" || e.code === "KeyL") && s.view.kind !== "trash") {
+        return handled(), void orient(sel(), e.code === "KeyR" ? "rotateCw" : "rotateCcw");
       }
       if (e.key === "F2" || (mod && e.code === "KeyR")) {
         handled();

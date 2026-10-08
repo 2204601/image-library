@@ -52,6 +52,8 @@ function seed() {
       deletedAt: null,
       favorite: i % 13 === 0,
       pinnedAt: i === 8 ? Date.now() - 1000 : i === 21 ? Date.now() : null,
+      rotation: 0,
+      flipped: false,
       hue: (i * 47) % 360,
     });
   }
@@ -113,10 +115,16 @@ function similar(r: MockItem[], level: SimilarLevel): MockItem[] {
     );
 }
 
-function svg(it: MockItem, scale: number) {
-  const w = Math.round(it.width / scale);
-  const h = Math.round(it.height / scale);
-  const s = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${it.hue},60%,35%)"/><stop offset="1" stop-color="hsl(${(it.hue + 60) % 360},70%,60%)"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#g)"/><text x="50%" y="50%" font-family="sans-serif" font-size="${w / 10}" fill="white" text-anchor="middle" dominant-baseline="middle">${it.name}</text></svg>`;
+/** The "file" (unrotated), or with `oriented` the thumbnail showing the item's rotation / flip. */
+function svg(it: MockItem, scale: number, oriented = false) {
+  const sideways = it.rotation % 2 === 1;
+  const ow = Math.round((sideways ? it.height : it.width) / scale);
+  const oh = Math.round((sideways ? it.width : it.height) / scale);
+  const body = `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${it.hue},60%,35%)"/><stop offset="1" stop-color="hsl(${(it.hue + 60) % 360},70%,60%)"/></linearGradient></defs><rect width="${ow}" height="${oh}" fill="url(#g)"/><text x="${ow / 2}" y="${oh / 2}" font-family="sans-serif" font-size="${ow / 10}" fill="white" text-anchor="middle" dominant-baseline="middle">${it.name}</text>`;
+  const [w, h] = oriented && sideways ? [oh, ow] : [ow, oh];
+  // Flip first, then rotate (as in orient.rs); SVG applies the list right to left.
+  const t = `translate(${w / 2} ${h / 2}) rotate(${oriented ? it.rotation * 90 : 0}) scale(${oriented && it.flipped ? -1 : 1} 1) translate(${-ow / 2} ${-oh / 2})`;
+  const s = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><g transform="${t}">${body}</g></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
 }
 
@@ -124,7 +132,7 @@ const view = (it: MockItem): Item => {
   const filePath = svg(it, 1);
   const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
   const tagIds = tags.filter((t) => hasTag(it.id, t.id)).map((t) => t.id);
-  return { ...it, preview: null, folderId, tagIds, filePath, displayPath: filePath, thumbPath: svg(it, 3) };
+  return { ...it, preview: null, folderId, tagIds, filePath, displayPath: filePath, thumbPath: svg(it, 3, true) };
 };
 const inFolder = (i: string, f: string) => itemFolders.has(`${i}|${f}`);
 const hasTag = (i: string, t: number) => itemTags.has(`${i}|${t}`);
@@ -309,6 +317,23 @@ function handle(cmd: string, a: any): unknown {
     case "set_pinned":
       items.filter((i) => a.ids.includes(i.id)).forEach((i) => (i.pinnedAt = a.on ? (i.pinnedAt ?? Date.now()) : null));
       return;
+    case "orient_items": {
+      let n = 0;
+      for (const i of items.filter((i) => a.ids.includes(i.id))) {
+        const r = i.rotation;
+        const [rotation, flipped] =
+          a.op === "rotateCw" ? [(r + 1) % 4, i.flipped]
+          : a.op === "rotateCcw" ? [(r + 3) % 4, i.flipped]
+          : a.op === "flipH" ? [(4 - r) % 4, !i.flipped]
+          : a.op === "flipV" ? [(6 - r) % 4, !i.flipped]
+          : [0, false];
+        if (rotation === r && flipped === i.flipped) continue;
+        if (rotation % 2 !== r % 2) [i.width, i.height] = [i.height, i.width];
+        Object.assign(i, { rotation, flipped });
+        n++;
+      }
+      return n;
+    }
     case "copy_items":
     case "export_items":
       return a.ids.length;

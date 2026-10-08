@@ -2,6 +2,7 @@
 //!   <name>.library/library.db
 //!   <name>.library/images/<item id>/<file name>
 //!   <name>.library/thumbs/<item id>.jpg|png
+//!   <name>.library/thumbs/<item id>_o<flip><turns>.jpg|png  (rotated, see orient.rs)
 
 use crate::db::{self, Item};
 use rusqlite::Connection;
@@ -66,6 +67,8 @@ impl Library {
         for item in removed {
             let _ = fs::remove_dir_all(self.root.join("images").join(&item.id));
             let _ = fs::remove_file(self.thumb_path(&item));
+            // The unrotated thumbnail is kept next to a rotated one.
+            let _ = fs::remove_file(self.root.join("thumbs").join(crate::orient::base_thumb(&item.thumb)));
             if let Some(p) = &item.preview {
                 let _ = fs::remove_file(self.root.join("previews").join(p));
             }
