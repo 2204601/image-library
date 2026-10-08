@@ -12,7 +12,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
-import { WebImportDialog } from "./components/WebImportDialog";
+import { PairDialog, WebImportDialog } from "./components/WebImportDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
 import { api, type ImportSummary } from "./lib/api";
@@ -77,6 +77,18 @@ export default function App() {
     return () => {
       clearTimeout(timer);
       unlisten.then((f) => f());
+    };
+  }, []);
+
+  // An extension asks to connect; the question closes itself if it times out.
+  useEffect(() => {
+    const ask = listen<{ id: string; code: string }>("web-pair", (e) => useStore.getState().setPairRequest(e.payload));
+    const end = listen<string>("web-pair-end", (e) => {
+      if (useStore.getState().pairRequest?.id === e.payload) useStore.getState().setPairRequest(null);
+    });
+    return () => {
+      ask.then((f) => f());
+      end.then((f) => f());
     };
   }, []);
 
@@ -171,6 +183,7 @@ export default function App() {
       <FolderPicker />
       <DuplicateReview />
       <WebImportDialog />
+      <PairDialog />
       <DragLayer />
       <ContextMenu />
       <Toasts />

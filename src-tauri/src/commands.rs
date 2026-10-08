@@ -18,6 +18,8 @@ pub struct AppState {
     pub lib: Mutex<Option<Library>>,
     /// Saving from the browser extension (webimport.rs).
     pub web: Mutex<WebServer>,
+    /// Extensions waiting for the user to allow them to connect: id -> answer.
+    pairing: Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<bool>>>,
 }
 
 #[derive(Default)]
@@ -489,6 +491,38 @@ impl webimport::Host for TauriHost {
 
     fn imported(&self, summary: &ImportSummary) {
         let _ = self.0.emit("web-import", summary);
+    }
+
+    /// Brings the window up with the question ("web-pair") and waits for
+    /// `answer_web_pair`; gives up after two minutes ("web-pair-end" closes it).
+    fn approve_pairing(&self, code: &str) -> bool {
+        #[derive(Clone, Serialize)]
+        struct Ask<'a> {
+            id: &'a str,
+            code: &'a str,
+        }
+        let state = self.0.state::<AppState>();
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.pairing.lock().unwrap().insert(id.clone(), tx);
+        if let Some(w) = self.0.get_webview_window("main") {
+            let _ = w.unminimize();
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        let _ = self.0.emit("web-pair", Ask { id: &id, code });
+        let approved = rx.recv_timeout(std::time::Duration::from_secs(120)).unwrap_or(false);
+        state.pairing.lock().unwrap().remove(&id);
+        let _ = self.0.emit("web-pair-end", &id);
+        approved
+    }
+}
+
+/// The user's answer to a "connect this extension?" question.
+#[tauri::command]
+pub fn answer_web_pair(state: State<AppState>, id: String, allow: bool) {
+    if let Some(tx) = state.pairing.lock().unwrap().remove(&id) {
+        let _ = tx.send(allow);
     }
 }
 

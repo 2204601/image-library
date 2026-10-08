@@ -92,6 +92,7 @@ pub fn run() {
             set_web_import,
             reset_web_import_token,
             install_extension,
+            answer_web_pair,
             list_folders,
             create_folder,
             rename_folder,

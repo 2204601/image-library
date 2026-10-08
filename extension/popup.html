@@ -30,23 +30,25 @@
         gap: 6px;
         margin: 4px 0 12px;
       }
-      details {
-        margin-top: 12px;
-        border-top: 1px solid var(--line);
-        padding-top: 8px;
+      .actions .btn {
+        flex-direction: column;
+        height: auto;
+        min-height: 32px;
+        padding: 6px 12px;
+        gap: 0;
       }
-      summary {
+      .actions .btn small {
         font-size: 11px;
-        color: var(--dim);
-        cursor: pointer;
+        font-weight: normal;
+        opacity: 0.75;
       }
-      details .row {
-        display: flex;
-        gap: 6px;
-        margin-top: 8px;
-      }
-      #dest[hidden] {
+      #dest[hidden],
+      #connect[hidden] {
         display: none;
+      }
+      #connect {
+        width: 100%;
+        margin-bottom: 12px;
       }
     </style>
   </head>
@@ -56,6 +58,7 @@
       <strong>Image Library に保存</strong>
     </header>
     <div id="status" class="status">接続を確認しています…</div>
+    <button id="connect" class="btn primary" hidden>アプリと接続…</button>
 
     <div id="dest" hidden>
       <label class="field">
@@ -72,23 +75,18 @@
     </div>
 
     <div class="actions">
-      <button id="list" class="btn primary">このページの画像を一覧して保存…</button>
-      <button id="capture" class="btn">表示中の画面を保存</button>
+      <button id="list" class="btn">
+        このページの画像を一覧して保存…
+        <small>ページ内の画像を並べて、選んでまとめて保存</small>
+      </button>
+      <button id="capture" class="btn">
+        スクリーンショットを保存
+        <small>いまブラウザに見えている範囲を画像にして保存</small>
+      </button>
     </div>
     <p class="hint">
       画像を右クリック →「Image Library に保存」。<kbd id="alt-key">Alt</kbd> を押しながら右クリックすると、すぐに保存します。
     </p>
-
-    <details id="settings">
-      <summary>接続の設定</summary>
-      <p class="hint" id="settings-note" style="margin-top: 6px">
-        アプリの「ブラウザ拡張と連携」で用意した拡張機能は、設定しなくても接続できます。
-      </p>
-      <div class="row">
-        <input id="token" type="password" placeholder="接続キー" autocomplete="off" />
-        <button id="save-token" class="btn">保存</button>
-      </div>
-    </details>
 
     <script type="module" src="popup.js"></script>
   </body>

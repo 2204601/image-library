@@ -1,7 +1,7 @@
 // "ブラウザ拡張と連携": turns the local server for the Chrome extension on or
 // off (src-tauri/src/webimport.rs) and walks through loading the extension.
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Check, Copy, FolderOpen, Puzzle } from "lucide-react";
+import { Check, Copy, FolderOpen, Link2, Puzzle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type WebImportStatus } from "../lib/api";
 import { useStore } from "../store";
@@ -50,8 +50,9 @@ function Dialog() {
 
   const resetToken = async () => {
     const ok = await ask(
-      "今の拡張機能はつながらなくなります。作り直したあと「フォルダを用意」を押し、Chrome で拡張機能を再読み込みしてください。",
-      { title: "接続キーを作り直しますか？", kind: "warning", okLabel: "作り直す", cancelLabel: "キャンセル" },
+      "これまでに接続した拡張機能は、すべてつながらなくなります（上のフォルダから入れたものは、自動でつなぎ直されます）。" +
+        "また使うときは、拡張機能のアイコン →「アプリと接続」を押してください。",
+      { title: "すべての拡張機能との接続を解除しますか？", kind: "warning", okLabel: "解除する", cancelLabel: "キャンセル" },
     );
     if (ok) await act(api.resetWebImportToken);
   };
@@ -92,7 +93,7 @@ function Dialog() {
                   : status.error
                     ? null
                     : status.running
-                      ? `受付中（127.0.0.1:${status.port}）。このパソコンの中の、接続キーを持つ拡張機能からだけ受け付けます。`
+                      ? `受付中（127.0.0.1:${status.port}）。このパソコンの中の、接続を許可した拡張機能からだけ受け付けます。`
                       : "オフ。アプリの起動中だけ受け付けます。"}
               </span>
               {status?.error && <span className="mt-0.5 block text-xs text-danger">{status.error}</span>}
@@ -101,7 +102,7 @@ function Dialog() {
 
           {on && (
             <ol className="mt-5 space-y-4 text-[13px]">
-              <Step n={1} title="拡張機能のフォルダを用意する">
+              <Step n={1} title="拡張機能を Chrome に入れる">
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     disabled={busy}
@@ -109,7 +110,7 @@ function Dialog() {
                     className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 font-medium text-white enabled:hover:brightness-110 disabled:opacity-40"
                   >
                     <FolderOpen size={14} />
-                    {status?.extensionDir ? "もう一度用意する" : "フォルダを用意して表示"}
+                    {status?.extensionDir ? "もう一度用意する" : "拡張機能のフォルダを用意して表示"}
                   </button>
                   {status?.extensionDir && (
                     <span className="flex items-center gap-1 text-xs text-dim">
@@ -117,29 +118,36 @@ function Dialog() {
                     </span>
                   )}
                 </div>
-                {status?.extensionDir && (
-                  <PathRow path={status.extensionDir} />
-                )}
+                {status?.extensionDir && <PathRow path={status.extensionDir} />}
+                <ol className="mt-2 list-decimal space-y-0.5 pl-4 text-xs text-dim">
+                  <li>
+                    Chrome で <Code text="chrome://extensions" /> を開く（Edge は <Code text="edge://extensions" />）
+                  </li>
+                  <li>右上の「デベロッパー モード」をオンにする</li>
+                  <li>
+                    「パッケージ化されていない拡張機能を読み込む」で、上のフォルダを選ぶ
+                    {isMac ? "（⌘⇧G でパスを貼り付けると早い）" : "（アドレス欄にパスを貼り付けると早い）"}
+                  </li>
+                </ol>
                 <p className="mt-1.5 text-xs text-dim">
-                  アプリを更新したときは、もう一度用意してから Chrome の拡張機能の画面で再読み込み（↻）を押してください。
+                  アプリを更新したときは「もう一度用意する」を押し、Chrome の拡張機能の画面で再読み込み（↻）を押してください。
                 </p>
               </Step>
-              <Step n={2} title="Chrome で拡張機能の画面を開き、「デベロッパー モード」をオンにする">
-                <PathRow path="chrome://extensions" hint="アドレスバーに貼り付けて開きます（Edge は edge://extensions）" />
-              </Step>
-              <Step n={3} title="「パッケージ化されていない拡張機能を読み込む」で、1 のフォルダを選ぶ">
+              <Step n={2} title="アプリと接続する">
                 <p className="text-xs text-dim">
-                  {isMac
-                    ? "フォルダを選ぶ画面で ⌘⇧G を押し、1 のパスを貼り付けると早く選べます。"
-                    : "フォルダを選ぶ画面のアドレス欄に、1 のパスを貼り付けると早く選べます。"}
+                  上のフォルダから入れた拡張機能は、そのまま接続されます。
+                </p>
+                <p className="mt-1 text-xs text-dim">
+                  別の場所から入れた拡張機能や、つながらないときは、ツールバーの拡張機能のアイコン →
+                  <span className="text-fg">「アプリと接続」</span>を押してください。このアプリに確認が出るので、番号が同じなら「許可する」を押します。
                 </p>
               </Step>
-              <Step n={4} title="使い方">
+              <Step n={3} title="使い方">
                 <ul className="list-disc space-y-0.5 pl-4 text-xs text-dim">
                   <li>ツールバーの拡張機能のアイコンで、保存先のフォルダと付けるタグを選ぶ</li>
                   <li>画像を右クリック →「Image Library に保存」。{isMac ? "Option" : "Alt"} を押しながら右クリックすると、すぐに保存</li>
                   <li>アイコンの「このページの画像を一覧して保存…」で、大きさ・形式で絞り込んでまとめて保存</li>
-                  <li>「表示中の画面を保存」で、見えている範囲のスクリーンショットを保存</li>
+                  <li>アイコンの「スクリーンショットを保存」で、いまブラウザに見えている範囲を画像にして保存</li>
                 </ul>
               </Step>
             </ol>
@@ -150,7 +158,7 @@ function Dialog() {
           <span className="flex-1">
             {on && (
               <button disabled={busy} onClick={resetToken} className="text-xs text-dim underline-offset-2 hover:text-fg hover:underline">
-                接続キーを作り直す
+                すべての拡張機能との接続を解除…
               </button>
             )}
           </span>
@@ -160,6 +168,60 @@ function Dialog() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** A browser extension asks to connect (POST /pair): allow or refuse. */
+export function PairDialog() {
+  const req = useStore((s) => s.pairRequest);
+  useEffect(() => {
+    if (!req) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") answer(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [req]);
+  if (!req) return null;
+
+  function answer(allow: boolean) {
+    useStore.getState().setPairRequest(null);
+    api.answerWebPair(req!.id, allow).catch((e) => useStore.getState().toast(String(e), true));
+    if (allow) useStore.getState().toast("拡張機能と接続しました");
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex animate-fade-in items-center justify-center bg-black/50">
+      <div className="w-[400px] max-w-[92vw] animate-zoom-in rounded-xl border border-line bg-panel p-5 text-center shadow-2xl">
+        <Link2 size={28} className="mx-auto text-accent" />
+        <div className="mt-2 text-base font-semibold">ブラウザの拡張機能が接続を求めています</div>
+        <p className="mt-1 text-xs text-dim">
+          拡張機能の画面に出ている番号と同じなら「許可する」を押してください。許可すると、その拡張機能からこのライブラリに画像を保存できるようになります。
+        </p>
+        <div className="my-4 font-mono text-4xl font-semibold tracking-[0.3em] tabular-nums">{req.code}</div>
+        <div className="flex justify-center gap-2">
+          <button onClick={() => answer(false)} className="h-9 rounded-md border border-line px-4 hover:bg-white/5">
+            許可しない
+          </button>
+          <button
+            autoFocus
+            onClick={() => answer(true)}
+            className="h-9 rounded-md bg-accent px-4 font-medium text-white hover:brightness-110"
+          >
+            許可する
+          </button>
+        </div>
+        <p className="mt-3 text-[11px] text-dim">心当たりがない場合は「許可しない」を押してください。</p>
+      </div>
+    </div>
+  );
+}
+
+function Code({ text }: { text: string }) {
+  return (
+    <button onClick={() => copy(text)} title="クリックでコピー" className="rounded bg-bg px-1 font-mono text-fg hover:text-accent">
+      {text}
+    </button>
   );
 }
 
@@ -177,7 +239,7 @@ function Step({ n, title, children }: { n: number; title: string; children: Reac
   );
 }
 
-function PathRow({ path, hint }: { path: string; hint?: string }) {
+function PathRow({ path }: { path: string }) {
   return (
     <div className="mt-2">
       <div className="flex items-center gap-1 rounded-md border border-line bg-bg pl-2">
@@ -188,7 +250,6 @@ function PathRow({ path, hint }: { path: string; hint?: string }) {
           <Copy size={13} /> コピー
         </button>
       </div>
-      {hint && <p className="mt-1 text-xs text-dim">{hint}</p>}
     </div>
   );
 }

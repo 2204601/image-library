@@ -10,7 +10,11 @@ chrome.runtime.onInstalled.addListener(() => {
       title: "このページの画像を一覧して保存…",
       contexts: ["page", "image", "link", "selection"],
     });
-    chrome.contextMenus.create({ id: "capture", title: "表示中の画面を Image Library に保存", contexts: ["page"] });
+    chrome.contextMenus.create({
+      id: "capture",
+      title: "スクリーンショット（見えている範囲）を Image Library に保存",
+      contexts: ["page"],
+    });
   });
 });
 

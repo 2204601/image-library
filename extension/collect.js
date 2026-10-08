@@ -1,6 +1,6 @@
 // The image list: every image on a page (img / srcset / links to images /
 // CSS backgrounds), filtered by size and format, saved in one go.
-import { bindDestination, call, guessExt, saveImage } from "./shared.js";
+import { bindDestination, call, guessExt, openConnectPage, saveImage } from "./shared.js";
 
 const $ = (id) => document.getElementById(id);
 const tabId = Number(new URLSearchParams(location.search).get("tab"));
@@ -252,6 +252,14 @@ async function start() {
       connected = true;
     } catch (e) {
       setStatus(e.message, "error");
+      if (e.status === 401) {
+        const b = document.createElement("button");
+        b.className = "btn primary";
+        b.textContent = "アプリと接続…";
+        b.style.marginLeft = "8px";
+        b.onclick = openConnectPage;
+        $("status").append(b);
+      }
     }
   })();
 
@@ -270,5 +278,10 @@ async function start() {
   await connecting;
   render();
 }
+
+// Connected from the button above (in another tab): start over with the connection.
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.token && !connected && !saving) location.reload();
+});
 
 start();

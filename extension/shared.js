@@ -10,10 +10,15 @@ export class AppError extends Error {
   }
 }
 
+const NOT_RUNNING =
+  "Image Library に接続できません。アプリを起動して、ライブラリのメニュー →「ブラウザ拡張と連携」で受け付けをオンにしてください";
+export const NOT_CONNECTED =
+  "この拡張機能はアプリと接続されていません。拡張機能のアイコン →「アプリと接続」を押してください";
+
 /**
- * Where and how to connect. The app writes `config.json` when it sets the
- * extension up; a key typed into the popup is used when that file is missing
- * (the extension was loaded from somewhere else).
+ * Where and how to connect. Keys to try, in order: the one the app gave when
+ * the user allowed this extension ("アプリと接続"), then the one in
+ * `config.json`, which the app writes into the copy it sets up.
  */
 export async function getConfig() {
   let file = {};
@@ -21,40 +26,52 @@ export async function getConfig() {
     const res = await fetch(chrome.runtime.getURL("config.json"), { cache: "no-store" });
     if (res.ok) file = await res.json();
   } catch {
-    /* not installed by the app */
+    /* not the copy the app set up */
   }
-  const stored = await chrome.storage.local.get(["token", "port"]);
-  return {
-    port: Number(file.port || stored.port) || DEFAULT_PORT,
-    token: String(file.token || stored.token || ""),
-    fromApp: Boolean(file.token),
-  };
+  const stored = await chrome.storage.local.get(["token"]);
+  const tokens = [...new Set([stored.token, file.token].filter(Boolean).map(String))];
+  return { port: Number(file.port) || DEFAULT_PORT, tokens };
 }
 
-/** Calls the app. Throws AppError with a message to show. */
-export async function call(path, { method = "GET", params, body } = {}) {
-  const { port, token } = await getConfig();
-  if (!token) {
-    throw new AppError("接続キーがありません。アプリの「ブラウザ拡張と連携」から拡張機能を用意してください", 401);
+async function request(port, path, init) {
+  try {
+    return await fetch(`http://127.0.0.1:${port}${path}`, { cache: "no-store", ...init });
+  } catch {
+    throw new AppError(NOT_RUNNING, 0);
   }
+}
+
+/** Calls the app. Throws AppError with a message to show (status 401 = not connected). */
+export async function call(path, { method = "GET", params, body } = {}) {
+  const { port, tokens } = await getConfig();
+  if (!tokens.length) throw new AppError(NOT_CONNECTED, 401);
   const qs = params ? `?${params}` : "";
   let res;
-  try {
-    res = await fetch(`http://127.0.0.1:${port}${path}${qs}`, {
-      method,
-      body,
-      headers: { Authorization: `Bearer ${token}` },
-      cache: "no-store",
-    });
-  } catch {
-    throw new AppError(
-      "Image Library に接続できません。アプリを起動して、ライブラリのメニュー →「ブラウザ拡張と連携」をオンにしてください",
-      0,
-    );
+  for (const token of tokens) {
+    // A refused key is checked before the body is read, so sending again is safe.
+    res = await request(port, path + qs, { method, body, headers: { Authorization: `Bearer ${token}` } });
+    if (res.status !== 401) break;
   }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new AppError(json.error || `エラー（${res.status}）`, res.status);
   return json;
+}
+
+/**
+ * Asks the app to let this extension in: the user sees `code` in the app and
+ * presses 許可する. Resolves once they answer (up to about two minutes).
+ */
+export async function pair(code) {
+  const { port } = await getConfig();
+  const res = await request(port, `/pair?code=${code}`, { method: "POST" });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok || !json.token) throw new AppError(json.error || `エラー（${res.status}）`, res.status);
+  await chrome.storage.local.set({ token: json.token });
+}
+
+/** Opens the page that connects the extension to the app. */
+export function openConnectPage() {
+  return chrome.tabs.create({ url: chrome.runtime.getURL("connect.html") });
 }
 
 // ----------------------------------------------------------- destination
