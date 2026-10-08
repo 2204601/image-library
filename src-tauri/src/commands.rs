@@ -333,6 +333,15 @@ pub async fn font_faces(app: AppHandle, id: String) -> CmdResult<Vec<crate::font
         .map_err(err)?
 }
 
+/// Sets the typeface style of fonts by hand (None = back to the guess).
+#[tauri::command]
+pub fn set_font_category(state: State<AppState>, ids: Vec<String>, category: Option<String>) -> CmdResult<usize> {
+    if category.as_deref().is_some_and(|c| !crate::fonts::CATEGORIES.contains(&c)) {
+        return Err("書体の指定が正しくありません".into());
+    }
+    with_lib(&state, |lib| db::set_font_category(&lib.conn, &ids, category.as_deref()).map_err(err))
+}
+
 /// A sample line and the style of a font, for the list layout.
 #[tauri::command]
 pub async fn font_list_preview(app: AppHandle, id: String) -> CmdResult<crate::fonts::ListPreview> {
@@ -454,12 +463,12 @@ pub async fn index_similar(app: AppHandle) -> CmdResult<usize> {
     .map_err(err)?
 }
 
-/// Reads the family of fonts imported before it was stored (grouping by
-/// family, search). Returns how many were read.
+/// Reads the family, writing system and style of fonts imported by versions
+/// that didn't store them (grouping, search, filters). Returns how many were read.
 #[tauri::command]
 pub async fn index_fonts(app: AppHandle) -> CmdResult<usize> {
     tauri::async_runtime::spawn_blocking(move || {
-        import::compute_missing_font_names(&app.state::<AppState>().lib)
+        import::compute_missing_font_meta(&app.state::<AppState>().lib)
     })
     .await
     .map_err(err)?

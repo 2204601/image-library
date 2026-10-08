@@ -17,6 +17,33 @@ export const KINDS: { kind: ItemKind; label: string }[] = [
 
 export const kindLabel = (k: ItemKind) => KINDS.find((x) => x.kind === k)?.label ?? k;
 
+/** Writing systems fonts are filed under (src-tauri/src/fonts.rs `SCRIPTS`). */
+export const FONT_SCRIPTS: { key: string; label: string }[] = [
+  { key: "ja", label: "日本語" },
+  { key: "latin", label: "欧文" },
+  { key: "zh", label: "中国語" },
+  { key: "ko", label: "韓国語" },
+  { key: "other", label: "その他" },
+];
+
+/** Typeface styles (fonts.rs `CATEGORIES`); "none" = not known. */
+export const FONT_CATEGORIES: { key: string; label: string }[] = [
+  { key: "mincho", label: "明朝・セリフ" },
+  { key: "gothic", label: "ゴシック・サンセリフ" },
+  { key: "maru", label: "丸ゴシック" },
+  { key: "brush", label: "筆・手書き" },
+  { key: "display", label: "デザイン" },
+  { key: "mono", label: "等幅" },
+  { key: "none", label: "未分類" },
+];
+
+export const fontScriptLabel = (k: string) => FONT_SCRIPTS.find((x) => x.key === k)?.label ?? k;
+export const fontCategoryLabel = (k: string) => FONT_CATEGORIES.find((x) => x.key === k)?.label ?? k;
+
+/** A font's typeface style: the user's choice, else the guess, else "none". */
+export const fontCategoryOf = (item: Pick<Item, "fontCategory" | "fontCategoryUser">) =>
+  item.fontCategoryUser ?? item.fontCategory ?? "none";
+
 export interface Item {
   id: string;
   kind: ItemKind;
@@ -48,6 +75,11 @@ export interface Item {
   /** Fonts: family shared by its styles (null until read) and weight 100-900. */
   fontFamily: string | null;
   fontWeight: number | null;
+  /** Fonts: writing system (see FONT_SCRIPTS), null until read. */
+  fontScript: string | null;
+  /** Fonts: typeface style guessed from the font (null = can't tell) and the user's correction. */
+  fontCategory: string | null;
+  fontCategoryUser: string | null;
   filePath: string;
   thumbPath: string;
   /** What the viewer shows: the display copy if any, else the original. */
@@ -138,6 +170,9 @@ export type Shape = "landscape" | "portrait" | "square";
 export interface Filter {
   /** Any of these kinds (the sidebar's "種類"). */
   kinds: ItemKind[];
+  /** Fonts of any of these writing systems / styles (sidebar, under "フォント"). */
+  fontScripts: string[];
+  fontCategories: string[];
   exts: string[];
   shapes: Shape[];
   minWidth: number | null;
@@ -154,6 +189,8 @@ export interface Filter {
 
 export const EMPTY_FILTER: Filter = {
   kinds: [],
+  fontScripts: [],
+  fontCategories: [],
   exts: [],
   shapes: [],
   minWidth: null,
@@ -211,6 +248,9 @@ export interface Counts {
   pinned: number;
   /** Items not in the trash, by kind (kinds with none are missing). */
   kinds: Partial<Record<ItemKind, number>>;
+  /** Fonts not in the trash by writing system and by style ("none" = unknown). */
+  fontScripts: Record<string, number>;
+  fontCategories: Record<string, number>;
 }
 
 export interface Folder {
@@ -285,6 +325,9 @@ export const api = {
   setPinned: (ids: string[], on: boolean) => invoke<void>("set_pinned", { ids, on }),
   fontInfo: (id: string, face: number) => invoke<FontInfo>("font_info", { id, face }),
   fontListPreview: (id: string) => invoke<FontListPreview>("font_list_preview", { id }),
+  /** Sets fonts' typeface style by hand; null = back to the guess. */
+  setFontCategory: (ids: string[], category: string | null) =>
+    invoke<number>("set_font_category", { ids, category }),
   /** Names and details of every font in the file, without the characters. */
   fontFaces: (id: string) => invoke<FontFaceInfo[]>("font_faces", { id }),
   /** One font of the file as plain OpenType data, for `new FontFace()`. */

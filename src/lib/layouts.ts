@@ -12,6 +12,9 @@ export const HEADER = 40;
 /** List layout row height. */
 export const LIST_ROW = 48;
 
+/** Specimen layout: a font's row, its name line plus the sample at `size` px. */
+export const specimenRow = (size: number) => 34 + Math.round(size * 1.3);
+
 /** Aspect ratios outside this range are letterboxed instead of making absurd cells. */
 const MIN_AR = 0.4;
 const MAX_AR = 3;
@@ -67,7 +70,7 @@ export function computeLayout(
   info: ShowInfo,
   sections: Section[] = [],
 ): Placement {
-  const label = kind === "list" ? 0 : labelHeight(info);
+  const label = kind === "list" || kind === "specimen" ? 0 : labelHeight(info);
   const boxes: Box[] = new Array(items.length);
   const headers: { y: number; start: number }[] = [];
   const grouped = sections.length > 0;
@@ -81,6 +84,7 @@ export function computeLayout(
     if (kind === "justified") y = justify(items, start, end, inner, target, label, y, boxes);
     else if (kind === "grid") y = grid(start, end, inner, target, label, y, boxes);
     else if (kind === "waterfall") y = waterfall(items, start, end, inner, target, label, y, boxes);
+    else if (kind === "specimen") y = specimen(items, start, end, inner, target, y, boxes);
     else y = list(start, end, inner, y, boxes);
   }
   return {
@@ -179,6 +183,19 @@ function waterfall(
     heights[c] += h + label + GAP;
   }
   return Math.max(...heights);
+}
+
+/**
+ * Specimen: one full-width row per item like the list, fonts taller to show
+ * their sample at `size` (the specimen size, in place of the thumbnail size).
+ */
+function specimen(items: Item[], from: number, end: number, inner: number, size: number, top: number, boxes: Box[]) {
+  for (let k = from; k < end; k++) {
+    const h = items[k].kind === "font" ? specimenRow(size) : LIST_ROW;
+    boxes[k] = { x: PAD, y: top, w: inner, h };
+    top += h;
+  }
+  return top;
 }
 
 /** List: one full-width row per item. */

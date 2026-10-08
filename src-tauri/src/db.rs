@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -220,6 +220,16 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         add_column(c, "items", "font_weight", "INTEGER")?;
         Ok(())
     })?;
+    // A font's writing system and typeface style (fonts.rs), for the sidebar's
+    // filters. `font_category_user` is the user's correction, used over the
+    // guess. NULL script = not read yet (also re-reads the family, which now
+    // drops style words), see `missing_font_meta`.
+    step(13, &|c| {
+        add_column(c, "items", "font_script", "TEXT")?;
+        add_column(c, "items", "font_category", "TEXT")?;
+        add_column(c, "items", "font_category_user", "TEXT")?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -287,6 +297,12 @@ pub struct Item {
     /// first font in the file.
     pub font_family: Option<String>,
     pub font_weight: Option<u32>,
+    /// Fonts: writing system ("ja", "latin", ...), see `fonts::SCRIPTS`.
+    pub font_script: Option<String>,
+    /// Fonts: typeface style guessed from the font (None = can't tell) and the
+    /// user's correction, which wins. See `fonts::CATEGORIES`.
+    pub font_category: Option<String>,
+    pub font_category_user: Option<String>,
     /// Similar view only: which group of look-alikes the item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<u32>,
@@ -311,8 +327,8 @@ pub struct NewItem {
     /// Perceptual hash and average colour (see similar.rs).
     pub phash: Option<(u64, u32)>,
     pub preview: Option<String>,
-    /// Fonts: family and weight (see `Item::font_family`).
-    pub font: Option<(String, u32)>,
+    /// Fonts: family, weight, script and style (see `Item::font_family`).
+    pub font: Option<crate::fonts::FontMeta>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -346,6 +362,10 @@ pub enum Shape {
 pub struct Filter {
     /// Any of these kinds (the sidebar's "種類").
     pub kinds: Vec<Kind>,
+    /// Fonts of any of these writing systems / typeface styles (the sidebar,
+    /// under "フォント"). "none" = style unknown. Either one limits the list to fonts.
+    pub font_scripts: Vec<String>,
+    pub font_categories: Vec<String>,
     /// File types, e.g. "jpg" (also matches .jpeg), "png".
     pub exts: Vec<String>,
     /// Any of these shapes. Square = sides within 5% of each other.
@@ -430,7 +450,8 @@ const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items
      items.favorite, items.pinned_at, \
      (SELECT folder_id FROM item_folders WHERE item_id = items.id LIMIT 1), \
      (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id), \
-     items.rotation, items.flipped, items.kind, items.source_url, items.font_family, items.font_weight";
+     items.rotation, items.flipped, items.kind, items.source_url, items.font_family, items.font_weight, \
+     items.font_script, items.font_category, items.font_category_user";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     let tag_ids: Option<String> = r.get(16)?;
@@ -460,6 +481,9 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         source_url: r.get(20)?,
         font_family: r.get(21)?,
         font_weight: r.get(22)?,
+        font_script: r.get(23)?,
+        font_category: r.get(24)?,
+        font_category_user: r.get(25)?,
         group: None,
         distance: None,
     })
@@ -497,6 +521,9 @@ fn ext_aliases(ext: &str) -> Vec<String> {
 pub fn canonical_ext(ext: &str) -> String {
     ext_aliases(ext).swap_remove(0)
 }
+
+/// A font's typeface style as filtered and counted: the user's, else the guess, else "none".
+const FONT_CATEGORY: &str = "COALESCE(items.font_category_user, items.font_category, 'none')";
 
 /// Adds the WHERE clauses for `rule`.
 fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql>>) {
@@ -536,6 +563,17 @@ fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql
     if !f.kinds.is_empty() {
         wheres.push(format!("items.kind IN ({})", placeholders(f.kinds.len())));
         args.extend(f.kinds.iter().map(|k| Box::new(k.as_str()) as Box<dyn ToSql>));
+    }
+    if !f.font_scripts.is_empty() {
+        wheres.push(format!("(items.kind = 'font' AND items.font_script IN ({}))", placeholders(f.font_scripts.len())));
+        args.extend(f.font_scripts.iter().map(|v| Box::new(v.clone()) as Box<dyn ToSql>));
+    }
+    if !f.font_categories.is_empty() {
+        wheres.push(format!(
+            "(items.kind = 'font' AND {FONT_CATEGORY} IN ({}))",
+            placeholders(f.font_categories.len())
+        ));
+        args.extend(f.font_categories.iter().map(|v| Box::new(v.clone()) as Box<dyn ToSql>));
     }
     if !f.exts.is_empty() {
         let exts: Vec<String> = f.exts.iter().flat_map(|e| ext_aliases(e)).collect();
@@ -728,23 +766,35 @@ pub fn missing_phashes(conn: &Connection) -> DbResult<Vec<(String, String)>> {
     rows.collect()
 }
 
-/// Fonts whose family hasn't been read yet (imported before it was stored),
-/// trash included: (id, file name, extension).
-pub fn missing_font_names(conn: &Connection) -> DbResult<Vec<(String, String, String)>> {
-    let mut stmt = conn.prepare("SELECT id, file_name, lower(ext) FROM items WHERE kind = 'font' AND font_family IS NULL")?;
+/// Fonts whose details haven't been read yet (imported by a version that
+/// didn't store them all), trash included: (id, file name, extension).
+pub fn missing_font_meta(conn: &Connection) -> DbResult<Vec<(String, String, String)>> {
+    let mut stmt = conn.prepare("SELECT id, file_name, lower(ext) FROM items WHERE kind = 'font' AND font_script IS NULL")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     rows.collect()
 }
 
-pub fn set_font_names(conn: &mut Connection, names: &[(String, (String, u32))]) -> DbResult<()> {
+pub fn set_font_meta(conn: &mut Connection, metas: &[(String, crate::fonts::FontMeta)]) -> DbResult<()> {
     let tx = conn.transaction()?;
     {
-        let mut stmt = tx.prepare("UPDATE items SET font_family = ?2, font_weight = ?3 WHERE id = ?1")?;
-        for (id, (family, weight)) in names {
-            stmt.execute(params![id, family, weight])?;
+        let mut stmt = tx.prepare(
+            "UPDATE items SET font_family = ?2, font_weight = ?3, font_script = ?4, font_category = ?5 WHERE id = ?1",
+        )?;
+        for (id, m) in metas {
+            stmt.execute(params![id, m.family, m.weight, m.script, m.category])?;
         }
     }
     tx.commit()
+}
+
+/// The user's typeface style for fonts (None = back to the guess). Not fonts are skipped.
+pub fn set_font_category(conn: &Connection, ids: &[String], category: Option<&str>) -> DbResult<usize> {
+    let mut stmt = conn.prepare("UPDATE items SET font_category_user = ?2 WHERE id = ?1 AND kind = 'font'")?;
+    let mut n = 0;
+    for id in ids {
+        n += stmt.execute(params![id, category])?;
+    }
+    Ok(n)
 }
 
 pub fn set_phashes(conn: &mut Connection, hashes: &[(String, (u64, u32))]) -> DbResult<()> {
@@ -781,8 +831,8 @@ pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
 pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
     tx.execute(
         "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview, kind,
-           font_family, font_weight)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+           font_family, font_weight, font_script, font_category)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         params![
             it.id,
             it.name,
@@ -798,8 +848,10 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
             it.phash.map(|(_, c)| c),
             it.preview,
             it.kind.as_str(),
-            it.font.as_ref().map(|(f, _)| f),
-            it.font.as_ref().map(|(_, w)| w)
+            it.font.as_ref().map(|f| &f.family),
+            it.font.as_ref().map(|f| f.weight),
+            it.font.as_ref().map(|f| f.script),
+            it.font.as_ref().and_then(|f| f.category)
         ],
     )?;
     Ok(())
@@ -1060,6 +1112,9 @@ pub struct Counts {
     pub pinned: i64,
     /// Items not in the trash, by kind (kinds with none are left out).
     pub kinds: BTreeMap<Kind, i64>,
+    /// Fonts not in the trash by writing system, and by typeface style ("none" = unknown).
+    pub font_scripts: BTreeMap<String, i64>,
+    pub font_categories: BTreeMap<String, i64>,
 }
 
 pub fn counts(conn: &Connection) -> DbResult<Counts> {
@@ -1067,6 +1122,16 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
     let kinds = stmt
         .query_map([], |r| Ok((Kind::parse(&r.get::<_, String>(0)?), r.get::<_, i64>(1)?)))?
         .collect::<Result<BTreeMap<_, _>, _>>()?;
+    let by = |col: &str| -> DbResult<BTreeMap<String, i64>> {
+        let sql = format!(
+            "SELECT {col}, COUNT(*) FROM items WHERE deleted_at IS NULL AND kind = 'font' AND font_script IS NOT NULL GROUP BY 1"
+        );
+        let mut stmt = conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+        rows.collect()
+    };
+    let font_scripts = by("items.font_script")?;
+    let font_categories = by(FONT_CATEGORY)?;
     conn.query_row(
         "SELECT
            SUM(deleted_at IS NULL),
@@ -1086,6 +1151,8 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
                 favorites: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
                 pinned: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
                 kinds,
+                font_scripts,
+                font_categories,
             })
         },
     )
@@ -1727,7 +1794,9 @@ mod tests {
                 trash: 1,
                 favorites: 0,
                 pinned: 0,
-                kinds: BTreeMap::from([(Kind::Image, 2)])
+                kinds: BTreeMap::from([(Kind::Image, 2)]),
+                font_scripts: BTreeMap::new(),
+                font_categories: BTreeMap::new(),
             }
         );
 
@@ -2119,6 +2188,23 @@ mod tests {
         assert_eq!(find(&conn, f(|f| f.kinds = vec![Kind::Image])), s(&["a", "b", "c"]));
         assert_eq!(find(&conn, f(|f| f.kinds = vec![Kind::Image, Kind::Font])).len(), 4);
         assert_eq!(counts(&conn).unwrap().kinds, BTreeMap::from([(Kind::Image, 3), (Kind::Font, 1)]));
+
+        // Fonts by writing system and style; the user's style wins over the guess.
+        conn.execute("UPDATE items SET font_script = 'ja', font_category = 'gothic' WHERE id = 'd'", []).unwrap();
+        assert_eq!(find(&conn, f(|f| f.font_scripts = vec!["ja".into()])), s(&["d"]));
+        assert!(find(&conn, f(|f| f.font_scripts = vec!["latin".into()])).is_empty());
+        assert_eq!(find(&conn, f(|f| f.font_categories = vec!["gothic".into()])), s(&["d"]));
+        assert_eq!(set_font_category(&conn, &s(&["a", "d"]), Some("mincho")).unwrap(), 1, "images are skipped");
+        assert!(find(&conn, f(|f| f.font_categories = vec!["gothic".into()])).is_empty());
+        assert_eq!(find(&conn, f(|f| f.font_categories = vec!["mincho".into()])), s(&["d"]));
+        let c = counts(&conn).unwrap();
+        assert_eq!((c.font_scripts, c.font_categories), (
+            BTreeMap::from([("ja".to_string(), 1)]),
+            BTreeMap::from([("mincho".to_string(), 1)])
+        ));
+        set_font_category(&conn, &s(&["d"]), None).unwrap();
+        conn.execute("UPDATE items SET font_category = NULL WHERE id = 'd'", []).unwrap();
+        assert_eq!(find(&conn, f(|f| f.font_categories = vec!["none".into()])), s(&["d"]), "unknown style");
         assert_eq!(
             list_exts(&conn).unwrap(),
             vec![("png".to_string(), 2), ("jpg".to_string(), 1), ("tif".to_string(), 1)]

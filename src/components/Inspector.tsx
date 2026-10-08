@@ -12,7 +12,19 @@ import {
   toggleFavorite,
   togglePinned,
 } from "../lib/actions";
-import { api, formatBytes, sizeLabel, type Folder, type FontFaceInfo, type Item, type SelectionInfo, type Tag } from "../lib/api";
+import {
+  api,
+  FONT_CATEGORIES,
+  fontCategoryLabel,
+  fontScriptLabel,
+  formatBytes,
+  sizeLabel,
+  type Folder,
+  type FontFaceInfo,
+  type Item,
+  type SelectionInfo,
+  type Tag,
+} from "../lib/api";
 import { useStore } from "../store";
 import { RatingStars } from "./RatingStars";
 
@@ -283,8 +295,40 @@ const AXIS_LABEL: Record<string, string> = {
   opsz: "光学サイズ",
 };
 
+/**
+ * Typeface style of the selected fonts: the guess, or one picked by hand
+ * (the guess stays and comes back with "自動").
+ */
+function FontCategorySelect({ fonts }: { fonts: Item[] }) {
+  const run = useStore((s) => s.run);
+  const users = new Set(fonts.map((f) => f.fontCategoryUser ?? ""));
+  const value = users.size === 1 ? [...users][0] : "mixed";
+  const auto = new Set(fonts.map((f) => f.fontCategory ?? "none"));
+  const autoLabel = auto.size === 1 ? fontCategoryLabel([...auto][0]) : "フォントごと";
+  return (
+    <select
+      value={value}
+      onChange={(e) => {
+        const v = e.target.value;
+        if (v !== "mixed") run(() => api.setFontCategory(fonts.map((f) => f.id), v || null));
+      }}
+      className="w-full rounded-md border border-line bg-bg px-1.5 py-0.5 text-xs outline-none focus:border-accent"
+      title="自動の判定が違うときは、ここで選び直せます"
+    >
+      {value === "mixed" && <option value="mixed">（いろいろ）</option>}
+      <option value="">自動（{autoLabel}）</option>
+      {FONT_CATEGORIES.filter((c) => c.key !== "none").map((c) => (
+        <option key={c.key} value={c.key}>
+          {c.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 /** Rows of the details list for a font: names, styles, variable axes, maker. */
-function FontDetails({ id }: { id: string }) {
+function FontDetails({ item }: { item: Item }) {
+  const id = item.id;
   const [faces, setFaces] = useState<FontFaceInfo[] | null>(null);
   useEffect(() => {
     let live = true;
@@ -312,6 +356,8 @@ function FontDetails({ id }: { id: string }) {
   return (
     <>
       {row("ファミリー", f.family || "—")}
+      {item.fontScript && row("言語", fontScriptLabel(item.fontScript))}
+      {row("書体", <FontCategorySelect fonts={[item]} />)}
       {faces.length > 1
         ? row(
             `フォント（${faces.length}）`,
@@ -366,6 +412,11 @@ export function Inspector() {
 
   const ids = useMemo(() => [...selected], [selected]);
   const single = ids.length === 1 ? items.find((i) => i.id === ids[0]) : undefined;
+  // With tag grouping an item can be listed more than once.
+  const selectedItems = useMemo(
+    () => [...new Map(items.filter((i) => selected.has(i.id)).map((i) => [i.id, i])).values()],
+    [items, selected],
+  );
   const renameSeq = useStore((s) => s.renameItemSeq);
   // Common rating of the selection, or null when mixed.
   const rating = useMemo(() => {
@@ -439,7 +490,7 @@ export function Inspector() {
             <dd>
               {single.ext.toUpperCase()} · {formatBytes(single.size)}
             </dd>
-            {single.kind === "font" && <FontDetails id={single.id} />}
+            {single.kind === "font" && <FontDetails item={single} />}
             <dt className="text-dim">追加日</dt>
             <dd>{new Date(single.importedAt).toLocaleString("ja-JP")}</dd>
             {single.sourceUrl && (
@@ -463,6 +514,12 @@ export function Inspector() {
           <div className="text-2xl font-semibold tabular-nums">{n}</div>
           <div className="text-dim">件を選択中</div>
         </div>
+      )}
+
+      {!single && selectedItems.length > 0 && selectedItems.every((i) => i.kind === "font") && (
+        <Field label="書体">
+          <FontCategorySelect fonts={selectedItems} />
+        </Field>
       )}
 
       {!isTrash && (

@@ -235,12 +235,211 @@ pub fn faces(sfnt: &[u8]) -> Result<Vec<FaceInfo>, String> {
     (0..face_count(sfnt)?).map(|i| face_ref(sfnt, i).map(|f| face_info(&f))).collect()
 }
 
-/// Family and weight of the first face: what groups the styles of a family
-/// (e.g. "Noto Sans JP" Light / Regular / Bold, each in its own file).
-pub fn family(sfnt: &[u8]) -> Result<(String, u32), String> {
+/// What the library stores about a font (from its first face) to group and
+/// filter fonts: see `meta`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontMeta {
+    /// Family shared by its styles (e.g. "Noto Sans JP" for Light / Bold).
+    pub family: String,
+    /// 100 (thin) to 900 (black).
+    pub weight: u32,
+    /// Writing system: see `SCRIPTS`.
+    pub script: &'static str,
+    /// Typeface style (明朝 / ゴシック ...), None when it can't be told: see `CATEGORIES`.
+    pub category: Option<&'static str>,
+}
+
+/// Writing systems a font is filed under: 日本語, 欧文, 中国語, 韓国語, その他.
+pub const SCRIPTS: &[&str] = &["ja", "latin", "zh", "ko", "other"];
+/// Typeface styles: 明朝・セリフ, ゴシック・サンセリフ, 丸ゴシック, 筆・手書き, デザイン, 等幅.
+pub const CATEGORIES: &[&str] = &["mincho", "gothic", "maru", "brush", "display", "mono"];
+
+pub fn meta(sfnt: &[u8]) -> Result<FontMeta, String> {
     let font = face_ref(sfnt, 0)?;
-    let family = name(&font, &[StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME]);
-    Ok((family, font.attributes().weight.value().round() as u32))
+    Ok(FontMeta {
+        family: base_family(&font),
+        weight: font.attributes().weight.value().round() as u32,
+        script: script(&font),
+        category: category(&font),
+    })
+}
+
+/// The family, without the style words some fonts put in it ("MOBO-Bold",
+/// "ぼくたちのゴシック２ボールド") so their styles still group together. Free
+/// fonts do this even in the typographic family name.
+fn base_family(font: &FontRef) -> String {
+    strip_style(&name(font, &[StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME]))
+}
+
+const STYLE_WORDS: &[&str] = &[
+    "ExtraLight", "UltraLight", "ExtraBold", "UltraBold", "SemiBold", "DemiBold", "Hairline", "Regular",
+    "Medium", "Normal", "Italic", "Oblique", "Light", "Black", "Heavy", "Thin", "Bold", "Book",
+];
+
+/// Japanese spellings, taken off even without a separator.
+const STYLE_WORDS_JA: &[&str] = &[
+    "エクストラライト", "ウルトラライト", "エクストラボールド", "セミボールド", "デミボールド", "レギュラー",
+    "ミディアム", "ボールド", "ライト", "ヘビー", "ブラック",
+];
+
+/// Takes style words off the end of a family name: "MOBO-Bold" → "MOBO",
+/// "Noto Sans JP Light" → "Noto Sans JP", "ヒラギノ角ゴ ProN W3" → "ヒラギノ角ゴ ProN",
+/// "BokutachinoGothic2Regular" → "BokutachinoGothic2". A name that is only
+/// style words is kept.
+pub fn strip_style(family: &str) -> String {
+    let mut out = family.trim().to_string();
+    loop {
+        let before = out.len();
+        // "Extra Light" and the like, spelled with a space.
+        let squeezed: Vec<&str> = out.rsplitn(3, |c: char| c == ' ' || c == '-' || c == '_').collect();
+        if squeezed.len() == 3 {
+            let pair = format!("{}{}", squeezed[1], squeezed[0]);
+            if STYLE_WORDS.iter().any(|w| w.eq_ignore_ascii_case(&pair)) && !squeezed[2].is_empty() {
+                out = squeezed[2].trim_end_matches([' ', '-', '_']).to_string();
+                continue;
+            }
+        }
+        for w in STYLE_WORDS {
+            let Some(head) = out.len().checked_sub(w.len()).and_then(|i| out.get(..i)) else { continue };
+            let tail = &out[head.len()..];
+            let after_separator = head.ends_with([' ', '-', '_']) && tail.eq_ignore_ascii_case(w);
+            // Glued on: "Gothic2Bold" (capitalised word after a lower-case letter or digit).
+            let camel = tail == *w && head.chars().last().is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+            if after_separator || camel {
+                out = head.trim_end_matches([' ', '-', '_']).to_string();
+                break;
+            }
+        }
+        if out.len() == before {
+            if let Some(w) = STYLE_WORDS_JA.iter().find(|w| out.ends_with(*w) && out.len() > w.len()) {
+                out = out[..out.len() - w.len()].trim_end_matches([' ', '-', '_', '　']).to_string();
+            }
+        }
+        // Japanese weights: W0 - W9.
+        if let Some(head) = out.strip_suffix(|c: char| c.is_ascii_digit()).and_then(|h| h.strip_suffix(['W', 'w'])) {
+            if head.ends_with([' ', '-', '_']) {
+                out = head.trim_end_matches([' ', '-', '_']).to_string();
+            }
+        }
+        if out.len() == before {
+            break;
+        }
+    }
+    if out.is_empty() { family.trim().to_string() } else { out }
+}
+
+/// The writing system the font is made for, from the characters it has and
+/// the code pages it claims (fonts for one CJK language often carry the
+/// others' kana or hanzi too).
+fn script(font: &FontRef) -> &'static str {
+    let cmap = font.charmap();
+    let count = |from: u32, to: u32| (from..=to).filter(|&c| char::from_u32(c).is_some_and(|ch| cmap.map(ch).is_some())).count();
+    let kana = count(0x3041, 0x30ff);
+    let hangul = count(0xac00, 0xd7a3);
+    let hanzi = count(0x4e00, 0x9fff);
+    let pages = font.os2().ok().and_then(|t| t.ul_code_page_range_1()).unwrap_or(0);
+    let (jis, chinese) = (pages & (1 << 17) != 0, pages & (1 << 18 | 1 << 20) != 0);
+    // Some display faces have capitals only.
+    let latin = ('A'..='Z').all(|c| cmap.map(c).is_some());
+    if hangul >= 1000 && !jis {
+        "ko"
+    } else if kana >= 40 && (jis || !chinese) {
+        "ja"
+    } else if hanzi >= 2000 {
+        "zh"
+    } else if kana >= 40 {
+        "ja"
+    } else if latin {
+        "latin"
+    } else {
+        "other"
+    }
+}
+
+/// Every name of the font (all languages) as lower-case words, splitting
+/// "BokutachinoGothic2" into "bokutachino", "gothic", "2".
+fn name_words(font: &FontRef) -> (String, Vec<String>) {
+    let ids = [StringId::FAMILY_NAME, StringId::FULL_NAME, StringId::POSTSCRIPT_NAME, StringId::TYPOGRAPHIC_FAMILY_NAME];
+    let all: String = ids.iter().flat_map(|&id| font.localized_strings(id).map(|s| s.to_string() + " ")).collect();
+    let mut words = Vec::new();
+    let mut cur = String::new();
+    let mut prev: Option<char> = None;
+    for c in all.chars() {
+        let boundary = !c.is_alphanumeric()
+            || prev.is_some_and(|p| (p.is_lowercase() && c.is_uppercase()) || (p.is_ascii_digit() != c.is_ascii_digit()));
+        if boundary && !cur.is_empty() {
+            words.push(std::mem::take(&mut cur).to_lowercase());
+        }
+        if c.is_alphanumeric() {
+            cur.push(c);
+        }
+        prev = Some(c);
+    }
+    if !cur.is_empty() {
+        words.push(cur.to_lowercase());
+    }
+    (all.to_lowercase(), words)
+}
+
+/// 明朝 / ゴシック / ... from the name first (Japanese fonts, free fonts in
+/// particular, rarely fill in the classification fields), then the font's
+/// own classification (OS/2 family class and PANOSE).
+fn category(font: &FontRef) -> Option<&'static str> {
+    let (text, words) = name_words(font);
+    let word = |ws: &[&str]| words.iter().any(|w| ws.contains(&w.as_str()));
+    let has = |ss: &[&str]| ss.iter().any(|s| text.contains(s));
+    if word(&["mono", "monospace", "monospaced", "code"]) || has(&["等幅"]) {
+        return Some("mono");
+    }
+    if word(&["maru", "rounded", "round"]) || has(&["丸ゴ", "まる", "ラウンド"]) {
+        return Some("maru");
+    }
+    if word(&["kaisho", "gyosho", "sosho", "kyokasho", "fude", "brush", "script", "hand", "handwriting", "calligraphy"])
+        || has(&["筆", "楷書", "行書", "草書", "隷書", "教科書", "手書", "手描"])
+    {
+        return Some("brush");
+    }
+    if word(&["mincho", "serif", "song", "ming", "antiqua"]) && !word(&["sans"]) || has(&["明朝", "宋"]) {
+        return Some("mincho");
+    }
+    if word(&["gothic", "sans", "kakugo", "grotesk", "grotesque"]) || has(&["ゴシック", "角ゴ", "ゴチ"]) {
+        return Some("gothic");
+    }
+    if word(&["pop", "display"]) || has(&["ポップ", "ぽっぷ"]) {
+        return Some("display");
+    }
+
+    let fixed = font.post().is_ok_and(|p| p.is_fixed_pitch() != 0);
+    let (panose, class) = font
+        .os2()
+        .map(|t| (t.panose_10().to_vec(), (t.s_family_class() >> 8) as u8))
+        .unwrap_or_default();
+    let (family_kind, serif, proportion) = (panose.first().copied(), panose.get(1).copied(), panose.get(3).copied());
+    if fixed || (family_kind == Some(2) && proportion == Some(9)) {
+        return Some("mono");
+    }
+    match (family_kind, class) {
+        (Some(3), _) | (_, 10) => return Some("brush"),
+        (Some(4 | 5), _) | (_, 12) => return Some("display"),
+        _ => {}
+    }
+    // Fonts that leave the family class empty (most free Japanese fonts) tend
+    // to carry leftover PANOSE serif values too: not trusted then.
+    if class == 0 {
+        return None;
+    }
+    if family_kind == Some(2) && serif == Some(15) {
+        return Some("maru");
+    }
+    match class {
+        1..=7 => Some("mincho"),
+        8 => Some("gothic"),
+        _ => match (family_kind, serif) {
+            (Some(2), Some(2..=10)) => Some("mincho"),
+            (Some(2), Some(11..=13)) => Some("gothic"),
+            _ => None,
+        },
+    }
 }
 
 /// Every face, and the characters of face `index`.
@@ -416,7 +615,9 @@ pub mod tests {
         assert!(info.chars.contains(&('A' as u32)));
         assert!(info.faces[0].glyphs > 50);
         assert_eq!(info.faces[0].char_count, info.chars.len());
-        assert_eq!(family(&ttf).unwrap(), (info.faces[0].family.clone(), info.faces[0].weight.round() as u32));
+        let m = meta(&ttf).unwrap();
+        assert_eq!((m.family.as_str(), m.weight), (info.faces[0].family.as_str(), info.faces[0].weight.round() as u32));
+        assert_eq!(m.script, "latin");
         assert!(!info.faces[0].version.is_empty());
 
         let woff = encode_woff(&ttf);
@@ -458,6 +659,47 @@ pub mod tests {
         // A plain font has neither.
         let Some(plain) = system_font(SINGLE) else { return };
         assert!(faces(&plain).unwrap()[0].axes.is_empty());
+    }
+
+    #[test]
+    fn strips_style_words_from_families() {
+        for (from, to) in [
+            ("MOBO-Bold", "MOBO"),
+            ("MOBO-ExtraLight", "MOBO"),
+            ("BokutachinoGothic2Regular", "BokutachinoGothic2"),
+            ("Noto Sans JP Light", "Noto Sans JP"),
+            ("Noto Sans JP Extra Light", "Noto Sans JP"),
+            ("ヒラギノ角ゴ ProN W3", "ヒラギノ角ゴ ProN"),
+            ("Senobi Gothic", "Senobi Gothic"),
+            ("Kobold", "Kobold"),
+            ("Bold", "Bold"),
+            ("Arial Black Italic", "Arial"),
+            ("ぼくたちのゴシック２ボールド", "ぼくたちのゴシック２"),
+            ("モボ-Bold", "モボ"),
+            ("ボールド", "ボールド"),
+        ] {
+            assert_eq!(strip_style(from), to, "{from}");
+        }
+    }
+
+    /// The OS's own fonts fill in their classification, so the guesses can be checked.
+    #[test]
+    fn tells_scripts_and_styles() {
+        let cases: &[(&[&str], &str, Option<&str>)] = &[
+            (&["/System/Library/Fonts/ヒラギノ明朝 ProN.ttc", "C:\\Windows\\Fonts\\yumin.ttf"], "ja", Some("mincho")),
+            (&["/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc"], "ja", Some("maru")),
+            (&["/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", "C:\\Windows\\Fonts\\msgothic.ttc"], "ja", Some("gothic")),
+            (&["/System/Library/Fonts/Supplemental/Times New Roman.ttf", "C:\\Windows\\Fonts\\times.ttf"], "latin", Some("mincho")),
+            (&["/System/Library/Fonts/Supplemental/Arial.ttf", "C:\\Windows\\Fonts\\arial.ttf"], "latin", Some("gothic")),
+            (&["/System/Library/Fonts/Supplemental/Courier New.ttf", "C:\\Windows\\Fonts\\cour.ttf"], "latin", Some("mono")),
+            (&["/System/Library/Fonts/Supplemental/Apple Chancery.ttf"], "latin", Some("brush")),
+            (&["/System/Library/Fonts/AppleSDGothicNeo.ttc", "C:\\Windows\\Fonts\\malgun.ttf"], "ko", Some("gothic")),
+        ];
+        for (paths, script, category) in cases {
+            let Some(data) = system_font(paths) else { continue };
+            let m = meta(&data).unwrap();
+            assert_eq!((m.script, m.category), (*script, *category), "{}", paths[0]);
+        }
     }
 
     #[test]

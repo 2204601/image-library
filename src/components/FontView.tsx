@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type FontInfo, type Item } from "../lib/api";
+import { countMissing, Sample } from "./FontSample";
 
 const SAMPLE_JA = "あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら";
 const SAMPLE_EN = "The quick brown fox jumps over the lazy dog 0123456789";
@@ -7,58 +8,6 @@ const SAMPLE_EN = "The quick brown fox jumps over the lazy dog 0123456789";
 const WATERFALL = [12, 16, 24, 36];
 /** The character list shows this many at most (more would make the page heavy). */
 const MAX_LISTED = 3000;
-
-/** Spaces, joiners and variation selectors: never "missing", whatever the font maps. */
-const neutral = (c: number) =>
-  c <= 0x20 ||
-  (c >= 0x200b && c <= 0x200d) ||
-  (c >= 0xfe00 && c <= 0xfe0f) ||
-  (c >= 0xe0100 && c <= 0xe01ef) ||
-  /\s/u.test(String.fromCodePoint(c));
-
-/**
- * `text` in the font. Characters the font doesn't have would silently come
- * out in a system font, so they are drawn in red with a dotted underline.
- */
-function Sample({ text, has, style, className }: { text: string; has: Set<number> | null; style: CSSProperties; className?: string }) {
-  if (!has) return <span style={style} className={className}>{text}</span>;
-  const runs: { ok: boolean; s: string }[] = [];
-  for (const ch of text) {
-    const c = ch.codePointAt(0)!;
-    const ok = neutral(c) ? (runs.at(-1)?.ok ?? true) : has.has(c);
-    if (runs.at(-1)?.ok === ok) runs.at(-1)!.s += ch;
-    else runs.push({ ok, s: ch });
-  }
-  return (
-    <span style={style} className={className}>
-      {runs.map((r, i) =>
-        r.ok ? (
-          r.s
-        ) : (
-          <span
-            key={i}
-            title="このフォントに無い文字（システムのフォントで表示）"
-            className="text-red-300 underline decoration-red-400/70 decoration-dotted"
-            style={{ fontFamily: "sans-serif" }}
-          >
-            {r.s}
-          </span>
-        ),
-      )}
-    </span>
-  );
-}
-
-/** How many characters of `text` the font lacks. */
-function countMissing(text: string, has: Set<number> | null): number {
-  if (!has) return 0;
-  let n = 0;
-  for (const ch of text) {
-    const c = ch.codePointAt(0)!;
-    if (!neutral(c) && !has.has(c)) n++;
-  }
-  return n;
-}
 
 /**
  * Viewer body for a font: sample text at any size, the fonts in a collection,

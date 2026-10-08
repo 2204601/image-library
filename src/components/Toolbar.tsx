@@ -26,12 +26,12 @@ import {
   reviewDuplicates,
   similarGroups,
 } from "../lib/actions";
-import { kindLabel, type Folder, type SimilarLevel, type SmartFolder, type SortKey, type View } from "../lib/api";
+import { fontCategoryLabel, fontScriptLabel, kindLabel, type Folder, type SimilarLevel, type SmartFolder, type SortKey, type View } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
 import { activeConditions, useStore } from "../store";
 import { FilterBar } from "./FilterBar";
-import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
+import { DisplayMenu, GroupMenu, LayoutSwitch, SpecimenControls } from "./ViewMenu";
 
 /** Thin line between groups of controls. */
 const Divider = () => <div className="mx-0.5 h-5 w-px shrink-0 bg-line" />;
@@ -83,6 +83,7 @@ export function Toolbar() {
   const desc = useStore((s) => s.desc);
   const setSort = useStore((s) => s.setSort);
   const thumbSize = useStore((s) => s.thumbSize);
+  const layout = useStore((s) => s.layout);
   const setThumbSize = useStore((s) => s.setThumbSize);
   const tags = useStore((s) => s.tags);
   const items = useStore((s) => s.items);
@@ -227,6 +228,7 @@ export function Toolbar() {
           <InspectorToggle className="flex @max-xl:hidden" />
         </div>
       </div>
+      {layout === "specimen" && <SpecimenControls />}
       <div className="flex min-h-6 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
         {smart && (
           <div className="flex min-w-0 items-center gap-1.5">
@@ -337,7 +339,7 @@ export function Toolbar() {
             value={thumbSize}
             onChange={(e) => setThumbSize(Number(e.target.value))}
             title="サムネイルサイズ（⌘+ / ⌘-）"
-            className="w-20 shrink-0 accent-accent @max-2xl:hidden"
+            className={`w-20 shrink-0 accent-accent @max-2xl:hidden ${layout === "specimen" || layout === "list" ? "hidden" : ""}`}
           />
         </div>
       </div>
@@ -426,6 +428,18 @@ function ActiveFilters({ count }: { count: number }) {
       key: "kinds",
       label: `種類: ${filter.kinds.map(kindLabel).join("・")}`,
       clear: () => setFilter({ kinds: [] }),
+    });
+  if (filter.fontScripts.length)
+    chips.push({
+      key: "fontScripts",
+      label: `言語: ${filter.fontScripts.map(fontScriptLabel).join("・")}`,
+      clear: () => setFilter({ fontScripts: [] }),
+    });
+  if (filter.fontCategories.length)
+    chips.push({
+      key: "fontCategories",
+      label: `書体: ${filter.fontCategories.map(fontCategoryLabel).join("・")}`,
+      clear: () => setFilter({ fontCategories: [] }),
     });
   if (filter.exts.length)
     chips.push({ key: "exts", label: `形式: ${filter.exts.join(", ")}`, clear: () => setFilter({ exts: [] }) });

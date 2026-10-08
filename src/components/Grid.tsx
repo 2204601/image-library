@@ -24,8 +24,18 @@ import {
   toggleFavorite,
   togglePinned,
 } from "../lib/actions";
-import { api, formatBytes, sizeLabel, type FontListPreview, type Item } from "../lib/api";
-import { fontPreview, loadFont } from "../lib/fontLoader";
+import {
+  api,
+  fontCategoryLabel,
+  fontCategoryOf,
+  fontScriptLabel,
+  formatBytes,
+  sizeLabel,
+  type FontListPreview,
+  type Item,
+} from "../lib/api";
+import { fontChars, fontPreview, loadFont } from "../lib/fontLoader";
+import { Sample } from "./FontSample";
 import { colorHex } from "../lib/colors";
 import type { Section } from "../lib/grouping";
 import {
@@ -379,6 +389,111 @@ function FontListCells({ item }: { item: Item }) {
   );
 }
 
+/**
+ * Specimen layout: a font as a row with its name and a sample line at the
+ * chosen size, in the text typed above the list (or the font's own sample).
+ * Characters the font lacks are marked. Other items show as list rows.
+ */
+const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
+  const { item, index, selected, dimmed, width, height, reorderable, insert, flags } = props;
+  const text = useStore((s) => s.specimenText);
+  const size = useStore((s) => s.specimenSize);
+  const [family, setFamily] = useState<string | null>(null);
+  const [preview, setPreview] = useState<FontListPreview | null>(null);
+  const [has, setHas] = useState<Set<number> | null>(null);
+  const [failed, setFailed] = useState(false);
+  const isFont = item.kind === "font";
+
+  useEffect(() => {
+    if (!isFont) return;
+    let live = true;
+    setFamily(null);
+    setPreview(null);
+    setFailed(false);
+    fontPreview(item.id)
+      .then((p) => live && setPreview(p))
+      .catch(() => live && setFailed(true));
+    loadFont(item.id)
+      .then((f) => live && setFamily(f))
+      .catch(() => live && setFailed(true));
+    return () => {
+      live = false;
+    };
+  }, [item.id, isFont]);
+
+  // The characters are only needed to check typed text.
+  const typed = text.trim() !== "";
+  useEffect(() => {
+    if (!isFont || !typed) return;
+    let live = true;
+    setHas(null);
+    fontChars(item.id)
+      .then((c) => live && setHas(c))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [item.id, isFont, typed]);
+
+  if (!isFont) return <ListRow {...props} />;
+  const category = fontCategoryOf(item);
+  const style = [preview?.style, preview && preview.faces > 1 ? `ほか ${preview.faces - 1} 個` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    <div
+      className={`relative flex flex-col justify-center gap-1 overflow-hidden rounded-md border-b border-line/60 px-3 transition-opacity duration-200 ${
+        selected ? "bg-accent/25 text-white" : "hover:bg-white/5"
+      } ${dimmed ? "opacity-35" : ""}`}
+      style={{ width, height }}
+      onPointerDown={(e) => onItemPointerDown(e, item, index)}
+      onDoubleClick={() => useStore.getState().openViewer(index)}
+      onContextMenu={(e) => showItemMenu(e, item, index)}
+      data-drop={reorderable ? `item:${item.id}` : undefined}
+      data-axis="y"
+    >
+      <div className="flex min-w-0 items-baseline gap-2 text-xs">
+        <span className="truncate text-[13px] font-medium">{item.fontFamily || item.name}</span>
+        <span className="shrink-0 text-dim">{style}</span>
+        <span className="min-w-0 truncate text-dim/70">{item.name}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-dim">
+          {flags && item.pinnedAt !== null && <Pin size={11} className="text-accent" fill="currentColor" />}
+          {flags && item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
+          {item.rating > 0 && <Stars n={item.rating} />}
+          {item.fontScript && <span className="rounded bg-white/8 px-1.5 py-px">{fontScriptLabel(item.fontScript)}</span>}
+          <span
+            className={`rounded px-1.5 py-px ${category === "none" ? "text-dim/70" : "bg-white/8"}`}
+            title={item.fontCategoryUser ? "手で設定した書体" : "自動で判定した書体（詳細パネルで変更できます）"}
+          >
+            {fontCategoryLabel(category)}
+            {item.fontCategoryUser && " ✎"}
+          </span>
+          <span className="uppercase">{item.ext}</span>
+        </span>
+      </div>
+      {failed ? (
+        <span className="text-dim">見本を表示できません</span>
+      ) : (
+        <Sample
+          text={typed ? text : (preview?.sample ?? "")}
+          has={typed ? has : null}
+          style={{ fontFamily: family ? `"${family}"` : undefined, fontSize: size, lineHeight: 1.15 }}
+          className={`block truncate whitespace-pre transition-opacity duration-200 ${
+            family && preview ? "opacity-100" : "opacity-0"
+          }`}
+        />
+      )}
+      {insert && (
+        <span
+          className={`pointer-events-none absolute right-2 left-2 h-0.5 rounded-full bg-accent shadow-[0_0_6px] shadow-accent ${
+            insert === "before" ? "-top-px" : "-bottom-px"
+          }`}
+        />
+      )}
+    </div>
+  );
+});
+
 function Stars({ n, size = 9 }: { n: number; size?: number }) {
   return (
     <span className="flex text-amber-400" title={`★${n}`}>
@@ -455,6 +570,7 @@ export function Grid() {
   const sections = useStore((s) => s.sections);
   const selected = useStore((s) => s.selected);
   const thumbSize = useStore((s) => s.thumbSize);
+  const specimenSize = useStore((s) => s.specimenSize);
   const kind = useStore((s) => s.layout);
   const showInfo = useStore((s) => s.showInfo);
   const viewKind = useStore((s) => s.view.kind);
@@ -498,9 +614,9 @@ export function Grid() {
   const placement = useMemo<Placement>(
     () =>
       inner > 0
-        ? computeLayout(kind, items, inner, thumbSize, info, sections)
+        ? computeLayout(kind, items, inner, kind === "specimen" ? specimenSize : thumbSize, info, sections)
         : { boxes: [], headers: [], height: 0, label: 0, fit: "cover" },
-    [kind, items, inner, thumbSize, info, sections],
+    [kind, items, inner, thumbSize, specimenSize, info, sections],
   );
   const visible = useMemo(
     () => visibleRange(placement, viewport.top - OVERSCAN, viewport.top + viewport.height + OVERSCAN),
@@ -668,10 +784,15 @@ export function Grid() {
       }
 
       // Thumbnail size
+      // (the sample size in the specimen layout)
       if (mod && (e.key === "=" || e.key === "+" || e.key === ";")) {
+        if (s.layout === "specimen") return handled(), s.setSpecimenSize(s.specimenSize + 8);
         return handled(), s.setThumbSize(Math.min(360, s.thumbSize + 20));
       }
-      if (mod && e.key === "-") return handled(), s.setThumbSize(Math.max(80, s.thumbSize - 20));
+      if (mod && e.key === "-") {
+        if (s.layout === "specimen") return handled(), s.setSpecimenSize(s.specimenSize - 8);
+        return handled(), s.setThumbSize(Math.max(80, s.thumbSize - 20));
+      }
 
       // Ratings: 0-5, Shift+number rates and moves to the next image.
       const digit = /^(Digit|Numpad)([0-5])$/.exec(e.code);
@@ -720,7 +841,7 @@ export function Grid() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const Comp = kind === "list" ? ListRow : Cell;
+  const Comp = kind === "list" ? ListRow : kind === "specimen" ? SpecimenRow : Cell;
   return (
     <div
       ref={scrollRef}

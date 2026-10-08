@@ -31,7 +31,7 @@ import {
   shiftFolder,
   sortFoldersByName,
 } from "../lib/actions";
-import { api, KINDS, type Folder, type ItemKind, type View } from "../lib/api";
+import { api, FONT_CATEGORIES, FONT_SCRIPTS, KINDS, type Folder, type ItemKind, type View } from "../lib/api";
 import { appVersion, checkForUpdate } from "../lib/update";
 import { activeConditions, useStore } from "../store";
 import { useMenu } from "./ContextMenu";
@@ -433,47 +433,93 @@ const KIND_ICON: Record<ItemKind, React.ReactNode> = {
   font: <Type size={15} />,
 };
 
+/** Clicking a filter row: only this one (again: none); ⌘ / Shift adds or removes it. */
+function pickFrom<T>(cur: T[], v: T, add: boolean): T[] {
+  if (add) return cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v];
+  return cur.length === 1 && cur[0] === v ? [] : [v];
+}
+
+const isAdd = (e: React.MouseEvent) => e.metaKey || e.ctrlKey || e.shiftKey;
+
 /**
  * Quick filter by kind, on top of the open view (like tags). A click shows
  * only that kind (again: all kinds); ⌘ / Shift + click adds or removes one.
+ * With fonts shown, their writing systems and typeface styles appear below.
  */
 function KindList() {
-  const counts = useStore((s) => s.counts.kinds);
-  const kinds = useStore((s) => s.filter.kinds);
+  const counts = useStore((s) => s.counts);
+  const filter = useStore((s) => s.filter);
   const setFilter = useStore((s) => s.setFilter);
+  const { kinds, fontScripts, fontCategories } = filter;
+  const fontsOpen = kinds.includes("font");
+  const active = kinds.length + fontScripts.length + fontCategories.length > 0;
 
-  const pick = (k: ItemKind, add: boolean) =>
-    setFilter({
-      kinds: add
-        ? kinds.includes(k)
-          ? kinds.filter((x) => x !== k)
-          : [...kinds, k]
-        : kinds.length === 1 && kinds[0] === k
-          ? []
-          : [k],
-    });
+  const pickKind = (k: ItemKind, add: boolean) => {
+    const next = pickFrom(kinds, k, add);
+    // The font filters only make sense while fonts are shown.
+    setFilter(next.includes("font") ? { kinds: next } : { kinds: next, fontScripts: [], fontCategories: [] });
+  };
+
+  const sub = (title: string, items: { key: string; label: string }[], counted: Record<string, number>, on: string[], set: (v: string[]) => void) => {
+    const shown = items.filter((x) => counted[x.key] || on.includes(x.key));
+    if (!shown.length) return null;
+    return (
+      <>
+        <div className="mt-1 mb-0.5 pl-9 text-[11px] text-dim">{title}</div>
+        {shown.map((x) => (
+          <Row
+            key={x.key}
+            depth={1}
+            active={on.includes(x.key)}
+            icon={<span className="block h-1.5 w-1.5 rounded-full bg-current" />}
+            label={x.label}
+            count={counted[x.key] ?? 0}
+            title="クリックでこれだけを表示（⌘・Shift+クリックで追加）"
+            onClick={(e) => set(pickFrom(on, x.key, isAdd(e)))}
+          />
+        ))}
+      </>
+    );
+  };
 
   return (
     <Section
       title="種類"
       action={
-        kinds.length > 0 && (
-          <button title="種類の絞り込みを解除" className="text-dim hover:text-fg" onClick={() => setFilter({ kinds: [] })}>
+        active && (
+          <button
+            title="種類の絞り込みを解除"
+            className="text-dim hover:text-fg"
+            onClick={() => setFilter({ kinds: [], fontScripts: [], fontCategories: [] })}
+          >
             <X size={14} />
           </button>
         )
       }
     >
       {KINDS.map(({ kind, label }) => (
-        <Row
-          key={kind}
-          active={kinds.includes(kind)}
-          icon={KIND_ICON[kind]}
-          label={label}
-          count={counts[kind] ?? 0}
-          title="クリックでこの種類だけを表示（⌘・Shift+クリックで追加）"
-          onClick={(e) => pick(kind, e.metaKey || e.ctrlKey || e.shiftKey)}
-        />
+        <div key={kind}>
+          <Row
+            active={kinds.includes(kind)}
+            icon={KIND_ICON[kind]}
+            label={label}
+            count={counts.kinds[kind] ?? 0}
+            title={
+              kind === "font"
+                ? "クリックでフォントだけを表示。言語・書体で絞り込めます（⌘・Shift+クリックで追加）"
+                : "クリックでこの種類だけを表示（⌘・Shift+クリックで追加）"
+            }
+            onClick={(e) => pickKind(kind, isAdd(e))}
+          />
+          {kind === "font" && fontsOpen && (
+            <div className="animate-slide-down">
+              {sub("言語", FONT_SCRIPTS, counts.fontScripts, fontScripts, (v) => setFilter({ fontScripts: v }))}
+              {sub("書体", FONT_CATEGORIES, counts.fontCategories, fontCategories, (v) =>
+                setFilter({ fontCategories: v }),
+              )}
+            </div>
+          )}
+        </div>
       ))}
     </Section>
   );

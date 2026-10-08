@@ -1,6 +1,16 @@
 // Toolbar controls for how the list looks, each on its own: the layout
 // (one click), grouping into sections, and what to show per thumbnail.
-import { Check, ChevronDown, Columns3, Layers, LayoutGrid, LayoutList, Rows3, SlidersHorizontal } from "lucide-react";
+import {
+  ALargeSmall,
+  Check,
+  ChevronDown,
+  Columns3,
+  Layers,
+  LayoutGrid,
+  LayoutList,
+  Rows3,
+  SlidersHorizontal,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { GroupBy } from "../lib/grouping";
 import { useStore, type Layout, type ShowInfo } from "../store";
@@ -19,6 +29,12 @@ export const LAYOUTS: { key: Layout; label: string; icon: React.ReactNode; hint:
   { key: "waterfall", label: "Pinterest風", icon: <Columns3 size={15} />, hint: "列の幅をそろえ、縦に詰めて並べる" },
   { key: "grid", label: "グリッド", icon: <LayoutGrid size={15} />, hint: "同じ大きさの枠に収めて並べる" },
   { key: "list", label: "リスト", icon: <LayoutList size={15} />, hint: "1 行ずつ詳しく表示。フォントは見本の文字を表示" },
+  {
+    key: "specimen",
+    label: "フォント見本",
+    icon: <ALargeSmall size={15} />,
+    hint: "フォントを 1 行ずつ大きく並べ、同じ文字で見比べる",
+  },
 ];
 
 const INFO: { key: keyof ShowInfo; label: string }[] = [
@@ -162,7 +178,11 @@ export function DisplayMenu() {
   const setShowInfo = useStore((s) => s.setShowInfo);
   const thumbSize = useStore((s) => s.thumbSize);
   const setThumbSize = useStore((s) => s.setThumbSize);
+  const specimenSize = useStore((s) => s.specimenSize);
+  const setSpecimenSize = useStore((s) => s.setSpecimenSize);
   const layout = useStore((s) => s.layout);
+  // The specimen layout sizes its sample text instead of thumbnails.
+  const specimen = layout === "specimen";
   const setLayout = useStore((s) => s.setLayout);
   return (
     <Dropdown title="表示（レイアウト・サムネイルの大きさ・表示する情報）" width="w-64" button={<SlidersHorizontal size={15} />}>
@@ -185,19 +205,19 @@ export function DisplayMenu() {
         </button>
       ))}
       <div className="mx-1.5 my-1 border-t border-line" />
-      <div className={heading}>サムネイルの大きさ</div>
+      <div className={heading}>{specimen ? "見本の文字の大きさ" : "サムネイルの大きさ"}</div>
       <label className="flex items-center gap-2 px-2 py-1.5" title="⌘+ / ⌘-">
         <input
           type="range"
-          min={80}
-          max={360}
-          step={10}
-          value={thumbSize}
+          min={specimen ? 12 : 80}
+          max={specimen ? 160 : 360}
+          step={specimen ? 2 : 10}
+          value={specimen ? specimenSize : thumbSize}
           disabled={layout === "list"}
-          onChange={(e) => setThumbSize(Number(e.target.value))}
+          onChange={(e) => (specimen ? setSpecimenSize : setThumbSize)(Number(e.target.value))}
           className="min-w-0 flex-1 accent-accent disabled:opacity-40"
         />
-        <span className="w-10 text-right text-dim tabular-nums">{thumbSize}</span>
+        <span className="w-10 text-right text-dim tabular-nums">{specimen ? specimenSize : thumbSize}</span>
       </label>
       <div className="mx-1.5 my-1 border-t border-line" />
       <div className={heading}>サムネイルの下に表示</div>
@@ -213,5 +233,36 @@ export function DisplayMenu() {
         </label>
       ))}
     </Dropdown>
+  );
+}
+
+/** Specimen layout: the text every font shows, and its size. */
+export function SpecimenControls() {
+  const text = useStore((s) => s.specimenText);
+  const setText = useStore((s) => s.setSpecimenText);
+  const size = useStore((s) => s.specimenSize);
+  const setSize = useStore((s) => s.setSpecimenSize);
+  return (
+    <div className="flex min-w-0 items-center gap-2 text-xs">
+      <ALargeSmall size={15} className="shrink-0 text-dim" />
+      <input
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => e.key === "Escape" && (setText(""), e.currentTarget.blur())}
+        placeholder="見本の文字を入力（空欄なら各フォントの見本）"
+        className="h-7 min-w-32 flex-1 rounded-md border border-line bg-bg px-2 text-[13px] outline-none placeholder:text-dim focus:border-accent"
+      />
+      <input
+        type="range"
+        min={12}
+        max={160}
+        step={2}
+        value={size}
+        onChange={(e) => setSize(Number(e.target.value))}
+        title="見本の文字の大きさ（⌘+ / ⌘-）"
+        className="w-24 shrink-0 accent-accent"
+      />
+      <span className="w-12 shrink-0 text-dim tabular-nums">{size}px</span>
+    </div>
   );
 }

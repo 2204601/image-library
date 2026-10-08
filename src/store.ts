@@ -35,7 +35,7 @@ export interface DuplicateReview {
   effects: DuplicateEffect[] | null;
 }
 
-export type Layout = "justified" | "grid" | "waterfall" | "list";
+export type Layout = "justified" | "grid" | "waterfall" | "list" | "specimen";
 
 /** What the grid shows under each thumbnail. */
 export interface ShowInfo {
@@ -65,6 +65,9 @@ interface State {
   sort: SortKey;
   desc: boolean;
   thumbSize: number;
+  /** Font specimen layout: the text every font shows ("" = each font's own sample) and its size in px. */
+  specimenText: string;
+  specimenSize: number;
   inspectorOpen: boolean;
   sidebarOpen: boolean;
   /** Folder views include items from subfolders. */
@@ -149,6 +152,8 @@ interface State {
   setTagMatchAll: (on: boolean) => void;
   setSort: (sort: SortKey, desc: boolean) => void;
   setThumbSize: (n: number) => void;
+  setSpecimenText: (text: string) => void;
+  setSpecimenSize: (px: number) => void;
   toggleInspector: () => void;
   toggleSidebar: () => void;
   setShowSubfolders: (on: boolean) => void;
@@ -240,6 +245,8 @@ export function activeConditions(s: {
     (s.tagFilter.length ? 1 : 0) +
     (s.minRating ? 1 : 0) +
     (f.kinds.length ? 1 : 0) +
+    (f.fontScripts.length ? 1 : 0) +
+    (f.fontCategories.length ? 1 : 0) +
     (f.exts.length ? 1 : 0) +
     (f.shapes.length ? 1 : 0) +
     (f.minWidth != null || f.maxWidth != null || f.minHeight != null || f.maxHeight != null ? 1 : 0) +
@@ -292,7 +299,10 @@ export const useStore = create<State>((set, get) => ({
   filter: EMPTY_FILTER,
   filterOpen: load("filterOpen") === "true",
   editingSmart: null,
-  layout: (["justified", "grid", "waterfall", "list"] as const).find((l) => l === load("layout")) ?? "justified",
+  layout:
+    (["justified", "grid", "waterfall", "list", "specimen"] as const).find((l) => l === load("layout")) ?? "justified",
+  specimenText: load("specimenText") ?? "",
+  specimenSize: loadNumber("specimenSize", 40),
   showInfo: { name: true, dims: true, rating: true, meta: false, ...loadJson("showInfo") },
   groupBy: GROUP_BYS.find((g) => g === load("groupBy")) ?? "none",
   viewerInfo: load("viewerInfo") === "true",
@@ -317,7 +327,17 @@ export const useStore = create<State>((set, get) => ({
   smartFolders: [],
   exts: [],
   tags: [],
-  counts: { all: 0, unfiled: 0, untagged: 0, trash: 0, favorites: 0, pinned: 0, kinds: {} },
+  counts: {
+    all: 0,
+    unfiled: 0,
+    untagged: 0,
+    trash: 0,
+    favorites: 0,
+    pinned: 0,
+    kinds: {},
+    fontScripts: {},
+    fontCategories: {},
+  },
   rev: 0,
 
   selected: new Set(),
@@ -394,6 +414,15 @@ export const useStore = create<State>((set, get) => ({
   setSort: (sort, desc) => {
     set({ sort, desc });
     get().refresh();
+  },
+  setSpecimenText: (specimenText) => {
+    set({ specimenText });
+    persist("specimenText", specimenText);
+  },
+  setSpecimenSize: (px) => {
+    const specimenSize = Math.min(160, Math.max(12, Math.round(px)));
+    set({ specimenSize });
+    persist("specimenSize", String(specimenSize));
   },
   setThumbSize: (thumbSize) => {
     set({ thumbSize });

@@ -69,6 +69,7 @@ pub fn run() {
             font_faces,
             font_list_preview,
             index_fonts,
+            set_font_category,
             font_data,
             copy_items,
             export_items,

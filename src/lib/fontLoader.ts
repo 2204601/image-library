@@ -11,6 +11,8 @@ const MAX_LOADED = 40;
 const loaded = new Map<string, Promise<string>>();
 const faces = new Map<string, FontFace>();
 const previews = new Map<string, Promise<FontListPreview>>();
+/** Item id -> the characters of its first font (least recently used first). */
+const charSets = new Map<string, Promise<Set<number>>>();
 
 /** Loads the first font of item `id` and resolves to its CSS family name. */
 export function loadFont(id: string): Promise<string> {
@@ -51,5 +53,22 @@ export function fontPreview(id: string): Promise<FontListPreview> {
     p.catch(() => previews.delete(id));
     previews.set(id, p);
   }
+  return p;
+}
+
+/**
+ * Characters of item `id`'s first font, to mark the ones typed text lacks.
+ * Kept for as many fonts as are loaded (a Japanese font has ~20,000).
+ */
+export function fontChars(id: string): Promise<Set<number>> {
+  let p = charSets.get(id);
+  if (p) {
+    charSets.delete(id);
+  } else {
+    p = api.fontInfo(id, 0).then((i) => new Set(i.chars));
+    p.catch(() => charSets.get(id) === p && charSets.delete(id));
+  }
+  charSets.set(id, p);
+  while (charSets.size > MAX_LOADED) charSets.delete(charSets.keys().next().value!);
   return p;
 }
