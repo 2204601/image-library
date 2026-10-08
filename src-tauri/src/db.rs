@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 10;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -202,6 +202,12 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         add_column(c, "items", "flipped", "INTEGER NOT NULL DEFAULT 0")?;
         Ok(())
     })?;
+    // What the file is: 'image' or 'font' (fonts have no pixel size and no
+    // perceptual hash).
+    step(10, &|c| {
+        add_column(c, "items", "kind", "TEXT NOT NULL DEFAULT 'image'")?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -212,10 +218,32 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
 
 // ---------------------------------------------------------------- items
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Kind {
+    #[default]
+    Image,
+    Font,
+}
+
+impl Kind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Kind::Image => "image",
+            Kind::Font => "font",
+        }
+    }
+
+    fn parse(s: &str) -> Self {
+        if s == "font" { Kind::Font } else { Kind::Image }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Item {
     pub id: String,
+    pub kind: Kind,
     pub name: String,
     pub file_name: String,
     pub ext: String,
@@ -253,6 +281,7 @@ pub struct Item {
 #[derive(Debug, Clone)]
 pub struct NewItem {
     pub id: String,
+    pub kind: Kind,
     pub name: String,
     pub file_name: String,
     pub ext: String,
@@ -379,12 +408,13 @@ const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items
      items.favorite, items.pinned_at, \
      (SELECT folder_id FROM item_folders WHERE item_id = items.id LIMIT 1), \
      (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id), \
-     items.rotation, items.flipped";
+     items.rotation, items.flipped, items.kind";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     let tag_ids: Option<String> = r.get(16)?;
     Ok(Item {
         id: r.get(0)?,
+        kind: Kind::parse(&r.get::<_, String>(19)?),
         name: r.get(1)?,
         file_name: r.get(2)?,
         ext: r.get(3)?,
@@ -481,6 +511,15 @@ fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql
         let exts: Vec<String> = f.exts.iter().flat_map(|e| ext_aliases(e)).collect();
         wheres.push(format!("lower(items.ext) IN ({})", placeholders(exts.len())));
         args.extend(exts.into_iter().map(|e| Box::new(e) as Box<dyn ToSql>));
+    }
+    // Shape and pixel size only apply to images (fonts are 0 × 0).
+    let sized = !f.shapes.is_empty()
+        || f.min_width.is_some()
+        || f.max_width.is_some()
+        || f.min_height.is_some()
+        || f.max_height.is_some();
+    if sized {
+        wheres.push("items.kind = 'image'".into());
     }
     if !f.shapes.is_empty() {
         let parts: Vec<&str> = f
@@ -654,7 +693,7 @@ fn similar_groups(conn: &Connection, items: Vec<Item>, level: similar::Level) ->
 /// Live items whose perceptual hash hasn't been computed: (id, unrotated
 /// thumbnail file), so the hash doesn't depend on the orientation.
 pub fn missing_phashes(conn: &Connection) -> DbResult<Vec<(String, String)>> {
-    let mut stmt = conn.prepare("SELECT id, thumb FROM items WHERE phash IS NULL AND deleted_at IS NULL")?;
+    let mut stmt = conn.prepare("SELECT id, thumb FROM items WHERE phash IS NULL AND deleted_at IS NULL AND kind = 'image'")?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, crate::orient::base_thumb(&r.get::<_, String>(1)?))))?;
     rows.collect()
 }
@@ -692,8 +731,8 @@ pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
 
 pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
     tx.execute(
-        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview, kind)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             it.id,
             it.name,
@@ -707,7 +746,8 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
             imported_at,
             it.phash.map(|(h, _)| h as i64),
             it.phash.map(|(_, c)| c),
-            it.preview
+            it.preview,
+            it.kind.as_str()
         ],
     )?;
     Ok(())
@@ -1502,6 +1542,7 @@ mod tests {
             &tx,
             &NewItem {
                 id: id.into(),
+                kind: Kind::Image,
                 name: name.into(),
                 file_name: name.into(),
                 ext: "png".into(),

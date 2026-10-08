@@ -39,6 +39,7 @@ function seed() {
     const ext = EXTS[i % EXTS.length];
     items.push({
       id: id(),
+      kind: "image",
       name: `sample-${String(i).padStart(3, "0")}.${ext}`,
       fileName: `sample-${i}.${ext}`,
       ext,
@@ -55,6 +56,29 @@ function seed() {
       rotation: 0,
       flipped: false,
       hue: (i * 47) % 360,
+    });
+  }
+  // Fonts: no pixel size, a sample as the thumbnail.
+  for (const [i, file] of ["NotoSansJP-Regular.ttf", "Inter-Bold.woff2", "Hiragino.ttc"].entries()) {
+    items.push({
+      id: id(),
+      kind: "font",
+      name: file,
+      fileName: file,
+      ext: file.split(".").pop()!,
+      width: 0,
+      height: 0,
+      size: 300_000 * (i + 1),
+      thumb: "",
+      note: "",
+      rating: 0,
+      importedAt: Date.now() - 30_000 + i,
+      deletedAt: null,
+      favorite: false,
+      pinnedAt: null,
+      rotation: 0,
+      flipped: false,
+      hue: 0,
     });
   }
   const animals = { id: id(), parentId: null, name: "動物", color: "orange" };
@@ -115,6 +139,13 @@ function similar(r: MockItem[], level: SimilarLevel): MockItem[] {
     );
 }
 
+/** Font thumbnail: "Aa" and a line of sample text, like fonts.rs renders it. */
+function fontSvg(it: MockItem) {
+  const weight = it.name.includes("Bold") ? 700 : 400;
+  const s = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="384"><rect width="100%" height="100%" fill="#f4f4f5"/><g font-family="sans-serif" font-weight="${weight}" fill="#18181b" text-anchor="middle"><text x="256" y="215" font-size="170">Aa</text><text x="256" y="320" font-size="52">${it.ext === "woff2" ? "ABC abc 123" : "あア永"}</text></g></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+}
+
 /** The "file" (unrotated), or with `oriented` the thumbnail showing the item's rotation / flip. */
 function svg(it: MockItem, scale: number, oriented = false) {
   const sideways = it.rotation % 2 === 1;
@@ -132,7 +163,8 @@ const view = (it: MockItem): Item => {
   const filePath = svg(it, 1);
   const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
   const tagIds = tags.filter((t) => hasTag(it.id, t.id)).map((t) => t.id);
-  return { ...it, preview: null, folderId, tagIds, filePath, displayPath: filePath, thumbPath: svg(it, 3, true) };
+  const thumbPath = it.kind === "font" ? fontSvg(it) : svg(it, 3, true);
+  return { ...it, preview: null, folderId, tagIds, filePath, displayPath: filePath, thumbPath };
 };
 const inFolder = (i: string, f: string) => itemFolders.has(`${i}|${f}`);
 const hasTag = (i: string, t: number) => itemTags.has(`${i}|${t}`);
@@ -175,6 +207,9 @@ function applyRule(r: MockItem[], rule: Rule): MockItem[] {
   const f = rule.filter;
   if (!f) return r;
   if (f.exts.length) r = r.filter((i) => f.exts.map(aliases).includes(aliases(i.ext)));
+  // Shape and pixel size only apply to images (fonts are 0 × 0), as in db.rs.
+  const sized = f.shapes.length || [f.minWidth, f.maxWidth, f.minHeight, f.maxHeight].some((v) => v != null);
+  if (sized) r = r.filter((i) => i.kind === "image");
   if (f.shapes.length) {
     r = r.filter((i) =>
       f.shapes.some((s) =>
@@ -317,9 +352,24 @@ function handle(cmd: string, a: any): unknown {
     case "set_pinned":
       items.filter((i) => a.ids.includes(i.id)).forEach((i) => (i.pinnedAt = a.on ? (i.pinnedAt ?? Date.now()) : null));
       return;
+    case "font_info": {
+      const it = items.find((i) => i.id === a.id)!;
+      const ja = it.ext !== "woff2";
+      const faces =
+        it.ext === "ttc"
+          ? ["W3", "W6"].map((w) => ({ family: "ヒラギノ角ゴシック", style: w, fullName: `ヒラギノ角ゴシック ${w}`, weight: w === "W3" ? 300 : 600, italic: false, glyphs: 20339 }))
+          : [{ family: it.name.split(/[-.]/)[0], style: ja ? "Regular" : "Bold", fullName: it.name, weight: ja ? 400 : 700, italic: false, glyphs: ja ? 17000 : 2500 }];
+      const latin = Array.from({ length: 94 }, (_, k) => 0x21 + k);
+      const kana = Array.from({ length: 83 }, (_, k) => 0x3041 + k);
+      const chars = ja ? [...latin, ...kana] : latin;
+      return { faces, chars, charCount: chars.length };
+    }
+    case "font_data":
+      // No font files in the browser mock: the viewer falls back to the system font.
+      throw "モックではフォントを読み込めません";
     case "orient_items": {
       let n = 0;
-      for (const i of items.filter((i) => a.ids.includes(i.id))) {
+      for (const i of items.filter((i) => a.ids.includes(i.id) && i.kind === "image")) {
         const r = i.rotation;
         const [rotation, flipped] =
           a.op === "rotateCw" ? [(r + 1) % 4, i.flipped]

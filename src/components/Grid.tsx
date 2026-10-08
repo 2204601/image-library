@@ -24,7 +24,7 @@ import {
   toggleFavorite,
   togglePinned,
 } from "../lib/actions";
-import { api, formatBytes, type Item } from "../lib/api";
+import { api, formatBytes, sizeLabel, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import type { Section } from "../lib/grouping";
 import {
@@ -232,7 +232,7 @@ const Cell = memo(function Cell({
               {info.rating && item.rating > 0 && <Stars n={item.rating} />}
               {info.dims && (
                 <span>
-                  {item.width} × {item.height}
+                  {sizeLabel(item)}
                 </span>
               )}
               {info.meta && (
@@ -308,7 +308,7 @@ const ListRow = memo(function ListRow({
       </span>
       <span className="w-24 shrink-0">{item.rating > 0 && <Stars n={item.rating} />}</span>
       <span className="w-28 shrink-0 text-right text-dim tabular-nums">
-        {item.width} × {item.height}
+        {sizeLabel(item)}
       </span>
       <span className="w-12 shrink-0 text-dim uppercase">{item.ext}</span>
       <span className="w-20 shrink-0 text-right text-dim tabular-nums">{formatBytes(item.size)}</span>
@@ -353,6 +353,8 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
   const allFav = all((i) => i.favorite);
   const allPinned = all((i) => i.pinnedAt !== null);
   const turned = !all((i) => i.rotation === 0 && !i.flipped);
+  // Fonts can't be rotated; the entries go when only fonts are selected.
+  const rotatable = !all((i) => i.kind === "font");
   useMenu.getState().show(e, [
     { label: "表示", hint: "Enter", onClick: () => s.openViewer(index) },
     { label: "既定のアプリで開く", onClick: () => openSelection(ids) },
@@ -361,12 +363,16 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
     { label: allFav ? `お気に入りから外す${many}` : `お気に入りに追加${many}`, hint: "F", onClick: () => toggleFavorite(ids) },
     { label: allPinned ? `ピン留めを解除${many}` : `ピン留め${many}`, hint: "P", onClick: () => togglePinned(ids) },
     { separator: true },
-    { label: `左に回転${many}`, hint: "⌘⇧L", onClick: () => orient(ids, "rotateCcw") },
-    { label: `右に回転${many}`, hint: "⌘⇧R", onClick: () => orient(ids, "rotateCw") },
-    { label: `左右反転${many}`, onClick: () => orient(ids, "flipH") },
-    { label: `上下反転${many}`, onClick: () => orient(ids, "flipV") },
-    ...(turned ? [{ label: `元の向きに戻す${many}`, onClick: () => orient(ids, "reset") }] : []),
-    { separator: true },
+    ...(rotatable
+      ? [
+          { label: `左に回転${many}`, hint: "⌘⇧L", onClick: () => orient(ids, "rotateCcw") },
+          { label: `右に回転${many}`, hint: "⌘⇧R", onClick: () => orient(ids, "rotateCw") },
+          { label: `左右反転${many}`, onClick: () => orient(ids, "flipH") },
+          { label: `上下反転${many}`, onClick: () => orient(ids, "flipV") },
+          ...(turned ? [{ label: `元の向きに戻す${many}`, onClick: () => orient(ids, "reset") }] : []),
+          { separator: true as const },
+        ]
+      : []),
     { label: `コピー${many}`, hint: "⌘C", onClick: () => copySelection(ids) },
     { label: `書き出し…${many}`, onClick: () => exportSelection(ids) },
     { separator: true },

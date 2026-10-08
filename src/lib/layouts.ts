@@ -17,7 +17,7 @@ const MIN_AR = 0.4;
 const MAX_AR = 3;
 
 export const rawAspect = (item: Item) =>
-  item.width > 0 && item.height > 0 ? item.width / item.height : 1;
+  item.kind === "font" ? 4 / 3 : item.width > 0 && item.height > 0 ? item.width / item.height : 1;
 export const clampedAspect = (item: Item) => Math.min(MAX_AR, Math.max(MIN_AR, rawAspect(item)));
 
 /** Thumbnail box; the label (if any) sits below it. */

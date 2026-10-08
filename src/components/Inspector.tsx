@@ -11,7 +11,7 @@ import {
   toggleFavorite,
   togglePinned,
 } from "../lib/actions";
-import { api, formatBytes, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
+import { api, formatBytes, sizeLabel, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
 import { useStore } from "../store";
 import { RatingStars } from "./RatingStars";
 
@@ -341,9 +341,9 @@ export function Inspector() {
             className="mt-3 w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold outline-none hover:border-line focus:border-accent"
           />
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 px-1 text-xs">
-            <dt className="text-dim">サイズ</dt>
+            <dt className="text-dim">{single.kind === "font" ? "種類" : "サイズ"}</dt>
             <dd className="tabular-nums">
-              {single.width} × {single.height}
+              {sizeLabel(single)}
             </dd>
             <dt className="text-dim">形式</dt>
             <dd>

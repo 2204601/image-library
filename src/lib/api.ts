@@ -8,6 +8,8 @@ export interface LibraryInfo {
 
 export interface Item {
   id: string;
+  /** Fonts have no pixel size (0 × 0) and a rendered sample as the thumbnail. */
+  kind: "image" | "font";
   name: string;
   fileName: string;
   ext: string;
@@ -39,6 +41,28 @@ export interface Item {
   group?: number;
   /** Similar view only: differing hash bits (of 64) from the group's best copy. */
   distance?: number;
+}
+
+export interface FontFaceInfo {
+  family: string;
+  style: string;
+  fullName: string;
+  weight: number;
+  italic: boolean;
+  glyphs: number;
+}
+
+export interface FontInfo {
+  /** Every font in the file (several for TTC / OTC). */
+  faces: FontFaceInfo[];
+  /** Characters of the requested font (code points), the first few thousand. */
+  chars: number[];
+  charCount: number;
+}
+
+/** "1200 × 800", or the kind for files without a pixel size. */
+export function sizeLabel(item: Pick<Item, "kind" | "width" | "height">): string {
+  return item.kind === "font" ? "フォント" : `${item.width} × ${item.height}`;
 }
 
 /** Rotate / flip, applied on top of the current orientation (the file is never changed). */
@@ -200,6 +224,9 @@ export const api = {
   setFavorite: (ids: string[], on: boolean) => invoke<void>("set_favorite", { ids, on }),
   /** Pinned items come first in every list. */
   setPinned: (ids: string[], on: boolean) => invoke<void>("set_pinned", { ids, on }),
+  fontInfo: (id: string, face: number) => invoke<FontInfo>("font_info", { id, face }),
+  /** One font of the file as plain OpenType data, for `new FontFace()`. */
+  fontData: (id: string, face: number) => invoke<ArrayBuffer>("font_data", { id, face }),
   orientItems: (ids: string[], op: OrientOp) => invoke<number>("orient_items", { ids, op }),
   copyItems: (ids: string[]) => invoke<number>("copy_items", { ids }),
   exportItems: (ids: string[], dest: string) => invoke<number>("export_items", { ids, dest }),
