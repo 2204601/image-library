@@ -16,8 +16,13 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
 
+# A release pushes its version bump ("chore: vX.Y.Z") to main and tags the
+# same commit: the tag build tests and builds it, so main skips both. Other
+# pushes to main still build, to catch macOS / Windows breakage before a
+# release and to save the Rust cache when dependencies change.
 jobs:
   test:
+    if: github.ref_type == 'tag' || !startsWith(github.event.head_commit.message, 'chore: v')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -41,6 +46,7 @@ jobs:
   # Runs alongside `test` rather than after it. A tag build only creates a
   # draft release, so a failing test still stops it from being published.
   build:
+    if: github.ref_type == 'tag' || !startsWith(github.event.head_commit.message, 'chore: v')
     # Needed to create the GitHub Release and upload installers to it.
     permissions:
       contents: write
