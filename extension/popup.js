@@ -1,4 +1,4 @@
-import { bindDestination, call, getConfig } from "./shared.js";
+import { bindDestination, call, openConnectPage } from "./shared.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -37,20 +37,16 @@ async function connect() {
     $("dest").hidden = false;
   } catch (e) {
     status.className = "status error";
-    status.textContent = e.message;
+    // Not connected yet: the button below says what to do.
+    status.textContent = e.status === 401 ? "アプリとまだ接続されていません" : e.message;
     $("dest").hidden = true;
-    if (e.status === 401) $("settings").open = true;
+    $("connect").hidden = e.status !== 401;
   }
 }
 
-const config = await getConfig();
-if (config.fromApp) {
-  $("settings-note").textContent = "接続キーはアプリが設定済みです。入力した値より、アプリの設定が優先されます。";
-}
-$("save-token").onclick = async () => {
-  await chrome.storage.local.set({ token: $("token").value.trim() });
-  $("token").value = "";
-  connect();
+$("connect").onclick = () => {
+  openConnectPage();
+  window.close();
 };
 
 connect();

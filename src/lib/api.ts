@@ -258,6 +258,8 @@ export const api = {
   resetWebImportToken: () => invoke<WebImportStatus>("reset_web_import_token"),
   /** Copies the extension to a folder Chrome can load and shows it; returns the folder. */
   installExtension: () => invoke<string>("install_extension"),
+  /** Answers an extension's request to connect (the "web-pair" event). */
+  answerWebPair: (id: string, allow: boolean) => invoke<void>("answer_web_pair", { id, allow }),
   indexSimilar: () => invoke<number>("index_similar"),
   /** Treats these images as "not duplicates" so they aren't proposed together again. */
   dismissDuplicates: (ids: string[]) => invoke<void>("dismiss_duplicates", { ids }),

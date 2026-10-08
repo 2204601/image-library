@@ -95,6 +95,8 @@ interface State {
   picker: "move" | "goto" | null;
   /** The "ブラウザ拡張と連携" dialog is open. */
   webImportOpen: boolean;
+  /** A browser extension asks to connect; `code` is also shown in the extension. */
+  pairRequest: { id: string; code: string } | null;
   /** Similar view: how alike images must be. */
   similarLevel: SimilarLevel;
   /** Similar view: copies the user chose to keep (at most one per group). */
@@ -172,6 +174,7 @@ interface State {
   requestItemRename: () => void;
   setPicker: (p: State["picker"]) => void;
   setWebImportOpen: (open: boolean) => void;
+  setPairRequest: (r: State["pairRequest"]) => void;
   setSimilarLevel: (l: SimilarLevel) => void;
   /** Marks `id` as the copy to keep in its group. */
   pickKeeper: (id: string) => void;
@@ -300,6 +303,7 @@ export const useStore = create<State>((set, get) => ({
   renameItemSeq: 0,
   picker: null,
   webImportOpen: false,
+  pairRequest: null,
   similarLevel: (["strict", "standard", "loose"] as const).find((l) => l === load("similarLevel")) ?? "standard",
   keepPick: new Set(),
   dismissedGroups: 0,
@@ -479,6 +483,7 @@ export const useStore = create<State>((set, get) => ({
   requestItemRename: () => set({ renameItemSeq: get().renameItemSeq + 1, inspectorOpen: true }),
   setPicker: (picker) => set({ picker }),
   setWebImportOpen: (webImportOpen) => set({ webImportOpen }),
+  setPairRequest: (pairRequest) => set({ pairRequest }),
   setSimilarLevel: (similarLevel) => {
     set({ similarLevel, keepPick: new Set(), selected: new Set(), anchor: null, focus: null });
     persist("similarLevel", similarLevel);

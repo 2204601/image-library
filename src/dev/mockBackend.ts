@@ -446,6 +446,8 @@ function handle(cmd: string, a: any): unknown {
       return { ...webImport };
     case "reset_web_import_token":
       return { ...webImport };
+    case "answer_web_pair":
+      return null;
     case "install_extension":
       webImport.extensionDir = "/Users/mock/Library/Application Support/com.local.imagelibrary/chrome-extension";
       return webImport.extensionDir;
