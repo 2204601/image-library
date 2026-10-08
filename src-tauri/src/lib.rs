@@ -5,6 +5,7 @@ pub mod formats;
 pub mod import;
 pub mod library;
 pub mod orient;
+pub mod proxy;
 pub mod search;
 pub mod similar;
 
@@ -38,6 +39,7 @@ pub fn run() {
             set_favorite,
             set_pinned,
             orient_items,
+            system_proxy,
             font_info,
             font_data,
             copy_items,

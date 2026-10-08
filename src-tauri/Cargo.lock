@@ -2149,6 +2149,7 @@ name = "image-library"
 version = "0.8.0"
 dependencies = [
  "clipboard-rs",
+ "core-foundation-sys",
  "flate2",
  "hex",
  "image",
