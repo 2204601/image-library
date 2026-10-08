@@ -15,7 +15,7 @@ import { Viewer } from "./components/Viewer";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
 import { api } from "./lib/api";
-import { loadAppVersion, scheduleUpdateCheck } from "./lib/update";
+import { checkForUpdate, loadAppVersion, scheduleUpdateCheck } from "./lib/update";
 import { useStore } from "./store";
 
 /** Sidebar folder under a native file drag (position is in physical pixels). */
@@ -43,6 +43,14 @@ export default function App() {
       .finally(() => setReady(true));
     loadAppVersion();
     return scheduleUpdateCheck();
+  }, []);
+
+  // macOS menu bar: Image Library › アップデートを確認… (see src-tauri/src/lib.rs).
+  useEffect(() => {
+    const unlisten = listen("check-update", () => checkForUpdate(true));
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   // Files dropped from Finder / Explorer.
