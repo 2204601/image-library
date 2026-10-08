@@ -40,7 +40,10 @@
     "macOS": {
       "signingIdentity": "-"
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "resources": {
+      "../extension/": "extension/"
+    }
   },
   "plugins": {
     "updater": {

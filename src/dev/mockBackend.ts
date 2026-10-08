@@ -4,8 +4,9 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { Folder, Item, ItemQuery, Rule, SimilarLevel, Tag } from "../lib/api";
 
-type MockItem = Omit<Item, "filePath" | "thumbPath" | "displayPath" | "preview" | "folderId" | "tagIds"> & {
+type MockItem = Omit<Item, "filePath" | "thumbPath" | "displayPath" | "preview" | "folderId" | "tagIds" | "sourceUrl"> & {
   hue: number;
+  sourceUrl?: string;
 };
 
 const items: MockItem[] = [];
@@ -56,6 +57,7 @@ function seed() {
       rotation: 0,
       flipped: false,
       hue: (i * 47) % 360,
+      ...(i % 6 === 1 ? { sourceUrl: `https://www.example.com/gallery/${i}?ref=web` } : {}),
     });
   }
   // Fonts: no pixel size, a sample as the thumbnail.
@@ -164,7 +166,7 @@ const view = (it: MockItem): Item => {
   const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
   const tagIds = tags.filter((t) => hasTag(it.id, t.id)).map((t) => t.id);
   const thumbPath = it.kind === "font" ? fontSvg(it) : svg(it, 3, true);
-  return { ...it, preview: null, folderId, tagIds, filePath, displayPath: filePath, thumbPath };
+  return { ...it, sourceUrl: it.sourceUrl ?? null, preview: null, folderId, tagIds, filePath, displayPath: filePath, thumbPath };
 };
 const inFolder = (i: string, f: string) => itemFolders.has(`${i}|${f}`);
 const hasTag = (i: string, t: number) => itemTags.has(`${i}|${t}`);
@@ -293,6 +295,8 @@ function removeFolder(fid: string) {
   folders.splice(folders.findIndex((f) => f.id === fid), 1);
   [...itemFolders.keys()].filter((k) => k.endsWith(`|${fid}`)).forEach((k) => itemFolders.delete(k));
 }
+
+const webImport = { enabled: false, running: false, port: 41620, error: null, extensionDir: null as string | null };
 
 function handle(cmd: string, a: any): unknown {
   switch (cmd) {
@@ -435,6 +439,16 @@ function handle(cmd: string, a: any): unknown {
     case "import_paths":
     case "import_bytes":
       return { imported: 0, duplicates: 0, failed: ["mock backend: import is not available in the browser"] };
+    case "web_import_status":
+      return { ...webImport };
+    case "set_web_import":
+      webImport.enabled = webImport.running = a.enabled;
+      return { ...webImport };
+    case "reset_web_import_token":
+      return { ...webImport };
+    case "install_extension":
+      webImport.extensionDir = "/Users/mock/Library/Application Support/com.local.imagelibrary/chrome-extension";
+      return webImport.extensionDir;
     case "list_folders":
       return folders.map((f) => ({ ...f, count: live().filter((i) => inFolder(i.id, f.id)).length }));
     case "place_folder":

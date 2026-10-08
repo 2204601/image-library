@@ -12,6 +12,13 @@ Eagle 風のローカル画像管理アプリ。画像をライブラリにコ�
   - 対応形式：JPEG / PNG / GIF / WebP / BMP / TIFF / SVG / HEIC・HEIF / AVIF、フォント（TTF / OTF / WOFF / WOFF2 / TTC / OTC）
     - HEIC・AVIF は OS のデコーダで読む（macOS は標準対応。Windows は Microsoft Store の「HEIF 画像拡張機能」「AV1 Video Extension」が必要）
     - HEIC・TIFF は表示用に JPEG のコピーを `previews/` に作る（Windows の WebView が表示できないため）
+- **ブラウザから保存**（Chrome / Edge の拡張機能）：Web ページの画像をライブラリへ。保存した画像には元のページの URL が付き、詳細パネルから開ける
+  - 画像を右クリック →「Image Library に保存」、Alt（Mac は Option）+右クリックですぐ保存
+  - 「このページの画像を一覧して保存…」：ページ内の画像（srcset の大きい版、画像へのリンク、CSS の背景も）を大きさ・形式で絞り込んでまとめて保存
+  - 「表示中の画面を保存」：見えている範囲のスクリーンショット
+  - 保存先のフォルダと付けるタグは拡張機能のアイコンから選ぶ
+  - 使い始めるには：ライブラリ名のメニュー →「ブラウザ拡張と連携…」でオンにし、「フォルダを用意して表示」→ Chrome の `chrome://extensions` で「デベロッパー モード」をオン →「パッケージ化されていない拡張機能を読み込む」でそのフォルダを選ぶ
+  - アプリは起動中だけ `127.0.0.1:41620` で受け付ける（このパソコンの中から、アプリが発行した接続キーを持つ拡張機能だけ。Web ページからの接続は拒否）。画像は拡張機能がブラウザの Cookie・プロキシ設定のままダウンロードして渡す
 - **一覧**：サムネイルサイズ変更、範囲ドラッグ選択、仮想スクロール
   - レイアウト：ジャスティファイ（行の高さをそろえる）／ウォーターフォール（石垣状）／グリッド／リスト
   - サムネイルの下に出す情報（名前・画像サイズ・評価・形式と容量）を切り替え
@@ -121,6 +128,7 @@ npm run tauri build    # 配布用ビルド（.dmg / .msi）
 - `npm run dev` でブラウザから開くと、Rust 側の代わりにインメモリのモック（`src/dev/mockBackend.ts`）で動く。UI だけ触りたいとき用（インポートは不可）。
 - テスト用ライブラリの生成：`npm run seed -- /path/to/Test.library 10000`
   （1 万枚の取り込み 約 6 秒、検索+並び替えクエリ 約 6ms ／ Apple Silicon・release ビルド）
+- ブラウザ拡張の開発：`cargo run --manifest-path src-tauri/Cargo.toml --example webserver -- /path/to/Test.library` でアプリなしに受付サーバーを起動し（`extension/config.json` に接続キーを書く）、Chrome で `extension/` を読み込む。拡張機能のファイルを変えたら `chrome://extensions` で再読み込み
 
 ### 構成
 
@@ -143,8 +151,16 @@ src-tauri/src/
   similar.rs            似ている画像の検出（dHash）
   orient.rs             回転・反転（向きの合成とサムネイルへの適用）
   library.rs            ライブラリの作成・オープン・ファイル削除
+  webimport.rs          ブラウザ拡張の受付サーバー（127.0.0.1、接続キー必須）
   commands.rs           フロントから呼ぶコマンド
 src-tauri/examples/seed.rs  テストデータ生成
+src-tauri/examples/webserver.rs  アプリなしで拡張の受付サーバーを起動（拡張の開発用）
+extension/              Chrome 拡張（Manifest V3、ビルド不要）。アプリに同梱され、「フォルダを用意」で書き出される
+  background.js         右クリックメニュー・スクリーンショット・保存結果の表示
+  content.js            Alt+右クリックで即保存
+  popup.*               保存先フォルダ・タグの選択
+  collect.*             ページの画像一覧（絞り込み・まとめて保存）
+  shared.js             アプリとの通信・画像のダウンロード
 ```
 
 アプリ内のドラッグ&ドロップは HTML5 DnD ではなく pointer イベントで実装している（Windows では Tauri のファイルドロップ受付と HTML5 DnD が両立しないため）。

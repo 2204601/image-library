@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>Image Library に保存</title>
+    <link rel="stylesheet" href="style.css" />
+    <style>
+      body {
+        width: 320px;
+        padding: 14px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 12px;
+      }
+      header img {
+        width: 20px;
+        height: 20px;
+      }
+      header strong {
+        flex: 1;
+      }
+      #status {
+        margin-bottom: 12px;
+      }
+      .actions {
+        display: grid;
+        gap: 6px;
+        margin: 4px 0 12px;
+      }
+      details {
+        margin-top: 12px;
+        border-top: 1px solid var(--line);
+        padding-top: 8px;
+      }
+      summary {
+        font-size: 11px;
+        color: var(--dim);
+        cursor: pointer;
+      }
+      details .row {
+        display: flex;
+        gap: 6px;
+        margin-top: 8px;
+      }
+      #dest[hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <img src="icons/32.png" alt="" />
+      <strong>Image Library に保存</strong>
+    </header>
+    <div id="status" class="status">接続を確認しています…</div>
+
+    <div id="dest" hidden>
+      <label class="field">
+        <span>保存先のフォルダ</span>
+        <select id="folder"></select>
+      </label>
+      <div class="field">
+        <span>付けるタグ</span>
+        <div id="tags" class="tags">
+          <input id="tag-input" type="text" list="tag-list" placeholder="タグを入力して Enter" />
+        </div>
+        <datalist id="tag-list"></datalist>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="list" class="btn primary">このページの画像を一覧して保存…</button>
+      <button id="capture" class="btn">表示中の画面を保存</button>
+    </div>
+    <p class="hint">
+      画像を右クリック →「Image Library に保存」。<kbd id="alt-key">Alt</kbd> を押しながら右クリックすると、すぐに保存します。
+    </p>
+
+    <details id="settings">
+      <summary>接続の設定</summary>
+      <p class="hint" id="settings-note" style="margin-top: 6px">
+        アプリの「ブラウザ拡張と連携」で用意した拡張機能は、設定しなくても接続できます。
+      </p>
+      <div class="row">
+        <input id="token" type="password" placeholder="接続キー" autocomplete="off" />
+        <button id="save-token" class="btn">保存</button>
+      </div>
+    </details>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

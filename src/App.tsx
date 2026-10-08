@@ -12,9 +12,10 @@ import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
+import { WebImportDialog } from "./components/WebImportDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
-import { api } from "./lib/api";
+import { api, type ImportSummary } from "./lib/api";
 import { checkForUpdate, loadAppVersion, scheduleUpdateCheck } from "./lib/update";
 import { useStore } from "./store";
 
@@ -49,6 +50,32 @@ export default function App() {
   useEffect(() => {
     const unlisten = listen("check-update", () => checkForUpdate(true));
     return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  // Saved from the browser extension (src-tauri/src/webimport.rs). A batch
+  // from the extension's image list arrives one by one: report it once.
+  useEffect(() => {
+    let added = 0;
+    let known = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unlisten = listen<ImportSummary>("web-import", (e) => {
+      added += e.payload.imported;
+      known += e.payload.duplicates;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const s = useStore.getState();
+        s.refresh();
+        const parts = [];
+        if (added) parts.push(`ブラウザから ${added} 件を追加しました`);
+        if (known) parts.push(`${known} 件はすでにライブラリにあります`);
+        s.toast(parts.join(" / "));
+        added = known = 0;
+      }, 800);
+    });
+    return () => {
+      clearTimeout(timer);
       unlisten.then((f) => f());
     };
   }, []);
@@ -143,6 +170,7 @@ export default function App() {
       <Viewer />
       <FolderPicker />
       <DuplicateReview />
+      <WebImportDialog />
       <DragLayer />
       <ContextMenu />
       <Toasts />

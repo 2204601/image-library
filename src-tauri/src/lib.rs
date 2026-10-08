@@ -8,6 +8,7 @@ pub mod orient;
 pub mod proxy;
 pub mod search;
 pub mod similar;
+pub mod webimport;
 
 use commands::*;
 
@@ -40,6 +41,10 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .manage(AppState::default())
+        .setup(|app| {
+            start_web_import(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             open_last_library,
             create_library,
@@ -83,6 +88,10 @@ pub fn run() {
             preview_duplicates,
             resolve_duplicates,
             supported_exts,
+            web_import_status,
+            set_web_import,
+            reset_web_import_token,
+            install_extension,
             list_folders,
             create_folder,
             rename_folder,
