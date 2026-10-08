@@ -12,6 +12,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
+import { SheetDialog } from "./components/SheetDialog";
 import { PairDialog, WebImportDialog } from "./components/WebImportDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
@@ -182,6 +183,7 @@ export default function App() {
       <Viewer />
       <FolderPicker />
       <DuplicateReview />
+      <SheetDialog />
       <WebImportDialog />
       <PairDialog />
       <DragLayer />

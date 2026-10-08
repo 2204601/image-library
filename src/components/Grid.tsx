@@ -1,5 +1,5 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Check, Heart, ImagePlus, Pin, Star, Trash2 } from "lucide-react";
+import { Check, Heart, ImagePlus, Layers, Pin, Star, Trash2 } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   moveToLastFolder,
@@ -12,6 +12,7 @@ import {
   exportSelection,
   importFilesDialog,
   openSelection,
+  openSheet,
   orient,
   pasteTags,
   keepPlan,
@@ -23,6 +24,7 @@ import {
   shiftFolder,
   toggleFavorite,
   togglePinned,
+  toggleTray,
 } from "../lib/actions";
 import {
   api,
@@ -127,6 +129,8 @@ type CellProps = {
 
 /** Favourite heart (also a toggle on hover) and pin mark on a thumbnail. */
 function FlagOverlay({ item }: { item: Item }) {
+  // Everything in the tray view is on the tray; the mark would only add noise.
+  const trayMark = useStore((s) => item.inTray && s.view.kind !== "tray");
   return (
     <>
       <button
@@ -142,12 +146,18 @@ function FlagOverlay({ item }: { item: Item }) {
       >
         <Heart size={13} fill={item.favorite ? "currentColor" : "none"} strokeWidth={2} />
       </button>
-      {item.pinnedAt !== null && (
-        <span
-          title="ピン留め中（一覧の先頭に表示）"
-          className="absolute top-1.5 left-1.5 rounded-full bg-accent p-1 text-white shadow"
-        >
-          <Pin size={11} fill="currentColor" strokeWidth={2} />
+      {(item.pinnedAt !== null || trayMark) && (
+        <span className="pointer-events-none absolute top-1.5 left-1.5 flex gap-1">
+          {item.pinnedAt !== null && (
+            <span title="ピン留め中（一覧の先頭に表示）" className="pointer-events-auto rounded-full bg-accent p-1 text-white shadow">
+              <Pin size={11} fill="currentColor" strokeWidth={2} />
+            </span>
+          )}
+          {trayMark && (
+            <span title="作業台にあります（B で外す）" className="pointer-events-auto rounded-full bg-emerald-600 p-1 text-white shadow">
+              <Layers size={11} strokeWidth={2.25} />
+            </span>
+          )}
         </span>
       )}
     </>
@@ -319,6 +329,7 @@ const ListRow = memo(function ListRow({
       </span>
       <span className="flex w-10 shrink-0 items-center gap-1">
         {flags && item.pinnedAt !== null && <Pin size={12} className="text-accent" fill="currentColor" />}
+        {flags && item.inTray && <Layers size={12} className="text-emerald-400" />}
         {flags && item.favorite && <Heart size={12} className="text-pink-400" fill="currentColor" />}
       </span>
       <span className="w-24 shrink-0">{item.rating > 0 && <Stars n={item.rating} />}</span>
@@ -458,6 +469,7 @@ const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
         <span className="min-w-0 truncate text-dim/70">{item.name}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-dim">
           {flags && item.pinnedAt !== null && <Pin size={11} className="text-accent" fill="currentColor" />}
+          {flags && item.inTray && <Layers size={11} className="text-emerald-400" />}
           {flags && item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
           {item.rating > 0 && <Stars n={item.rating} />}
           {item.fontScript && <span className="rounded bg-white/8 px-1.5 py-px">{fontScriptLabel(item.fontScript)}</span>}
@@ -520,6 +532,7 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
   const all = (flag: (i: Item) => boolean) => ids.every((id) => flag(s.rawItems.find((i) => i.id === id)!));
   const allFav = all((i) => i.favorite);
   const allPinned = all((i) => i.pinnedAt !== null);
+  const allInTray = all((i) => i.inTray);
   const turned = !all((i) => i.rotation === 0 && !i.flipped);
   // Fonts can't be rotated; the entries go when only fonts are selected.
   const rotatable = !all((i) => i.kind === "font");
@@ -530,6 +543,7 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
     { separator: true },
     { label: allFav ? `お気に入りから外す${many}` : `お気に入りに追加${many}`, hint: "F", onClick: () => toggleFavorite(ids) },
     { label: allPinned ? `ピン留めを解除${many}` : `ピン留め${many}`, hint: "P", onClick: () => togglePinned(ids) },
+    { label: allInTray ? `作業台から外す${many}` : `作業台に追加${many}`, hint: "B", onClick: () => toggleTray(ids) },
     { separator: true },
     ...(rotatable
       ? [
@@ -543,6 +557,7 @@ function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
       : []),
     { label: `コピー${many}`, hint: "⌘C", onClick: () => copySelection(ids) },
     { label: `書き出し…${many}`, onClick: () => exportSelection(ids) },
+    { label: `まとめて出力…${many}`, onClick: () => openSheet(ids) },
     { separator: true },
     { label: "フォルダへ移動…", hint: "⌘⇧J", onClick: () => s.setPicker("move") },
     ...(s.recentFolders[0]
@@ -589,7 +604,7 @@ export function Grid() {
   const dragIds = useStore((s) => (s.drag?.kind === "items" ? s.drag.ids : null));
   const dragging = useMemo(() => new Set(dragIds ?? []), [dragIds]);
   const reorderable = useStore(
-    (s) => s.view.kind === "folder" && s.sort === "manual" && !s.showSubfolders,
+    (s) => s.sort === "manual" && ((s.view.kind === "folder" && !s.showSubfolders) || s.view.kind === "tray"),
   );
   const dropTarget = useStore((s) => (s.drag?.kind === "items" ? s.dropTarget : null));
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -734,7 +749,7 @@ export function Grid() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as Element).closest?.("input, textarea, select")) return;
       const s = useStore.getState();
-      if (s.viewer !== null || s.drag || s.picker) return;
+      if (s.viewer !== null || s.drag || s.picker || s.sheet) return;
       const mod = e.metaKey || e.ctrlKey;
       const sel = () => [...useStore.getState().selected];
       const handled = () => e.preventDefault();
@@ -771,6 +786,9 @@ export function Grid() {
       }
       if (!mod && !e.shiftKey && !e.altKey && e.code === "KeyP" && s.view.kind !== "trash") {
         return handled(), void togglePinned(sel());
+      }
+      if (!mod && !e.shiftKey && !e.altKey && e.code === "KeyB" && s.view.kind !== "trash") {
+        return handled(), void toggleTray(sel());
       }
       // Rotate (before ⌘R = rename). The files are not changed.
       if (mod && e.shiftKey && !e.altKey && (e.code === "KeyR" || e.code === "KeyL") && s.view.kind !== "trash") {
@@ -1009,6 +1027,17 @@ function Empty({ kind, filtering, analyzing }: { kind: string; filtering: boolea
       <p className="mt-24 text-center text-dim">
         ピン留めした画像はありません。画像を選んで P キーでピン留めすると、どの一覧でも先頭に表示されます
       </p>
+    );
+  if (kind === "tray")
+    return (
+      <div className="mt-24 flex flex-col items-center gap-2 text-dim">
+        <Layers size={40} strokeWidth={1.25} />
+        <p>作業台は空です</p>
+        <p className="max-w-md text-center text-xs leading-relaxed">
+          画像を選んで B キー、またはサイドバーの「作業台」へドラッグすると、ここに集まります。
+          集めた画像は「まとめて出力」で1枚の画像や HTML にしたり、まとめて書き出したりできます
+        </p>
+      </div>
     );
   if (kind === "folder")
     return (

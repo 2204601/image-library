@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 13;
+const SCHEMA_VERSION: i32 = 14;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -230,6 +230,16 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         add_column(c, "items", "font_category_user", "TEXT")?;
         Ok(())
     })?;
+    // The work tray (作業台): items gathered for a while to be handled
+    // together (contact sheet, export). `position` is the order they are in.
+    step(14, &|c| {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tray (
+               item_id  TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+               position REAL NOT NULL
+             )",
+        )
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -303,6 +313,8 @@ pub struct Item {
     /// user's correction, which wins. See `fonts::CATEGORIES`.
     pub font_category: Option<String>,
     pub font_category_user: Option<String>,
+    /// On the work tray (作業台).
+    pub in_tray: bool,
     /// Similar view only: which group of look-alikes the item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub group: Option<u32>,
@@ -344,6 +356,8 @@ pub enum View {
     Similar,
     Favorites,
     Pinned,
+    /// The work tray (作業台).
+    Tray,
     /// Items matching a smart folder's saved rule.
     Smart { id: String },
 }
@@ -451,7 +465,8 @@ const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items
      (SELECT folder_id FROM item_folders WHERE item_id = items.id LIMIT 1), \
      (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id), \
      items.rotation, items.flipped, items.kind, items.source_url, items.font_family, items.font_weight, \
-     items.font_script, items.font_category, items.font_category_user";
+     items.font_script, items.font_category, items.font_category_user, \
+     EXISTS (SELECT 1 FROM tray WHERE tray.item_id = items.id)";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     let tag_ids: Option<String> = r.get(16)?;
@@ -484,6 +499,7 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         font_script: r.get(23)?,
         font_category: r.get(24)?,
         font_category_user: r.get(25)?,
+        in_tray: r.get(26)?,
         group: None,
         distance: None,
     })
@@ -627,14 +643,18 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
     let mut wheres: Vec<String> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
 
-    // Manual order joins the folder's positions; its bind value comes first.
+    // Manual order joins the folder's (or the tray's) positions; a folder's
+    // bind value comes first.
     let manual_folder = match (&q.view, q.sort) {
         (View::Folder { id }, SortKey::Manual) => Some(id.clone()),
         _ => None,
     };
+    let manual_tray = q.view == View::Tray && matches!(q.sort, SortKey::Manual);
     let join = if let Some(f) = &manual_folder {
         args.push(Box::new(f.clone()));
         "LEFT JOIN item_folders pos ON pos.item_id = items.id AND pos.folder_id = ?"
+    } else if manual_tray {
+        "LEFT JOIN tray pos ON pos.item_id = items.id"
     } else {
         ""
     };
@@ -666,6 +686,7 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
         }
         View::Favorites => wheres.push("items.favorite = 1".into()),
         View::Pinned => wheres.push("items.pinned_at IS NOT NULL".into()),
+        View::Tray => wheres.push("EXISTS (SELECT 1 FROM tray t WHERE t.item_id = items.id)".into()),
         View::All | View::Trash | View::Similar | View::Smart { .. } => {}
     }
 
@@ -685,15 +706,17 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
         SortKey::Dimensions => format!("items.width * items.height {dir}"),
         SortKey::Rating => format!("items.rating {dir}, items.imported_at DESC"),
         // Manual is always top-to-bottom; items without a position go last.
-        SortKey::Manual if manual_folder.is_some() => {
+        SortKey::Manual if manual_folder.is_some() || manual_tray => {
             "pos.position IS NULL, pos.position ASC, items.imported_at ASC".into()
         }
         SortKey::Manual => format!("items.imported_at {dir}"),
     };
-    // Pinned items come first (latest pin on top), whatever the sort.
+    // Pinned items come first (latest pin on top), whatever the sort —
+    // except in the tray's own order, which is the order things are handled in.
+    let pins = if manual_tray { "" } else { "items.pinned_at IS NULL, items.pinned_at DESC, " };
     let sql = format!(
         "SELECT {ITEM_COLS} FROM items {join} WHERE {}
-         ORDER BY items.pinned_at IS NULL, items.pinned_at DESC, {order}, items.rowid {dir}",
+         ORDER BY {pins}{order}, items.rowid {dir}",
         wheres.join(" AND ")
     );
     let mut stmt = conn.prepare(&sql)?;
@@ -891,6 +914,64 @@ pub fn set_pinned(conn: &Connection, ids: &[String], on: bool) -> DbResult<()> {
         stmt.execute(params![id, now])?;
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------- work tray
+
+/// Puts items on the work tray, after the ones already there (in the given
+/// order). Items already on it keep their place.
+pub fn add_to_tray(conn: &Connection, ids: &[String]) -> DbResult<usize> {
+    let last: f64 = conn.query_row("SELECT COALESCE(MAX(position), 0) FROM tray", [], |r| r.get(0))?;
+    let mut stmt = conn.prepare(
+        "INSERT OR IGNORE INTO tray (item_id, position) SELECT id, ?2 FROM items WHERE id = ?1",
+    )?;
+    let mut added = 0;
+    for id in ids {
+        added += stmt.execute(params![id, last + (added + 1) as f64])?;
+    }
+    Ok(added)
+}
+
+pub fn remove_from_tray(conn: &Connection, ids: &[String]) -> DbResult<()> {
+    let mut stmt = conn.prepare("DELETE FROM tray WHERE item_id = ?1")?;
+    for id in ids {
+        stmt.execute([id])?;
+    }
+    Ok(())
+}
+
+/// Empties the tray; returns what was on it, in order (to put it back).
+pub fn clear_tray(conn: &Connection) -> DbResult<Vec<String>> {
+    let ids: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT item_id FROM tray ORDER BY position, rowid")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    conn.execute("DELETE FROM tray", [])?;
+    Ok(ids)
+}
+
+/// Moves `ids` in front of `before` (None = to the end) in the tray's order.
+pub fn reorder_tray(conn: &mut Connection, ids: &[String], before: Option<&str>) -> DbResult<()> {
+    let tx = conn.transaction()?;
+    let mut order: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT item_id FROM tray ORDER BY position, rowid")?;
+        let rows = stmt.query_map([], |r| r.get(0))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    let moving: Vec<String> = ids.iter().filter(|id| order.contains(id)).cloned().collect();
+    order.retain(|id| !moving.contains(id));
+    let at = before
+        .and_then(|b| order.iter().position(|id| id == b))
+        .unwrap_or(order.len());
+    order.splice(at..at, moving);
+    {
+        let mut stmt = tx.prepare("UPDATE tray SET position = ?2 WHERE item_id = ?1")?;
+        for (i, id) in order.iter().enumerate() {
+            stmt.execute(params![id, (i + 1) as f64])?;
+        }
+    }
+    tx.commit()
 }
 
 /// Stores a new orientation with the matching displayed size and thumbnail.
@@ -1110,6 +1191,8 @@ pub struct Counts {
     pub trash: i64,
     pub favorites: i64,
     pub pinned: i64,
+    /// Items on the work tray (not in the trash).
+    pub tray: i64,
     /// Items not in the trash, by kind (kinds with none are left out).
     pub kinds: BTreeMap<Kind, i64>,
     /// Fonts not in the trash by writing system, and by typeface style ("none" = unknown).
@@ -1139,7 +1222,8 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
            SUM(deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id)),
            SUM(deleted_at IS NOT NULL),
            SUM(deleted_at IS NULL AND favorite = 1),
-           SUM(deleted_at IS NULL AND pinned_at IS NOT NULL)
+           SUM(deleted_at IS NULL AND pinned_at IS NOT NULL),
+           SUM(deleted_at IS NULL AND EXISTS (SELECT 1 FROM tray WHERE tray.item_id = items.id))
          FROM items",
         [],
         |r| {
@@ -1150,6 +1234,7 @@ pub fn counts(conn: &Connection) -> DbResult<Counts> {
                 trash: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
                 favorites: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
                 pinned: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                tray: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
                 kinds,
                 font_scripts,
                 font_categories,
@@ -1794,6 +1879,7 @@ mod tests {
                 trash: 1,
                 favorites: 0,
                 pinned: 0,
+                tray: 0,
                 kinds: BTreeMap::from([(Kind::Image, 2)]),
                 font_scripts: BTreeMap::new(),
                 font_categories: BTreeMap::new(),
@@ -2072,6 +2158,47 @@ mod tests {
         set_pinned(&conn, &s(&["a", "c"]), false).unwrap();
         assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a", "b", "c"]));
         assert_eq!(counts(&conn).unwrap().pinned, 0);
+    }
+
+    #[test]
+    fn work_tray() {
+        let mut conn = mem();
+        for (id, at) in [("a", 1), ("b", 2), ("c", 3), ("d", 4)] {
+            add(&mut conn, id, id, at);
+        }
+        let manual = |conn: &Connection| {
+            let mut query = q(View::Tray);
+            query.sort = SortKey::Manual;
+            ids(query_items(conn, &query).unwrap())
+        };
+        // Added in the given order, after what is already there; no duplicates.
+        assert_eq!(add_to_tray(&conn, &s(&["c", "a"])).unwrap(), 2);
+        assert_eq!(add_to_tray(&conn, &s(&["a", "b", "zz"])).unwrap(), 1);
+        assert_eq!(manual(&conn), s(&["c", "a", "b"]));
+        assert_eq!(ids(query_items(&conn, &q(View::Tray)).unwrap()), s(&["a", "b", "c"]));
+        assert!(query_items(&conn, &q(View::All)).unwrap().iter().any(|i| i.id == "a" && i.in_tray));
+        assert!(!query_items(&conn, &q(View::All)).unwrap().iter().any(|i| i.id == "d" && i.in_tray));
+        assert_eq!(counts(&conn).unwrap().tray, 3);
+
+        // The tray's own order ignores pins (it is the order things are handled in).
+        set_pinned(&conn, &s(&["b"]), true).unwrap();
+        assert_eq!(manual(&conn), s(&["c", "a", "b"]));
+        reorder_tray(&mut conn, &s(&["b"]), Some("c")).unwrap();
+        assert_eq!(manual(&conn), s(&["b", "c", "a"]));
+        reorder_tray(&mut conn, &s(&["b", "c"]), None).unwrap();
+        assert_eq!(manual(&conn), s(&["a", "b", "c"]));
+
+        // Trashed items leave the tray view but come back when restored.
+        trash_items(&conn, &s(&["a"])).unwrap();
+        assert_eq!(manual(&conn), s(&["b", "c"]));
+        assert_eq!(counts(&conn).unwrap().tray, 2);
+        restore_items(&conn, &s(&["a"])).unwrap();
+
+        remove_from_tray(&conn, &s(&["b"])).unwrap();
+        assert_eq!(manual(&conn), s(&["a", "c"]));
+        assert_eq!(clear_tray(&conn).unwrap(), s(&["a", "c"]));
+        assert!(manual(&conn).is_empty());
+        assert_eq!(counts(&conn).unwrap().tray, 0);
     }
 
     #[test]

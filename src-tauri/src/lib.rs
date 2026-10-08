@@ -7,6 +7,7 @@ pub mod library;
 pub mod orient;
 pub mod proxy;
 pub mod search;
+pub mod sheet;
 pub mod similar;
 pub mod webimport;
 
@@ -73,6 +74,14 @@ pub fn run() {
             font_data,
             copy_items,
             export_items,
+            add_to_tray,
+            remove_from_tray,
+            clear_tray,
+            reorder_tray,
+            sheet_image,
+            save_file,
+            copy_image,
+            reveal_path,
             reorder_in_folder,
             place_folder,
             shift_folder,

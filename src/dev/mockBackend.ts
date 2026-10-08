@@ -18,6 +18,7 @@ type MockItem = Omit<
   | "fontScript"
   | "fontCategory"
   | "fontCategoryUser"
+  | "inTray"
 > & {
   hue: number;
   sourceUrl?: string;
@@ -41,6 +42,9 @@ const link = (i: string, f: string) => {
   itemFolders.set(`${i}|${f}`, ++posSeq);
 };
 const itemTags = new Set<string>(); // `${itemId}|${tagId}`
+// Work tray: item id -> position.
+const tray = new Map<string, number>();
+let traySeq = 0;
 const smartFolders: { id: string; name: string; rule: Rule; color: string | null }[] = [];
 const EXTS = ["jpg", "png", "jpg", "webp", "jpg", "heic"];
 let tagSeq = 0;
@@ -196,6 +200,20 @@ function svg(it: MockItem, scale: number, oriented = false) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
 }
 
+/** The mock image drawn to PNG data, as the real command hands it out. */
+async function sheetImage(it: MockItem, maxSide: number): Promise<ArrayBuffer> {
+  const img = new Image();
+  img.src = it.kind === "font" ? fontSvg(it) : svg(it, 1, true);
+  await img.decode();
+  const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise<Blob>((ok) => canvas.toBlob((b) => ok(b!), "image/png"));
+  return blob.arrayBuffer();
+}
+
 const view = (it: MockItem): Item => {
   const filePath = svg(it, 1);
   const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
@@ -209,6 +227,7 @@ const view = (it: MockItem): Item => {
     fontScript: it.fontScript ?? null,
     fontCategory: it.fontCategory ?? null,
     fontCategoryUser: it.fontCategoryUser ?? null,
+    inTray: tray.has(it.id),
     preview: null,
     folderId,
     tagIds,
@@ -317,6 +336,7 @@ function query(q: ItemQuery): Item[] {
   if (v.kind === "untagged") r = r.filter((i) => !tags.some((t) => hasTag(i.id, t.id)));
   if (v.kind === "favorites") r = r.filter((i) => i.favorite);
   if (v.kind === "pinned") r = r.filter((i) => i.pinnedAt !== null);
+  if (v.kind === "tray") r = r.filter((i) => tray.has(i.id));
   if (v.kind === "folder") {
     const ids = q.includeSubfolders ? descendants(v.id) : [v.id];
     r = r.filter((i) => ids.some((f) => inFolder(i.id, f)));
@@ -328,6 +348,10 @@ function query(q: ItemQuery): Item[] {
   }
   // Pinned items lead every list, latest pin first.
   const pin = (a: MockItem, b: MockItem) => (b.pinnedAt ?? -Infinity) - (a.pinnedAt ?? -Infinity);
+  // The tray's own order ignores pins, as in db.rs.
+  if (q.sort === "manual" && v.kind === "tray") {
+    return [...r].sort((a, b) => tray.get(a.id)! - tray.get(b.id)!).map(view);
+  }
   if (q.sort === "manual" && v.kind === "folder") {
     const pos = (i: MockItem) => itemFolders.get(`${i.id}|${v.id}`) ?? Infinity;
     return [...r].sort((a, b) => pin(a, b) || pos(a) - pos(b)).map(view);
@@ -376,6 +400,7 @@ function handle(cmd: string, a: any): unknown {
         trash: items.length - live().length,
         favorites: live().filter((i) => i.favorite).length,
         pinned: live().filter((i) => i.pinnedAt !== null).length,
+        tray: live().filter((i) => tray.has(i.id)).length,
         kinds: Object.fromEntries(
           (["image", "font"] as const)
             .map((k) => [k, live().filter((i) => i.kind === k).length])
@@ -477,6 +502,40 @@ function handle(cmd: string, a: any): unknown {
       }
       return n;
     }
+    case "add_to_tray": {
+      const fresh = (a.ids as string[]).filter((i) => !tray.has(i) && items.some((x) => x.id === i));
+      fresh.forEach((i) => tray.set(i, ++traySeq));
+      return fresh.length;
+    }
+    case "remove_from_tray":
+      a.ids.forEach((i: string) => tray.delete(i));
+      return;
+    case "clear_tray": {
+      const ids = [...tray.entries()].sort((x, y) => x[1] - y[1]).map(([i]) => i);
+      tray.clear();
+      return ids;
+    }
+    case "reorder_tray": {
+      const order = [...tray.entries()]
+        .sort((x, y) => x[1] - y[1])
+        .map(([i]) => i)
+        .filter((i) => !a.ids.includes(i));
+      const at = a.before ? order.indexOf(a.before) : -1;
+      order.splice(at < 0 ? order.length : at, 0, ...a.ids.filter((i: string) => tray.has(i)));
+      order.forEach((i, n) => tray.set(i, n + 1));
+      return;
+    }
+    case "sheet_image": {
+      const it = items.find((i) => i.id === a.id)!;
+      return sheetImage(it, a.maxSide);
+    }
+    case "save_file":
+    case "copy_image":
+      console.info(`[mock] ${cmd}`, a instanceof Uint8Array ? `${a.length} bytes` : a);
+      (window as unknown as { __MOCK_LAST_FILE__: unknown }).__MOCK_LAST_FILE__ = a;
+      return;
+    case "reveal_path":
+      return;
     case "copy_items":
     case "export_items":
       return a.ids.length;
@@ -648,8 +707,10 @@ function handle(cmd: string, a: any): unknown {
     case "plugin:dialog|confirm":
       return window.confirm(a.message);
     case "plugin:dialog|open":
-    case "plugin:dialog|save":
       return null;
+    case "plugin:dialog|save":
+      // Lets the contact sheet be "saved" (see save_file); other saves are cancelled.
+      return a.options?.title === "まとめて出力" ? `/mock/${a.options.defaultPath}` : null;
     default:
       console.warn("[mock] unhandled command", cmd, a);
       return null;

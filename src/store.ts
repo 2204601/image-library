@@ -108,6 +108,8 @@ interface State {
   dismissedGroups: number;
   /** Duplicate tidy-up waiting for confirmation. */
   review: DuplicateReview | null;
+  /** Items the contact sheet dialog (まとめて出力) is open for, in order. */
+  sheet: Item[] | null;
 
   /** What the grid shows: the query result, regrouped by `groupBy`. */
   items: Item[];
@@ -184,6 +186,7 @@ interface State {
   /** Marks `id` as the copy to keep in its group. */
   pickKeeper: (id: string) => void;
   setReview: (r: DuplicateReview | null) => void;
+  setSheet: (items: Item[] | null) => void;
   refresh: () => Promise<void>;
 
   select: (id: string, mode: "only" | "toggle" | "range") => void;
@@ -266,6 +269,24 @@ const loadRecentTags = (root: string): number[] => {
 };
 let pendingRecentTags: string[] = [];
 
+/**
+ * The tray opens in its own order (the order things were put on it); the
+ * sort used elsewhere is kept here and comes back on leaving the tray.
+ */
+let sortOutsideTray: { sort: SortKey; desc: boolean } | null = null;
+function traySort(from: View, to: View, cur: { sort: SortKey; desc: boolean }): Partial<State> {
+  if (to.kind === "tray" && from.kind !== "tray") {
+    sortOutsideTray = { sort: cur.sort, desc: cur.desc };
+    return { sort: "manual", desc: false };
+  }
+  if (to.kind !== "tray" && from.kind === "tray" && sortOutsideTray) {
+    const back = sortOutsideTray;
+    sortOutsideTray = null;
+    return back;
+  }
+  return {};
+}
+
 let refreshSeq = 0;
 let toastSeq = 0;
 let flashSeq = 0;
@@ -319,6 +340,7 @@ export const useStore = create<State>((set, get) => ({
   keepPick: new Set(),
   dismissedGroups: 0,
   review: null,
+  sheet: null,
 
   items: [],
   rawItems: [],
@@ -334,6 +356,7 @@ export const useStore = create<State>((set, get) => ({
     trash: 0,
     favorites: 0,
     pinned: 0,
+    tray: 0,
     kinds: {},
     fontScripts: {},
     fontCategories: {},
@@ -357,6 +380,7 @@ export const useStore = create<State>((set, get) => ({
   setLibrary: (library) => {
     set({
       library,
+      ...traySort(get().view, { kind: "all" }, get()),
       view: { kind: "all" },
       search: "",
       tagFilter: [],
@@ -390,7 +414,15 @@ export const useStore = create<State>((set, get) => ({
     const reset = moved
       ? { search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER, editingSmart: null }
       : {};
-    set({ view, selected: new Set(), anchor: null, focus: null, ...clear, ...reset });
+    set({
+      view,
+      selected: new Set(),
+      anchor: null,
+      focus: null,
+      ...clear,
+      ...reset,
+      ...traySort(get().view, view, get()),
+    });
     get().refresh();
   },
   setSearch: (search) => {
@@ -468,6 +500,7 @@ export const useStore = create<State>((set, get) => ({
     // Edit in the "all" view so the user sees exactly what the rule matches.
     set({
       editingSmart: { id: sf.id, name: sf.name },
+      ...traySort(get().view, { kind: "all" }, get()),
       view: { kind: "all" },
       search: sf.rule.search,
       tagFilter: sf.rule.tagIds,
@@ -535,6 +568,7 @@ export const useStore = create<State>((set, get) => ({
     set({ keepPick: new Set([...get().keepPick].filter((x) => !rivals.has(x)).concat(id)) });
   },
   setReview: (review) => set({ review }),
+  setSheet: (sheet) => set({ sheet }),
 
   refresh: async () => {
     if (!get().library) return;
