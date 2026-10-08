@@ -9,6 +9,7 @@ import {
   Image as ImageIcon,
   Images,
   Inbox,
+  Layers,
   Library,
   Pin,
   Tag as TagIcon,
@@ -22,12 +23,15 @@ import {
   confirmDeleteFolder,
   confirmDeleteSmartFolder,
   confirmDeleteTag,
+  clearTray,
   createFolder,
   createLibraryDialog,
   createSmartFolder,
   emptyTrash,
+  exportTray,
   openLibraryDialog,
   renameSmartFolder,
+  sheetFromTray,
   shiftFolder,
   sortFoldersByName,
 } from "../lib/actions";
@@ -610,12 +614,20 @@ export function Sidebar() {
   const setView = useStore((s) => s.setView);
   const showMenu = useMenu((s) => s.show);
 
-  const smart: { view: View; label: string; icon: React.ReactNode; count?: number }[] = [
+  const smart: { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string }[] = [
     { view: { kind: "all" }, label: "すべて", icon: <Images size={15} />, count: counts.all },
     { view: { kind: "unfiled" }, label: "未分類", icon: <Inbox size={15} />, count: counts.unfiled },
     { view: { kind: "untagged" }, label: "タグなし", icon: <Tags size={15} />, count: counts.untagged },
     { view: { kind: "favorites" }, label: "お気に入り", icon: <Heart size={15} />, count: counts.favorites },
     { view: { kind: "pinned" }, label: "ピン留め", icon: <Pin size={15} />, count: counts.pinned },
+    {
+      view: { kind: "tray" },
+      label: "作業台",
+      icon: <Layers size={15} />,
+      count: counts.tray,
+      dropId: "tray",
+      title: "まとめて出力・書き出しの前に、画像を一時的に集めておく場所（B キーで追加、ここへドラッグでも）",
+    },
     { view: { kind: "similar" }, label: "重複の候補", icon: <Copy size={15} /> },
     { view: { kind: "trash" }, label: "ゴミ箱", icon: <Trash2 size={15} />, count: counts.trash },
   ];
@@ -647,11 +659,21 @@ export function Sidebar() {
             icon={s.icon}
             label={s.label}
             count={s.count}
+            dropId={s.dropId}
+            title={s.title}
             onClick={() => setView(s.view)}
             onContextMenu={
               s.view.kind === "trash"
                 ? (e) => showMenu(e, [{ label: "ゴミ箱を空にする", danger: true, onClick: emptyTrash }])
-                : undefined
+                : s.view.kind === "tray" && counts.tray > 0
+                  ? (e) =>
+                      showMenu(e, [
+                        { label: "まとめて出力…", onClick: sheetFromTray },
+                        { label: "書き出し…", onClick: exportTray },
+                        { separator: true },
+                        { label: "作業台を空にする", onClick: clearTray },
+                      ])
+                  : undefined
             }
           />
         ))}

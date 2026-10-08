@@ -4,7 +4,7 @@
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
-import { moveToFolder, reorder } from "../lib/actions";
+import { addToTray, moveToFolder, reorder } from "../lib/actions";
 import { api, type Folder } from "../lib/api";
 import { useStore, type Drag } from "../store";
 
@@ -48,7 +48,7 @@ function isDescendant(folders: Folder[], id: string, ancestor: string): boolean 
 
 /**
  * The drop target under the pointer, or null if this drag can't go there.
- * "folder:<id>" | "root" | "item:<id>:before|after" (manual reordering)
+ * "folder:<id>" | "root" | "tray" | "item:<id>:before|after" (manual reordering)
  * | "pos:folder:<id>:before|after" (folder reordering among siblings).
  */
 function targetAt(x: number, y: number, drag: Drag): string | null {
@@ -57,6 +57,7 @@ function targetAt(x: number, y: number, drag: Drag): string | null {
   if (!t || !el) return null;
   if (drag.kind === "items") {
     if (t.startsWith("folder:")) return t;
+    if (t === "tray") return useStore.getState().view.kind === "tray" ? null : t;
     if (t.startsWith("item:") && !drag.ids.includes(t.slice(5))) {
       const r = el.getBoundingClientRect();
       // List rows stack vertically; everything else flows left to right.
@@ -98,6 +99,8 @@ async function drop(drag: Drag, target: string) {
       before = rest[rest.findIndex((i) => i.id === id) + 1]?.id ?? null;
     }
     await reorder(moving, before);
+  } else if (drag.kind === "items" && target === "tray") {
+    await addToTray(drag.ids);
   } else if (drag.kind === "items") {
     await moveToFolder(drag.ids, target.slice(7));
   } else if (target.startsWith("pos:")) {
@@ -128,6 +131,7 @@ function dragOut(drag: Drag & { kind: "items" }) {
 function targetLabel(target: string | null, folders: Folder[]): string | null {
   if (!target) return null;
   if (target === "root") return "最上位へ移動";
+  if (target === "tray") return "作業台に追加";
   if (target.startsWith("item:")) return "ここへ並べ替え";
   if (target.startsWith("pos:")) {
     const name = folders.find((f) => f.id === target.split(":")[2])?.name;

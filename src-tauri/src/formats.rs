@@ -118,11 +118,16 @@ fn decode_with_image_crate(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
 }
 
 fn decode_svg(bytes: &[u8]) -> Result<Decoded, String> {
+    rasterize_svg(bytes, SVG_RASTER_MAX)
+}
+
+/// Renders an SVG with its longer side at `max_side` px.
+pub fn rasterize_svg(bytes: &[u8], max_side: f32) -> Result<Decoded, String> {
     let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default())
         .map_err(|e| format!("SVG: {e}"))?;
     let size = tree.size();
     let (w, h) = (size.width().max(1.0), size.height().max(1.0));
-    let scale = SVG_RASTER_MAX / w.max(h);
+    let scale = max_side / w.max(h);
     let (pw, ph) = ((w * scale).round().max(1.0) as u32, (h * scale).round().max(1.0) as u32);
     let mut pixmap = resvg::tiny_skia::Pixmap::new(pw, ph).ok_or("SVG: invalid size")?;
     resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());

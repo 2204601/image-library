@@ -80,6 +80,8 @@ export interface Item {
   /** Fonts: typeface style guessed from the font (null = can't tell) and the user's correction. */
   fontCategory: string | null;
   fontCategoryUser: string | null;
+  /** On the work tray (作業台). */
+  inTray: boolean;
   filePath: string;
   thumbPath: string;
   /** What the viewer shows: the display copy if any, else the original. */
@@ -161,6 +163,8 @@ export type View =
   | { kind: "similar" }
   | { kind: "favorites" }
   | { kind: "pinned" }
+  /** The work tray (作業台): items gathered to handle together. */
+  | { kind: "tray" }
   | { kind: "folder"; id: string }
   | { kind: "smart"; id: string };
 
@@ -246,6 +250,8 @@ export interface Counts {
   trash: number;
   favorites: number;
   pinned: number;
+  /** Items on the work tray (not in the trash). */
+  tray: number;
   /** Items not in the trash, by kind (kinds with none are missing). */
   kinds: Partial<Record<ItemKind, number>>;
   /** Fonts not in the trash by writing system and by style ("none" = unknown). */
@@ -335,6 +341,21 @@ export const api = {
   orientItems: (ids: string[], op: OrientOp) => invoke<number>("orient_items", { ids, op }),
   copyItems: (ids: string[]) => invoke<number>("copy_items", { ids }),
   exportItems: (ids: string[], dest: string) => invoke<number>("export_items", { ids, dest }),
+
+  /** Puts items on the work tray, after the ones there; returns how many were new. */
+  addToTray: (ids: string[]) => invoke<number>("add_to_tray", { ids }),
+  removeFromTray: (ids: string[]) => invoke<void>("remove_from_tray", { ids }),
+  /** Empties the tray; returns what was on it, in order (to put it back). */
+  clearTray: () => invoke<string[]>("clear_tray"),
+  reorderTray: (ids: string[], before: string | null) => invoke<void>("reorder_tray", { ids, before }),
+  /** An item for the contact sheet: oriented, fitted inside `maxSide` px, PNG or JPEG data. */
+  sheetImage: (id: string, maxSide: number) => invoke<ArrayBuffer>("sheet_image", { id, maxSide }),
+  /** Writes a PNG / JPEG / HTML file made here to `path` (from the save dialog). */
+  saveFile: (path: string, data: Uint8Array) =>
+    invoke<void>("save_file", data, { headers: { "x-path": encodeURIComponent(path) } }),
+  /** Puts PNG / JPEG data on the clipboard as an image. */
+  copyImage: (data: Uint8Array) => invoke<void>("copy_image", data),
+  revealPath: (path: string) => invoke<void>("reveal_path", { path }),
 
   importPaths: (paths: string[], folderId: string | null) =>
     invoke<ImportSummary>("import_paths", { paths, folderId }),

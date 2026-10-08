@@ -1,7 +1,7 @@
 import { colorHex } from "../lib/colors";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Folder as FolderIcon, Heart, Pin, Plus, X } from "lucide-react";
+import { Folder as FolderIcon, Heart, Layers, Pin, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   copySelection,
@@ -11,6 +11,7 @@ import {
   setRating,
   toggleFavorite,
   togglePinned,
+  toggleTray,
 } from "../lib/actions";
 import {
   api,
@@ -256,7 +257,7 @@ export function FlagButton({
   );
 }
 
-/** Favourite and pin buttons for `ids` (state read from the loaded items). */
+/** Favourite, pin and tray buttons for `ids` (state read from the loaded items). */
 export function FlagButtons({ ids, items }: { ids: string[]; items: Item[] }) {
   const sel = items.filter((i) => ids.includes(i.id));
   const state = (flag: (i: Item) => boolean): boolean | null => {
@@ -265,24 +266,37 @@ export function FlagButtons({ ids, items }: { ids: string[]; items: Item[] }) {
   };
   const fav = state((i) => i.favorite);
   const pin = state((i) => i.pinnedAt !== null);
+  const tray = state((i) => i.inTray);
   return (
-    <div className="flex gap-2">
-      <FlagButton
-        state={fav}
-        icon={<Heart size={14} fill={fav ? "currentColor" : "none"} />}
-        label={fav ? "お気に入り" : "お気に入りに追加"}
-        hint="お気に入り（キー F）"
-        activeClass="border-pink-500/60 bg-pink-500/15 text-pink-400"
-        onClick={() => toggleFavorite(ids)}
-      />
-      <FlagButton
-        state={pin}
-        icon={<Pin size={14} fill={pin ? "currentColor" : "none"} />}
-        label={pin ? "ピン留め中" : "ピン留め"}
-        hint="一覧の先頭に固定（キー P）"
-        activeClass="border-accent/60 bg-accent/15 text-accent"
-        onClick={() => togglePinned(ids)}
-      />
+    <div className="flex flex-col gap-2">
+      <div className="flex gap-2">
+        <FlagButton
+          state={fav}
+          icon={<Heart size={14} fill={fav ? "currentColor" : "none"} />}
+          label={fav ? "お気に入り" : "お気に入りに追加"}
+          hint="お気に入り（キー F）"
+          activeClass="border-pink-500/60 bg-pink-500/15 text-pink-400"
+          onClick={() => toggleFavorite(ids)}
+        />
+        <FlagButton
+          state={pin}
+          icon={<Pin size={14} fill={pin ? "currentColor" : "none"} />}
+          label={pin ? "ピン留め中" : "ピン留め"}
+          hint="一覧の先頭に固定（キー P）"
+          activeClass="border-accent/60 bg-accent/15 text-accent"
+          onClick={() => togglePinned(ids)}
+        />
+      </div>
+      <div className="flex">
+        <FlagButton
+          state={tray}
+          icon={<Layers size={14} />}
+          label={tray ? "作業台にあります" : "作業台に追加"}
+          hint={tray ? "作業台から外す（キー B）" : "作業台に集めて、まとめて出力・書き出し（キー B）"}
+          activeClass="border-emerald-500/60 bg-emerald-500/15 text-emerald-400"
+          onClick={() => toggleTray(ids)}
+        />
+      </div>
     </div>
   );
 }

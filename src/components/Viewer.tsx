@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { orient, setRating, toggleFavorite, togglePinned } from "../lib/actions";
+import { orient, setRating, toggleFavorite, togglePinned, toggleTray } from "../lib/actions";
 import { formatBytes, sizeLabel, orientTransform, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { folderPaths } from "../lib/grouping";
@@ -154,6 +154,8 @@ export function Viewer() {
         void toggleFavorite([item.id]);
       } else if (!mod && !e.shiftKey && e.code === "KeyP") {
         void togglePinned([item.id]);
+      } else if (!mod && !e.shiftKey && e.code === "KeyB") {
+        void toggleTray([item.id]);
       } else if (!mod && !e.shiftKey && e.code === "KeyI") {
         toggleInfo();
       } else if (!mod && !e.shiftKey && e.code === "KeyT") {

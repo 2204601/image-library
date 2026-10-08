@@ -318,11 +318,112 @@ export async function orient(ids: string[], op: OrientOp) {
   await st().run(() => api.orientItems(ids, op));
 }
 
-/** Manual order: move `ids` in front of `before` (null = end) in the open folder. */
+/** Manual order: move `ids` in front of `before` (null = end) in the open folder or the tray. */
 export async function reorder(ids: string[], before: string | null) {
+  if (st().view.kind === "tray") return st().run(() => api.reorderTray(ids, before));
   const folder = currentFolderId();
   if (!folder) return;
   await st().run(() => api.reorderInFolder(folder, ids, before));
+}
+
+// ------------------------------------------------------------ work tray
+
+/** Puts items on the work tray (after the ones already there). */
+export async function addToTray(ids: string[]) {
+  if (!ids.length) return;
+  let added = 0;
+  await st().run(async () => {
+    added = await api.addToTray(ids);
+  });
+  st().flashTarget("tray");
+  st().toast(added ? `${added} 件を作業台に追加しました` : "すでに作業台にあります");
+}
+
+/** B: puts items on the tray, or takes them off when all are already there. */
+export async function toggleTray(ids: string[]) {
+  if (!ids.length) return;
+  if (!allHave(ids, (i) => i.inTray)) return addToTray(ids);
+  await st().run(() => api.removeFromTray(ids));
+  st().toast(`${ids.length} 件を作業台から外しました`, false, {
+    label: "元に戻す",
+    onClick: () => st().run(() => api.addToTray(ids)),
+  });
+}
+
+/** Takes everything off the tray (the images themselves stay). */
+export async function clearTray() {
+  try {
+    const ids = await api.clearTray();
+    if (ids.length)
+      st().toast(`作業台を空にしました（${ids.length} 件）`, false, {
+        label: "元に戻す",
+        onClick: () => st().run(() => api.addToTray(ids)),
+      });
+  } catch (e) {
+    st().toast(String(e), true);
+  }
+  await st().refresh();
+}
+
+/** Everything on the tray in its order (whatever the tray view's sort). */
+function trayItems(): Promise<Item[]> {
+  return api.queryItems({
+    view: { kind: "tray" },
+    search: "",
+    tagIds: [],
+    tagMatchAll: false,
+    includeSubfolders: false,
+    minRating: 0,
+    filter: EMPTY_FILTER,
+    similarLevel: "standard",
+    sort: "manual",
+    desc: false,
+  });
+}
+
+/**
+ * The items an action from the tray works on: what is selected in the tray
+ * view, else everything on it in the order shown.
+ */
+async function trayTargets(): Promise<Item[]> {
+  const s = st();
+  if (s.view.kind !== "tray") return trayItems();
+  const shown = displayOrder();
+  const sel = shown.filter((i) => s.selected.has(i.id));
+  return sel.length ? sel : shown;
+}
+
+/** Items as the list shows them (one listed in several groups counts once, where it first appears). */
+function displayOrder(): Item[] {
+  const seen = new Set<string>();
+  return st().items.filter((i) => !seen.has(i.id) && seen.add(i.id));
+}
+
+export async function sheetFromTray() {
+  try {
+    const items = await trayTargets();
+    if (items.length) st().setSheet(items);
+  } catch (e) {
+    st().toast(String(e), true);
+  }
+}
+
+export async function exportTray() {
+  try {
+    const items = await trayTargets();
+    if (items.length) await exportSelection(items.map((i) => i.id));
+  } catch (e) {
+    st().toast(String(e), true);
+  }
+}
+
+// ------------------------------------------------------- contact sheet
+
+/** Opens "まとめて出力" for the listed items `ids`, in the order the list shows them. */
+export function openSheet(ids: string[]) {
+  const want = new Set(ids);
+  const items = displayOrder().filter((i) => want.has(i.id));
+  if (items.length) st().setSheet(items);
 }
 
 // ---------------------------------------------------------- taking out

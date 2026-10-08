@@ -418,6 +418,102 @@ fn export_target(dest: &std::path::Path, name: &str, ext: &str) -> PathBuf {
     candidate
 }
 
+// ------------------------------------------------------------ work tray
+
+/// Puts items on the work tray (after the ones there); returns how many were new.
+#[tauri::command]
+pub fn add_to_tray(state: State<AppState>, ids: Vec<String>) -> CmdResult<usize> {
+    with_lib(&state, |lib| db::add_to_tray(&lib.conn, &ids).map_err(err))
+}
+
+#[tauri::command]
+pub fn remove_from_tray(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::remove_from_tray(&lib.conn, &ids).map_err(err))
+}
+
+/// Empties the tray; returns what was on it, in order (for undo).
+#[tauri::command]
+pub fn clear_tray(state: State<AppState>) -> CmdResult<Vec<String>> {
+    with_lib(&state, |lib| db::clear_tray(&lib.conn).map_err(err))
+}
+
+#[tauri::command]
+pub fn reorder_tray(state: State<AppState>, ids: Vec<String>, before: Option<String>) -> CmdResult<()> {
+    with_lib(&state, |lib| db::reorder_tray(&mut lib.conn, &ids, before.as_deref()).map_err(err))
+}
+
+// -------------------------------------------------------- contact sheet
+
+/// One item for the contact sheet: oriented, fitted inside `max_side` px,
+/// as PNG or JPEG (sheet.rs). A font gives its sample (the thumbnail).
+#[tauri::command]
+pub async fn sheet_image(app: AppHandle, id: String, max_side: u32) -> CmdResult<tauri::ipc::Response> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // Only look the paths up under the lock; decoding can take a while.
+        let (item, src) = with_lib(&app.state::<AppState>(), |lib| {
+            let item = db::get_items(&lib.conn, std::slice::from_ref(&id))
+                .map_err(err)?
+                .pop()
+                .ok_or("画像が見つかりません")?;
+            let src = if item.kind == db::Kind::Font { lib.thumb_path(&item) } else { lib.display_path(&item) };
+            Ok((item, src))
+        })?;
+        let bytes = fs::read(&src).map_err(err)?;
+        let img = if item.kind == db::Kind::Font {
+            image::load_from_memory(&bytes).map_err(err)?
+        } else {
+            let decoded = match (item.preview.is_some(), item.ext.as_str()) {
+                // Drawn at the size it is shown, not the usual 1024 px.
+                (false, "svg") => crate::formats::rasterize_svg(&bytes, max_side.min(crate::sheet::MAX_SIDE) as f32)?,
+                (false, ext) => crate::formats::decode(&bytes, ext)?,
+                (true, _) => crate::formats::decode(&bytes, "jpg")?,
+            };
+            crate::orient::Orientation::new(item.rotation, item.flipped).apply(&decoded.image)
+        };
+        Ok(tauri::ipc::Response::new(crate::sheet::fit(&img, max_side)?))
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Writes a file the frontend made (a contact sheet) to the path chosen in
+/// the save dialog, sent percent-encoded in `x-path`.
+#[tauri::command]
+pub fn save_file(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("バイナリデータが必要です".into());
+    };
+    let path = request
+        .headers()
+        .get("x-path")
+        .and_then(|v| v.to_str().ok())
+        .map(percent_decode)
+        .map(PathBuf::from)
+        .ok_or("保存先がありません")?;
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "html") {
+        return Err("PNG・JPEG・HTML 以外では保存できません".into());
+    }
+    fs::write(&path, data).map_err(err)
+}
+
+/// Puts an image (PNG / JPEG data) on the clipboard, to paste into chat or mail.
+#[tauri::command]
+pub fn copy_image(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
+    use clipboard_rs::{common::RustImage, Clipboard, ClipboardContext, RustImageData};
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err("バイナリデータが必要です".into());
+    };
+    let img = RustImageData::from_bytes(data).map_err(err)?;
+    ClipboardContext::new().map_err(err)?.set_image(img).map_err(err)
+}
+
+/// Shows a file the app wrote (e.g. a saved contact sheet) in Finder / Explorer.
+#[tauri::command]
+pub fn reveal_path(path: PathBuf) -> CmdResult<()> {
+    tauri_plugin_opener::reveal_item_in_dir(path).map_err(err)
+}
+
 // --------------------------------------------------------------- import
 
 #[derive(Clone, Serialize)]
