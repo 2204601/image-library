@@ -5,7 +5,7 @@
 // app itself carry no quarantine attribute, so an update applied from inside the
 // app launches without that warning. Only the first install still shows it.
 import { getVersion } from "@tauri-apps/api/app";
-import { isTauri } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
@@ -28,6 +28,22 @@ export async function loadAppVersion() {
 
 let busy = false;
 
+/** Same as `plugins.updater.endpoints` in src-tauri/tauri.conf.json. */
+const FEED = "https://github.com/2204601/image-library/releases/latest/download/latest.json";
+
+/**
+ * The proxy the OS would use for the feed (PAC included). The updater's HTTP
+ * client can't evaluate PAC scripts, so behind a company proxy it would try to
+ * connect directly and fail. Undefined = direct.
+ */
+async function systemProxy(): Promise<string | undefined> {
+  try {
+    return (await invoke<string | null>("system_proxy", { url: FEED })) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Check GitHub Releases for a newer version. `manual` reports "up to date" and
  * errors; the automatic startup check stays silent unless an update exists.
@@ -40,7 +56,8 @@ export async function checkForUpdate(manual: boolean) {
   }
   busy = true;
   try {
-    const update = await check({ timeout: 15_000 });
+    // The proxy also applies to the download (the Update keeps it).
+    const update = await check({ timeout: 15_000, proxy: await systemProxy() });
     if (!update) {
       if (manual) st().toast(`最新版です（${appVersion()}）`);
       return;

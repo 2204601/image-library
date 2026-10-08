@@ -1,6 +1,6 @@
 [package]
 name = "image-library"
-version = "0.8.0"
+version = "0.8.1"
 description = "Local image library manager"
 authors = ["you"]
 edition = "2021"
@@ -56,4 +56,8 @@ strip = true
 [dev-dependencies]
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation", "Win32_Networking_WinHttp"] }
+
+# System proxy lookup (PAC) for the updater, see proxy.rs.
+[target."cfg(target_os = \"macos\")".dependencies]
+core-foundation-sys = "0.8"

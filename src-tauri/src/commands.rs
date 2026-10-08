@@ -457,6 +457,13 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// The proxy the OS uses for `url` (PAC included), for the updater: its
+/// HTTP client can't run PAC scripts. None = connect directly.
+#[tauri::command]
+pub async fn system_proxy(url: String) -> Option<String> {
+    tauri::async_runtime::spawn_blocking(move || crate::proxy::for_url(&url)).await.ok().flatten()
+}
+
 #[tauri::command]
 pub fn supported_exts() -> Vec<&'static str> {
     import::SUPPORTED_EXTS.to_vec()
