@@ -18,7 +18,7 @@ import { formatBytes, sizeLabel, orientTransform, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { folderPaths } from "../lib/grouping";
 import { useStore } from "../store";
-import { FontView } from "./FontView";
+import { FontView } from "../features/fonts/FontView";
 import { FlagButtons } from "./Inspector";
 import { RatingStars } from "./RatingStars";
 

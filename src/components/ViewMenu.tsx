@@ -13,33 +13,40 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { GroupBy } from "../lib/grouping";
-import { useStore, type Layout, type ShowInfo } from "../store";
+import { MODE_GROUPS, MODE_LAYOUTS, useStore, type Layout, type Mode, type ShowInfo } from "../store";
 
+/** Every grouping; each mode offers its own subset (MODE_GROUPS). */
 const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
   { key: "none", label: "なし", hint: "区切らずに並べる" },
   { key: "rating", label: "評価", hint: "★5 から未評価まで" },
-  { key: "tag", label: "タグ", hint: "複数のタグがある画像は各タグに出る" },
+  { key: "tag", label: "タグ", hint: "複数のタグがあるものは各タグに出る" },
   { key: "folder", label: "フォルダ", hint: "「すべて」やサブフォルダ表示で便利" },
-  { key: "kind", label: "種類", hint: "画像・フォント" },
-  { key: "family", label: "フォントのファミリー", hint: "同じフォントの太さ違いをまとめる（細い順）" },
+  { key: "family", label: "ファミリー", hint: "同じフォントの太さ違いをまとめる（細い順）" },
 ];
 
+/** Every layout; each mode offers its own subset (MODE_LAYOUTS). */
 export const LAYOUTS: { key: Layout; label: string; icon: React.ReactNode; hint: string }[] = [
   { key: "justified", label: "標準", icon: <Rows3 size={15} />, hint: "行の高さをそろえ、縦横比のまま並べる" },
   { key: "waterfall", label: "Pinterest風", icon: <Columns3 size={15} />, hint: "列の幅をそろえ、縦に詰めて並べる" },
   { key: "grid", label: "グリッド", icon: <LayoutGrid size={15} />, hint: "同じ大きさの枠に収めて並べる" },
-  { key: "list", label: "リスト", icon: <LayoutList size={15} />, hint: "1 行ずつ詳しく表示。フォントは見本の文字を表示" },
+  { key: "list", label: "リスト", icon: <LayoutList size={15} />, hint: "1 行ずつ詳しく表示" },
   {
     key: "specimen",
-    label: "フォント見本",
+    label: "見本",
     icon: <ALargeSmall size={15} />,
     hint: "フォントを 1 行ずつ大きく並べ、同じ文字で見比べる",
   },
 ];
 
-const INFO: { key: keyof ShowInfo; label: string }[] = [
+/** Layouts always on the toolbar; the others are in the display menu. */
+const PRIMARY: Record<Mode, Layout[]> = {
+  image: ["justified", "waterfall"],
+  font: ["specimen", "list"],
+};
+
+const INFO: { key: keyof ShowInfo; label: string; only?: Mode }[] = [
   { key: "name", label: "名前" },
-  { key: "dims", label: "画像サイズ" },
+  { key: "dims", label: "画像サイズ", only: "image" },
   { key: "rating", label: "評価" },
   { key: "meta", label: "形式・容量" },
 ];
@@ -97,17 +104,15 @@ function Dropdown({
 
 const heading = "px-2 pt-1 pb-1 text-[11px] font-semibold text-dim";
 
-/** Layouts always on the toolbar; the others are in the display menu. */
-const PRIMARY: Layout[] = ["justified", "waterfall"];
-
 /**
- * The everyday layouts side by side, one click to switch. Grid / list sit in
+ * The everyday layouts side by side, one click to switch. The others sit in
  * the display menu, and show up here only while one of them is in use.
  */
 export function LayoutSwitch() {
   const layout = useStore((s) => s.layout);
   const setLayout = useStore((s) => s.setLayout);
-  const shown = LAYOUTS.filter((l) => PRIMARY.includes(l.key) || l.key === layout);
+  const mode = useStore((s) => s.mode);
+  const shown = LAYOUTS.filter((l) => PRIMARY[mode].includes(l.key) || l.key === layout);
   return (
     <div className="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
       {shown.map((l, i) => (
@@ -133,6 +138,8 @@ export function GroupMenu() {
   const groupBy = useStore((s) => s.groupBy);
   const setGroupBy = useStore((s) => s.setGroupBy);
   const isSimilar = useStore((s) => s.view.kind === "similar");
+  const mode = useStore((s) => s.mode);
+  const groups = GROUPS.filter((g) => MODE_GROUPS[mode].includes(g.key));
   const current = GROUPS.find((g) => g.key === groupBy)!;
   const on = groupBy !== "none" && !isSimilar;
   return (
@@ -151,7 +158,7 @@ export function GroupMenu() {
       <div className={heading}>
         グループ分け{isSimilar && <span className="ml-1 font-normal">（重複の候補では無効）</span>}
       </div>
-      {GROUPS.map((g) => (
+      {groups.map((g) => (
         <button
           key={g.key}
           data-close
@@ -181,13 +188,14 @@ export function DisplayMenu() {
   const specimenSize = useStore((s) => s.specimenSize);
   const setSpecimenSize = useStore((s) => s.setSpecimenSize);
   const layout = useStore((s) => s.layout);
+  const mode = useStore((s) => s.mode);
   // The specimen layout sizes its sample text instead of thumbnails.
   const specimen = layout === "specimen";
   const setLayout = useStore((s) => s.setLayout);
   return (
     <Dropdown title="表示（レイアウト・サムネイルの大きさ・表示する情報）" width="w-64" button={<SlidersHorizontal size={15} />}>
       <div className={heading}>レイアウト</div>
-      {LAYOUTS.map((l) => (
+      {LAYOUTS.filter((l) => MODE_LAYOUTS[mode].includes(l.key)).map((l) => (
         <button
           key={l.key}
           data-close
@@ -221,7 +229,7 @@ export function DisplayMenu() {
       </label>
       <div className="mx-1.5 my-1 border-t border-line" />
       <div className={heading}>サムネイルの下に表示</div>
-      {INFO.map((i) => (
+      {INFO.filter((i) => !i.only || i.only === mode).map((i) => (
         <label key={i.key} className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 hover:bg-white/8">
           <input
             type="checkbox"
@@ -233,36 +241,5 @@ export function DisplayMenu() {
         </label>
       ))}
     </Dropdown>
-  );
-}
-
-/** Specimen layout: the text every font shows, and its size. */
-export function SpecimenControls() {
-  const text = useStore((s) => s.specimenText);
-  const setText = useStore((s) => s.setSpecimenText);
-  const size = useStore((s) => s.specimenSize);
-  const setSize = useStore((s) => s.setSpecimenSize);
-  return (
-    <div className="flex min-w-0 items-center gap-2 text-xs">
-      <ALargeSmall size={15} className="shrink-0 text-dim" />
-      <input
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => e.key === "Escape" && (setText(""), e.currentTarget.blur())}
-        placeholder="見本の文字を入力（空欄なら各フォントの見本）"
-        className="h-7 min-w-32 flex-1 rounded-md border border-line bg-bg px-2 text-[13px] outline-none placeholder:text-dim focus:border-accent"
-      />
-      <input
-        type="range"
-        min={12}
-        max={160}
-        step={2}
-        value={size}
-        onChange={(e) => setSize(Number(e.target.value))}
-        title="見本の文字の大きさ（⌘+ / ⌘-）"
-        className="w-24 shrink-0 accent-accent"
-      />
-      <span className="w-12 shrink-0 text-dim tabular-nums">{size}px</span>
-    </div>
   );
 }

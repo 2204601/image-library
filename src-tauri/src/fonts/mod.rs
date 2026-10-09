@@ -2,6 +2,8 @@
 //! OpenType data, names and character lists, and a rendered sample used as
 //! the thumbnail. The original file is stored as is, like images.
 
+pub mod commands;
+
 use image::{DynamicImage, RgbaImage};
 use serde::Serialize;
 use skrifa::raw::TableProvider;

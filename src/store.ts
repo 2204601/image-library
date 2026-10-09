@@ -10,13 +10,24 @@ import {
   type SmartFolder,
   type ImportSummary,
   type Item,
+  type ItemKind,
   type LibraryInfo,
   type SimilarLevel,
   type SortKey,
   type Tag,
   type View,
 } from "./lib/api";
-import { GROUP_BYS, groupItems, similarSections, type GroupBy, type Section } from "./lib/grouping";
+import { fontApi } from "./features/fonts/api";
+import { groupItems, similarSections, type GroupBy, type Section } from "./lib/grouping";
+
+/**
+ * What the app shows: one kind at a time. Everything (the list, counts,
+ * folders, tags, smart folders) is of the current mode; each mode remembers
+ * its own layout and grouping.
+ */
+export type Mode = ItemKind;
+
+export const MODES: Mode[] = ["image", "font"];
 
 /** x/y = current pointer, sx/sy = where the drag started (for snap-back). */
 type DragPos = { x: number; y: number; sx: number; sy: number };
@@ -36,6 +47,18 @@ export interface DuplicateReview {
 }
 
 export type Layout = "justified" | "grid" | "waterfall" | "list" | "specimen";
+
+/** Layouts of each mode, the first being its default. */
+export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
+  image: ["justified", "waterfall", "grid", "list"],
+  font: ["specimen", "list", "grid"],
+};
+
+/** Groupings of each mode. */
+export const MODE_GROUPS: Record<Mode, GroupBy[]> = {
+  image: ["none", "rating", "tag", "folder"],
+  font: ["none", "rating", "tag", "folder", "family"],
+};
 
 /** What the grid shows under each thumbnail. */
 export interface ShowInfo {
@@ -57,6 +80,7 @@ interface Toast {
 interface State {
   library: LibraryInfo | null;
 
+  mode: Mode;
   view: View;
   search: string;
   tagFilter: number[];
@@ -147,6 +171,8 @@ interface State {
   toasts: Toast[];
 
   setLibrary: (lib: LibraryInfo | null) => void;
+  /** Switches kind; starts in "all" with no conditions, on the mode's own layout and grouping. */
+  setMode: (mode: Mode) => void;
   setView: (view: View) => void;
   setSearch: (s: string) => void;
   toggleTagFilter: (id: number) => void;
@@ -235,6 +261,21 @@ const loadJson = (key: string): object => {
   }
 };
 
+const loadMode = (): Mode => MODES.find((m) => m === load("mode")) ?? "image";
+/** The mode's saved layout (the pre-mode "layout" key counts for images), else its default. */
+const loadLayout = (mode: Mode): Layout => {
+  const saved = load(`layout:${mode}`) ?? (mode === "image" ? load("layout") : null);
+  return MODE_LAYOUTS[mode].find((l) => l === saved) ?? MODE_LAYOUTS[mode][0];
+};
+const loadGroupBy = (mode: Mode): GroupBy => {
+  const saved = load(`groupBy:${mode}`) ?? (mode === "image" ? load("groupBy") : null);
+  return MODE_GROUPS[mode].find((g) => g === saved) ?? "none";
+};
+
+/** Smart folders of a mode: saved in it, or before there were modes. */
+export const smartFolderInMode = (sf: SmartFolder, mode: Mode) =>
+  !sf.rule.filter.kinds?.length || sf.rule.filter.kinds.includes(mode);
+
 /** Number of active ad-hoc conditions (for badges / "clear" buttons). */
 export function activeConditions(s: {
   search: string;
@@ -247,7 +288,6 @@ export function activeConditions(s: {
     (s.search.trim() ? 1 : 0) +
     (s.tagFilter.length ? 1 : 0) +
     (s.minRating ? 1 : 0) +
-    (f.kinds.length ? 1 : 0) +
     (f.fontScripts.length ? 1 : 0) +
     (f.fontCategories.length ? 1 : 0) +
     (f.exts.length ? 1 : 0) +
@@ -303,9 +343,12 @@ function arrange(s: {
   return groupItems(s.rawItems, s.groupBy, s.tags, s.folders);
 }
 
+const initialMode = loadMode();
+
 export const useStore = create<State>((set, get) => ({
   library: null,
 
+  mode: initialMode,
   view: { kind: "all" },
   search: "",
   tagFilter: [],
@@ -320,12 +363,11 @@ export const useStore = create<State>((set, get) => ({
   filter: EMPTY_FILTER,
   filterOpen: load("filterOpen") === "true",
   editingSmart: null,
-  layout:
-    (["justified", "grid", "waterfall", "list", "specimen"] as const).find((l) => l === load("layout")) ?? "justified",
+  layout: loadLayout(initialMode),
   specimenText: load("specimenText") ?? "",
   specimenSize: loadNumber("specimenSize", 40),
   showInfo: { name: true, dims: true, rating: true, meta: false, ...loadJson("showInfo") },
-  groupBy: GROUP_BYS.find((g) => g === load("groupBy")) ?? "none",
+  groupBy: loadGroupBy(initialMode),
   viewerInfo: load("viewerInfo") === "true",
   viewerStrip: load("viewerStrip") !== "false",
   tagClipboard: [],
@@ -396,13 +438,41 @@ export const useStore = create<State>((set, get) => ({
     if (library) {
       get().refresh();
       // Fonts imported by older versions have no family yet (grouping, search).
-      api
-        .indexFonts()
+      fontApi
+        .index()
         .then((n) => {
           if (n > 0) get().refresh();
         })
         .catch(() => {});
     }
+  },
+  setMode: (mode) => {
+    if (mode === get().mode) return;
+    persist("mode", mode);
+    // Leaving the tray (if there) restores the sort it replaced.
+    const sortNow = { ...get(), ...traySort(get().view, { kind: "all" }, get()) };
+    set({
+      mode,
+      view: { kind: "all" },
+      search: "",
+      tagFilter: [],
+      minRating: 0,
+      filter: EMPTY_FILTER,
+      editingSmart: null,
+      layout: loadLayout(mode),
+      groupBy: loadGroupBy(mode),
+      // Fonts have no pixel size.
+      sort: sortNow.sort === "dimensions" && mode === "font" ? "importedAt" : sortNow.sort,
+      desc: sortNow.desc,
+      items: [],
+      rawItems: [],
+      sections: [],
+      selected: new Set(),
+      anchor: null,
+      focus: null,
+      viewer: null,
+    });
+    get().refresh();
   },
   setView: (view) => {
     // The similar view may take a moment to prepare; don't leave the old list up.
@@ -493,8 +563,9 @@ export const useStore = create<State>((set, get) => ({
     persist("filterOpen", String(filterOpen));
   },
   currentRule: () => {
-    const { search, tagFilter, tagMatchAll, minRating, filter } = get();
-    return { search, tagIds: tagFilter, tagMatchAll, minRating, filter };
+    const { search, tagFilter, tagMatchAll, minRating, filter, mode } = get();
+    // The rule remembers the mode it was made in (see `smartFolderInMode`).
+    return { search, tagIds: tagFilter, tagMatchAll, minRating, filter: { ...filter, kinds: [mode] } };
   },
   startEditSmart: (sf) => {
     // Edit in the "all" view so the user sees exactly what the rule matches.
@@ -506,7 +577,8 @@ export const useStore = create<State>((set, get) => ({
       tagFilter: sf.rule.tagIds,
       tagMatchAll: sf.rule.tagMatchAll,
       minRating: sf.rule.minRating,
-      filter: { ...EMPTY_FILTER, ...sf.rule.filter },
+      // The kind is the mode's, not an editable condition.
+      filter: { ...EMPTY_FILTER, ...sf.rule.filter, kinds: [] },
       filterOpen: true,
       selected: new Set(),
     });
@@ -515,7 +587,7 @@ export const useStore = create<State>((set, get) => ({
   stopEditSmart: () => set({ editingSmart: null }),
   setLayout: (layout) => {
     set({ layout });
-    persist("layout", layout);
+    persist(`layout:${get().mode}`, layout);
   },
   setShowInfo: (patch) => {
     const showInfo = { ...get().showInfo, ...patch };
@@ -523,7 +595,7 @@ export const useStore = create<State>((set, get) => ({
     persist("showInfo", JSON.stringify(showInfo));
   },
   setGroupBy: (groupBy) => {
-    persist("groupBy", groupBy);
+    persist(`groupBy:${get().mode}`, groupBy);
     const s = get();
     const { items, sections } = arrange({ ...s, groupBy });
     // The viewer follows the image it was showing to its new place.
@@ -573,7 +645,8 @@ export const useStore = create<State>((set, get) => ({
   refresh: async () => {
     if (!get().library) return;
     const seq = ++refreshSeq;
-    const { view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating, filter, similarLevel } = get();
+    const { mode, view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating, filter, similarLevel } =
+      get();
     try {
       let dismissedGroups: number | null = null;
       if (view.kind === "similar") {
@@ -585,7 +658,7 @@ export const useStore = create<State>((set, get) => ({
         }
         dismissedGroups = await api.countDismissedDuplicates();
       }
-      const [rawItems, folders, tags, counts, smartFolders, exts] = await Promise.all([
+      const [rawItems, folders, tags, counts, allSmart, exts] = await Promise.all([
         api.queryItems({
           view,
           search,
@@ -593,18 +666,20 @@ export const useStore = create<State>((set, get) => ({
           tagMatchAll,
           includeSubfolders: showSubfolders,
           minRating,
-          filter,
+          // The list is of the mode's kind only.
+          filter: { ...filter, kinds: [mode] },
           similarLevel,
           sort,
           desc,
         }),
-        api.listFolders(),
-        api.listTags(),
-        api.getCounts(),
-        api.listSmartFolders(),
-        api.listExts(),
+        api.listFolders(mode),
+        api.listTags(mode),
+        api.getCounts(mode),
+        api.listSmartFolders(mode),
+        api.listExts(mode),
       ]);
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
+      const smartFolders = allSmart.filter((sf) => smartFolderInMode(sf, mode));
       const { items, sections } = arrange({ view, groupBy: get().groupBy, rawItems, tags, folders });
       const present = new Set(items.map((i) => i.id));
       const selected = new Set([...get().selected].filter((id) => present.has(id)));

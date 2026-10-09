@@ -1,5 +1,6 @@
 //! Commands invoked from the frontend. All return `Result<_, String>` so
-//! errors surface as rejected promises in JS.
+//! errors surface as rejected promises in JS. Font-only commands are in
+//! fonts/commands.rs.
 
 use crate::db::{self, Counts, Folder, Item, ItemQuery, SelectionInfo, Tag};
 use crate::import::{self, ImportSummary, Source};
@@ -29,11 +30,11 @@ pub struct WebServer {
     error: Option<String>,
 }
 
-fn err(e: impl ToString) -> String {
+pub(crate) fn err(e: impl ToString) -> String {
     e.to_string()
 }
 
-fn with_lib<T>(state: &AppState, f: impl FnOnce(&mut Library) -> CmdResult<T>) -> CmdResult<T> {
+pub(crate) fn with_lib<T>(state: &AppState, f: impl FnOnce(&mut Library) -> CmdResult<T>) -> CmdResult<T> {
     let mut guard = state.lib.lock().unwrap();
     let lib = guard.as_mut().ok_or("ライブラリが開かれていません")?;
     f(lib)
@@ -163,8 +164,8 @@ pub fn query_items(state: State<AppState>, query: ItemQuery) -> CmdResult<Vec<It
 }
 
 #[tauri::command]
-pub fn get_counts(state: State<AppState>) -> CmdResult<Counts> {
-    with_lib(&state, |lib| db::counts(&lib.conn).map_err(err))
+pub fn get_counts(state: State<AppState>, kind: Option<db::Kind>) -> CmdResult<Counts> {
+    with_lib(&state, |lib| db::counts(&lib.conn, kind).map_err(err))
 }
 
 #[tauri::command]
@@ -248,7 +249,7 @@ pub fn empty_trash(state: State<AppState>) -> CmdResult<()> {
     })
 }
 
-fn item_paths(state: &AppState, ids: &[String]) -> CmdResult<Vec<(Item, PathBuf)>> {
+pub(crate) fn item_paths(state: &AppState, ids: &[String]) -> CmdResult<Vec<(Item, PathBuf)>> {
     with_lib(state, |lib| {
         let mut items = db::get_items(&lib.conn, ids).map_err(err)?;
         // Keep the caller's order (e.g. grid order).
@@ -305,67 +306,6 @@ pub async fn orient_items(app: AppHandle, ids: Vec<String>, op: crate::orient::O
     .map_err(err)?
 }
 
-/// The font file of a font item, unpacked (WOFF / WOFF2) and, for a
-/// collection, cut down to one font.
-fn font_sfnt(state: &AppState, id: &str) -> CmdResult<Vec<u8>> {
-    let (item, path) = item_paths(state, &[id.to_string()])?.pop().ok_or("フォントが見つかりません")?;
-    if item.kind != db::Kind::Font {
-        return Err("フォントではありません".into());
-    }
-    crate::fonts::to_sfnt(&fs::read(path).map_err(err)?, &item.ext)
-}
-
-/// Names of every font in the file and the characters of font `face`.
-#[tauri::command]
-pub async fn font_info(app: AppHandle, id: String, face: u32) -> CmdResult<crate::fonts::FontInfo> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::fonts::info(&font_sfnt(&app.state::<AppState>(), &id)?, face)
-    })
-    .await
-    .map_err(err)?
-}
-
-/// Names and details of every font in the file (the details panel).
-#[tauri::command]
-pub async fn font_faces(app: AppHandle, id: String) -> CmdResult<Vec<crate::fonts::FaceInfo>> {
-    tauri::async_runtime::spawn_blocking(move || crate::fonts::faces(&font_sfnt(&app.state::<AppState>(), &id)?))
-        .await
-        .map_err(err)?
-}
-
-/// Sets the typeface style of fonts by hand (None = back to the guess).
-#[tauri::command]
-pub fn set_font_category(state: State<AppState>, ids: Vec<String>, category: Option<String>) -> CmdResult<usize> {
-    if category.as_deref().is_some_and(|c| !crate::fonts::CATEGORIES.contains(&c)) {
-        return Err("書体の指定が正しくありません".into());
-    }
-    with_lib(&state, |lib| db::set_font_category(&lib.conn, &ids, category.as_deref()).map_err(err))
-}
-
-/// A sample line and the style of a font, for the list layout.
-#[tauri::command]
-pub async fn font_list_preview(app: AppHandle, id: String) -> CmdResult<crate::fonts::ListPreview> {
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::fonts::list_preview(&font_sfnt(&app.state::<AppState>(), &id)?)
-    })
-    .await
-    .map_err(err)?
-}
-
-/// Font `face` as plain OpenType data, for `new FontFace()` in the viewer
-/// (web views can't load one font out of a collection).
-#[tauri::command]
-pub async fn font_data(app: AppHandle, id: String, face: u32) -> CmdResult<tauri::ipc::Response> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let sfnt = font_sfnt(&app.state::<AppState>(), &id)?;
-        Ok(tauri::ipc::Response::new(crate::fonts::extract_face(&sfnt, face)?))
-    })
-    .await
-    .map_err(err)?
-}
-
-/// Puts the files on the clipboard (paste into Finder / Explorer / chat apps).
-/// A single image is also put on as bitmap data for design tools.
 #[tauri::command]
 pub fn copy_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<usize> {
     use clipboard_rs::{common::RustImage, Clipboard, ClipboardContent, ClipboardContext, RustImageData};
@@ -554,17 +494,6 @@ pub async fn import_paths(
 pub async fn index_similar(app: AppHandle) -> CmdResult<usize> {
     tauri::async_runtime::spawn_blocking(move || {
         import::compute_missing_phashes(&app.state::<AppState>().lib)
-    })
-    .await
-    .map_err(err)?
-}
-
-/// Reads the family, writing system and style of fonts imported by versions
-/// that didn't store them (grouping, search, filters). Returns how many were read.
-#[tauri::command]
-pub async fn index_fonts(app: AppHandle) -> CmdResult<usize> {
-    tauri::async_runtime::spawn_blocking(move || {
-        import::compute_missing_font_meta(&app.state::<AppState>().lib)
     })
     .await
     .map_err(err)?
@@ -817,8 +746,8 @@ pub fn supported_exts() -> Vec<&'static str> {
 // -------------------------------------------------------------- folders
 
 #[tauri::command]
-pub fn list_folders(state: State<AppState>) -> CmdResult<Vec<Folder>> {
-    with_lib(&state, |lib| db::list_folders(&lib.conn).map_err(err))
+pub fn list_folders(state: State<AppState>, kind: Option<db::Kind>) -> CmdResult<Vec<Folder>> {
+    with_lib(&state, |lib| db::list_folders(&lib.conn, kind).map_err(err))
 }
 
 #[tauri::command]
@@ -879,8 +808,8 @@ pub fn sort_folders_by_name(state: State<AppState>, parent_id: Option<String>) -
 // -------------------------------------------------------- smart folders
 
 #[tauri::command]
-pub fn list_smart_folders(state: State<AppState>) -> CmdResult<Vec<db::SmartFolder>> {
-    with_lib(&state, |lib| db::list_smart_folders(&lib.conn).map_err(err))
+pub fn list_smart_folders(state: State<AppState>, kind: Option<db::Kind>) -> CmdResult<Vec<db::SmartFolder>> {
+    with_lib(&state, |lib| db::list_smart_folders(&lib.conn, kind).map_err(err))
 }
 
 #[tauri::command]
@@ -907,8 +836,8 @@ pub fn delete_smart_folder(state: State<AppState>, id: String) -> CmdResult<()> 
 }
 
 #[tauri::command]
-pub fn list_exts(state: State<AppState>) -> CmdResult<Vec<(String, i64)>> {
-    with_lib(&state, |lib| db::list_exts(&lib.conn).map_err(err))
+pub fn list_exts(state: State<AppState>, kind: Option<db::Kind>) -> CmdResult<Vec<(String, i64)>> {
+    with_lib(&state, |lib| db::list_exts(&lib.conn, kind).map_err(err))
 }
 
 #[tauri::command]
@@ -931,8 +860,8 @@ pub fn remove_from_folder(state: State<AppState>, ids: Vec<String>, folder_id: S
 // ----------------------------------------------------------------- tags
 
 #[tauri::command]
-pub fn list_tags(state: State<AppState>) -> CmdResult<Vec<Tag>> {
-    with_lib(&state, |lib| db::list_tags(&lib.conn).map_err(err))
+pub fn list_tags(state: State<AppState>, kind: Option<db::Kind>) -> CmdResult<Vec<Tag>> {
+    with_lib(&state, |lib| db::list_tags(&lib.conn, kind).map_err(err))
 }
 
 #[tauri::command]
