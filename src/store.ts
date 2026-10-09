@@ -29,6 +29,8 @@ import {
   type LibrarySettings,
 } from "./lib/librarySettings";
 import { groupItems, similarSections, type GroupBy, type Section } from "./lib/grouping";
+import { warn } from "./lib/log";
+import { notifyIfAway } from "./lib/osNotify";
 
 /**
  * What the app shows: every kind ("all") or one kind. Everything (the list,
@@ -309,7 +311,8 @@ interface State {
   dismissToast: (id: number) => void;
   /** Runs a mutation, reports errors, then refreshes. */
   run: (fn: () => Promise<unknown>) => Promise<void>;
-  importDone: (s: ImportSummary) => void;
+  /** Reports an import; `since` (when it started) also tells the OS if it was long. */
+  importDone: (s: ImportSummary, since?: number) => void;
 }
 
 // localStorage can throw (private mode etc.); treat it as best-effort.
@@ -980,17 +983,20 @@ export const useStore = create<State>((set, get) => ({
     }
     await get().refresh();
   },
-  importDone: (s) => {
+  importDone: (s, since) => {
     const parts = [];
     if (s.duplicates) parts.push(`${s.duplicates} 件はすでにあるためスキップ`);
     if (s.failed.length) parts.push(`${s.failed.length} 件は読み込めませんでした`);
+    // Dropped files can be of either kind, so no "画像" / "フォント" here.
+    const title = s.imported ? `${s.imported} 件を追加しました` : "追加されたものはありません";
+    const detail = parts.join(" / ") || undefined;
     get().notify({
-      // Dropped files can be of either kind, so no "画像" / "フォント" here.
-      title: s.imported ? `${s.imported} 件を追加しました` : "追加されたものはありません",
-      detail: parts.join(" / ") || undefined,
+      title,
+      detail,
       kind: s.failed.length && !s.imported ? "error" : s.imported ? "success" : "info",
     });
-    if (s.failed.length) console.warn("import failures", s.failed);
+    if (since !== undefined) notifyIfAway(since, title, detail);
+    if (s.failed.length) warn("import failures", s.failed);
     notifyUnusedKinds(s.kinds ?? {});
     if (s.kinds?.file) filesApi.prepareThumbs().catch(() => {});
   },

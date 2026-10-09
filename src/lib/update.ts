@@ -10,6 +10,7 @@ import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { api } from "./api";
+import { warn } from "./log";
 import { useStore } from "../store";
 
 const st = () => useStore.getState();
@@ -67,7 +68,7 @@ export async function checkForUpdate(manual: boolean) {
     await offer(update);
   } catch (e) {
     if (manual) st().notify({ title: "アップデートを確認できませんでした", detail: String(e), kind: "error" });
-    else console.warn("update check failed", e);
+    else warn("update check failed", e);
   } finally {
     busy = false;
   }

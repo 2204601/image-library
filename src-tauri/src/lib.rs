@@ -18,11 +18,45 @@ pub mod webimport;
 
 use commands::*;
 
+/// The log file's name in the app's log folder (without ".log").
+pub const LOG_FILE: &str = "image-library";
+
+/// Panics into the log too: release builds abort on panic, so stderr is all
+/// that would be left, and nobody sees it.
+fn log_panics() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("{info}");
+        default(info);
+    }));
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // The menu bar is made by the frontend from its command table
     // (src/lib/menuBar.ts); until it loads, macOS shows Tauri's default menu.
     tauri::Builder::default()
+        // First, so a second launch quits before setting anything up: it
+        // only brings this app's window up. One app holds one library, and
+        // the extension / Claude ports can only be served once.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| show_main_window(app)))
+        // log::* from Rust and the frontend's warnings (src/lib/log.ts), into
+        // the app's log folder ("ログを表示" in the Help menu) and stdout.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some(LOG_FILE.into()),
+                    }),
+                ])
+                .max_file_size(1_000_000)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(2))
+                .timezone_strategy(tauri_plugin_log::TimezoneStrategy::UseLocal)
+                .build(),
+        )
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
@@ -42,6 +76,13 @@ pub fn run() {
         )
         .manage(AppState::default())
         .setup(|app| {
+            log_panics();
+            log::info!(
+                "Image Library {} ({} {})",
+                app.package_info().version,
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            );
             start_web_import(app.handle());
             start_lock_refresh(app.handle());
             start_mcp(app.handle());
@@ -94,6 +135,7 @@ pub fn run() {
             save_file,
             copy_image,
             reveal_path,
+            reveal_log,
             reorder_in_folder,
             place_folder,
             shift_folder,

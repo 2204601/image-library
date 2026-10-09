@@ -2,8 +2,10 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { logUncaughtErrors } from "./lib/log";
 
 async function main() {
+  logUncaughtErrors();
   // Opened in a plain browser during development: use the in-memory mock backend.
   if (import.meta.env.DEV && !("__TAURI_INTERNALS__" in window)) {
     (await import("./dev/mockBackend")).installMockBackend();

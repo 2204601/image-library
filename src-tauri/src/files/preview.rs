@@ -97,7 +97,7 @@ fn convert(path: &Path, ext: &str, pdf: &Path) -> Option<()> {
         Ok(()) => Some(()),
         Err(super::win_office::Error::Unavailable) => None,
         Err(super::win_office::Error::Failed(why)) => {
-            eprintln!("{}: PDF にできませんでした: {why}", path.display());
+            log::warn!("{}: PDF にできませんでした: {why}", path.display());
             None
         }
     }

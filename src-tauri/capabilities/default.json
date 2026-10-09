@@ -9,6 +9,9 @@
     "dialog:default",
     "drag:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "log:default",
+    "notification:allow-notify",
+    "notification:allow-is-permission-granted"
   ]
 }
