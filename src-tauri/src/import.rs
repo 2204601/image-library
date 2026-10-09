@@ -3,6 +3,7 @@
 //! afterwards in a single transaction.
 
 use crate::db::{self, NewItem};
+use crate::files;
 use crate::fonts;
 use crate::formats;
 use crate::library::Library;
@@ -80,7 +81,8 @@ pub fn collect_files(paths: &[PathBuf]) -> Vec<Source> {
             let base = p.parent().unwrap_or(p);
             for e in WalkDir::new(p)
                 .into_iter()
-                .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                // Hidden entries, and iWork packages (folders that are one document).
+                .filter_entry(|e| !e.file_name().to_string_lossy().starts_with('.') && !files::is_package(e.path()))
                 .filter_map(Result::ok)
             {
                 if e.file_type().is_file() && ext_of(&e.file_name().to_string_lossy()).is_some() {
@@ -235,6 +237,9 @@ fn process(
     if formats::is_font(&ext) {
         return process_font(name, ext, data, hash, root);
     }
+    if files::is_file(&ext) {
+        return process_file(name, ext, data, hash, root);
+    }
     let decoded = formats::decode(&data, &ext)?;
     let img = decoded.image;
     let id = uuid::Uuid::new_v4().simple().to_string();
@@ -316,6 +321,37 @@ fn process_font(name: String, ext: String, data: Vec<u8>, hash: String, root: &P
         phash: None,
         preview: None,
         font: Some(meta),
+    }))
+}
+
+/// Files (PDF, office documents): stored as is, with a thumbnail from the OS
+/// or the file itself (files/mod.rs). Like fonts, 0 × 0 and no look-alikes.
+fn process_file(name: String, ext: String, data: Vec<u8>, hash: String, root: &Path) -> Result<Outcome, String> {
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let file_name = sanitize(&name);
+    let item_dir = root.join("images").join(&id);
+    fs::create_dir_all(&item_dir).map_err(|e| e.to_string())?;
+    let path = item_dir.join(&file_name);
+    fs::write(&path, &data).map_err(|e| e.to_string())?;
+    // Made from the stored copy: the OS needs a file with the right extension.
+    let thumb = files::thumbnail(&path, &ext, THUMB_MAX);
+    let thumb = write_thumb(&thumb, &root.join("thumbs"), &id).inspect_err(|_| {
+        let _ = fs::remove_dir_all(&item_dir);
+    })?;
+    Ok(Outcome::New(NewItem {
+        id,
+        kind: db::Kind::File,
+        name,
+        file_name,
+        ext,
+        width: 0,
+        height: 0,
+        size: data.len() as i64,
+        hash,
+        thumb,
+        phash: None,
+        preview: None,
+        font: None,
     }))
 }
 
@@ -813,6 +849,47 @@ mod tests {
         assert_eq!(compute_missing_font_meta(&lib).unwrap(), 2);
         assert_eq!(compute_missing_font_meta(&lib).unwrap(), 0);
         assert_eq!(fonts_of(&lib.lock().unwrap().as_ref().unwrap().conn), found);
+    }
+
+    #[test]
+    fn imports_files_with_thumbnails() {
+        use crate::files::tests::{jpeg, sample_pdf, sample_zip};
+        let (tmp, lib) = setup();
+        let dir = tmp.path().join("docs");
+        fs::create_dir_all(dir.join("Old.pages")).unwrap();
+        fs::write(dir.join("report.pdf"), sample_pdf()).unwrap();
+        fs::write(dir.join("Plan.pages"), sample_zip(&[("preview.jpg", &jpeg(300, 400))])).unwrap();
+        // Not a real spreadsheet (a damaged .docx would make Quick Look hang until the timeout).
+        fs::write(dir.join("memo.xls"), b"nothing here").unwrap();
+        // A package document: neither it nor its insides are imported.
+        fs::write(dir.join("Old.pages/preview.jpg"), jpeg(30, 40)).unwrap();
+        fs::write(dir.join("Old.pages/index.xml"), "x").unwrap();
+
+        let files = collect_files(std::slice::from_ref(&dir));
+        assert_eq!(files.len(), 3);
+        let sum = run(&lib, files, None, |_, _| {}).unwrap();
+        assert!(sum.failed.is_empty(), "{:?}", sum.failed);
+        assert_eq!(sum.imported, 3);
+
+        let g = lib.lock().unwrap();
+        let l = g.as_ref().unwrap();
+        let items = db::query_items(&l.conn, &db::ItemQuery { sort: db::SortKey::Name, ..Default::default() }).unwrap();
+        for it in &items {
+            assert_eq!((it.kind, it.width, it.height), (db::Kind::File, 0, 0), "{}", it.name);
+            assert!(it.preview.is_none());
+            assert_eq!(fs::read(l.file_path(it)).unwrap(), fs::read(dir.join(&it.name)).unwrap(), "stored as is");
+            let t = image::open(l.thumb_path(it)).unwrap();
+            assert!(t.width().max(t.height()) <= THUMB_MAX);
+        }
+        let by = |n: &str| items.iter().find(|i| i.name == n).unwrap();
+        // The preview inside the Pages document (on macOS Quick Look may draw it instead).
+        let t = image::open(l.thumb_path(by("Plan.pages"))).unwrap();
+        assert!(t.height() > t.width(), "portrait like the preview");
+        // Nothing to show for the broken spreadsheet: the type card.
+        let t = image::open(l.thumb_path(by("memo.xls"))).unwrap();
+        assert_eq!((t.width(), t.height()), (files::CARD_W, files::CARD_H));
+        assert!(db::missing_phashes(&l.conn).unwrap().is_empty(), "no look-alikes for files");
+        assert_eq!(db::counts(&l.conn, None).unwrap().kinds, std::collections::BTreeMap::from([(db::Kind::File, 3)]));
     }
 
     #[test]

@@ -27,7 +27,7 @@ import { groupItems, similarSections, type GroupBy, type Section } from "./lib/g
  */
 export type Mode = ItemKind;
 
-export const MODES: Mode[] = ["image", "font"];
+export const MODES: Mode[] = ["image", "font", "file"];
 
 /** x/y = current pointer, sx/sy = where the drag started (for snap-back). */
 type DragPos = { x: number; y: number; sx: number; sy: number };
@@ -52,12 +52,14 @@ export type Layout = "justified" | "grid" | "waterfall" | "list" | "specimen";
 export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
   image: ["justified", "waterfall", "grid", "list"],
   font: ["specimen", "list", "grid"],
+  file: ["grid", "list"],
 };
 
 /** Groupings of each mode. */
 export const MODE_GROUPS: Record<Mode, GroupBy[]> = {
   image: ["none", "rating", "tag", "folder"],
   font: ["none", "rating", "tag", "folder", "family"],
+  file: ["none", "rating", "tag", "folder"],
 };
 
 /** What the grid shows under each thumbnail. */
@@ -492,8 +494,8 @@ export const useStore = create<State>((set, get) => ({
       editingSmart: null,
       layout: loadLayout(mode),
       groupBy: loadGroupBy(mode),
-      // Fonts have no pixel size.
-      sort: sortNow.sort === "dimensions" && mode === "font" ? "importedAt" : sortNow.sort,
+      // Only images have a pixel size.
+      sort: sortNow.sort === "dimensions" && mode !== "image" ? "importedAt" : sortNow.sort,
       desc: sortNow.desc,
       items: [],
       rawItems: [],

@@ -42,6 +42,7 @@ export const LAYOUTS: { key: Layout; label: string; icon: React.ReactNode; hint:
 const PRIMARY: Record<Mode, Layout[]> = {
   image: ["justified", "waterfall"],
   font: ["specimen", "list"],
+  file: ["grid", "list"],
 };
 
 const INFO: { key: keyof ShowInfo; label: string; only?: Mode }[] = [

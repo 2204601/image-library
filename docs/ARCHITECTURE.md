@@ -7,7 +7,7 @@
 
 ## モード
 
-- `store.ts` の `mode`（`"image" | "font"`）。サイドバー上部の切替、⌘1 / ⌘2
+- `store.ts` の `mode`（`"image" | "font" | "file"`）。サイドバー上部の切替、⌘1 / ⌘2 / ⌘3（`MODES` の順）
 - 一覧のクエリは常に `filter.kinds = [mode]` で問い合わせる。件数（`get_counts`）、フォルダ・タグ・スマートフォルダの件数、
   絞り込みバーの形式一覧（`list_exts`）も `kind` 引数でモードのものだけを数える（`db.rs` の `kind_where`）
   - `Counts.kinds` だけは常に全種類の件数（モード切替のバッジ用）
@@ -28,6 +28,8 @@
 | | `src-tauri/src/{db,import,library,search,webimport,proxy,transfer,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、ライブラリ間のコピー・移動、共通コマンド |
 | フォント | `src/features/fonts/` | フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、サイドバーの言語・書体（`FontFilters.tsx`）、見本の文字と大きさ（`SpecimenControls.tsx`） |
 | | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`） |
+| ファイル | `src/features/files/` | ビューア（`FileView.tsx`：PDF は `<iframe>`、ほかはサムネイルと「既定のアプリで開く」） |
+| | `src-tauri/src/files/` | 対応する拡張子、サムネイル（Quick Look／Windows.Data.Pdf（`win_pdf.rs`）／中のプレビュー／種類のカード） |
 | 画像 | `src-tauri/src/{formats,orient,similar}.rs`、`components/DuplicateReview.tsx` ほか | デコード、回転・反転、似ている画像の検出（まだ `components/` に混ざっている） |
 
 依存の向きは **features → core** のみ。core が種類ごとの知識を持つのは、DB に入っている語彙（`ItemKind`、`FONT_SCRIPTS` /

@@ -24,19 +24,43 @@ export interface TransferSummary {
   failed: string[];
 }
 
-/** What a file is. Fonts have no pixel size (0 × 0) and a rendered sample as the thumbnail. */
-export type ItemKind = "image" | "font";
+/**
+ * What a file is. Fonts have no pixel size (0 × 0) and a rendered sample as the thumbnail;
+ * files (PDF, office documents) are 0 × 0 too, with a thumbnail from the OS or the file.
+ */
+export type ItemKind = "image" | "font" | "file";
 
 /** Kinds in the order the sidebar lists them. */
 export const KINDS: { kind: ItemKind; label: string }[] = [
   { kind: "image", label: "画像" },
   { kind: "font", label: "フォント" },
+  { kind: "file", label: "ファイル" },
 ];
 
 export const kindLabel = (k: ItemKind) => KINDS.find((x) => x.kind === k)?.label ?? k;
 
 /** File types imported as fonts (src-tauri/src/formats.rs `is_font`). */
 export const FONT_EXTS = ["ttf", "otf", "woff", "woff2", "ttc", "otc"];
+
+/** File types imported as files (src-tauri/src/files/mod.rs `EXTS`). */
+export const FILE_EXTS = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key"];
+
+/** The kind a file type is imported as. */
+export const kindOfExt = (ext: string): ItemKind =>
+  FONT_EXTS.includes(ext) ? "font" : FILE_EXTS.includes(ext) ? "file" : "image";
+
+/** Name of a file's type (src-tauri/src/files/mod.rs `type_name`). */
+export function fileTypeLabel(ext: string): string {
+  const e = ext.toLowerCase();
+  if (e === "pdf") return "PDF";
+  if (e === "doc" || e === "docx") return "Word";
+  if (e === "xls" || e === "xlsx") return "Excel";
+  if (e === "ppt" || e === "pptx") return "PowerPoint";
+  if (e === "pages") return "Pages";
+  if (e === "numbers") return "Numbers";
+  if (e === "key") return "Keynote";
+  return "ファイル";
+}
 
 /** Writing systems fonts are filed under (src-tauri/src/fonts.rs `SCRIPTS`). */
 export const FONT_SCRIPTS: { key: string; label: string }[] = [
@@ -113,9 +137,11 @@ export interface Item {
   distance?: number;
 }
 
-/** "1200 × 800", or the kind for files without a pixel size. */
-export function sizeLabel(item: Pick<Item, "kind" | "width" | "height">): string {
-  return item.kind === "font" ? "フォント" : `${item.width} × ${item.height}`;
+/** "1200 × 800", or the kind for items without a pixel size. */
+export function sizeLabel(item: Pick<Item, "kind" | "width" | "height" | "ext">): string {
+  if (item.kind === "font") return "フォント";
+  if (item.kind === "file") return fileTypeLabel(item.ext);
+  return `${item.width} × ${item.height}`;
 }
 
 /** Rotate / flip, applied on top of the current orientation (the file is never changed). */

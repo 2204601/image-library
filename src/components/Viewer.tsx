@@ -2,6 +2,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import {
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   Folder as FolderIcon,
   GalleryHorizontal,
   Info,
@@ -13,12 +14,13 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { orient, setRating, toggleFavorite, togglePinned, toggleTray } from "../lib/actions";
+import { openSelection, orient, setRating, toggleFavorite, togglePinned, toggleTray } from "../lib/actions";
 import { formatBytes, sizeLabel, orientTransform, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { folderPaths } from "../lib/grouping";
 import { useStore } from "../store";
 import { FontView } from "../features/fonts/FontView";
+import { FileView } from "../features/files/FileView";
 import { FlagButtons } from "./Inspector";
 import { RatingStars } from "./RatingStars";
 
@@ -46,8 +48,8 @@ export function Viewer() {
   const suppressClick = useRef(false);
 
   const open = item !== undefined;
-  // Fonts get their own body (sample text) instead of the zoomable image.
-  const isFont = item?.kind === "font";
+  // Fonts and files get their own body (sample text, document) instead of the zoomable image.
+  const isImage = item?.kind === "image";
   useEffect(() => setZoom("fit"), [item?.id]);
 
   useLayoutEffect(() => {
@@ -57,7 +59,7 @@ export function Viewer() {
     ro.observe(el);
     setBox({ w: el.clientWidth, h: el.clientHeight });
     return () => ro.disconnect();
-  }, [open, isFont]);
+  }, [open, isImage]);
 
   const pad = 32;
   const fitScale = item
@@ -217,7 +219,12 @@ export function Viewer() {
         <span className="text-xs text-white/40 tabular-nums">
           {sizeLabel(item)}
         </span>
-        {!isFont && (
+        {item.kind === "file" && (
+          <button className={tool} title="既定のアプリで開く" onClick={() => openSelection([item.id])}>
+            <ExternalLink size={15} />
+          </button>
+        )}
+        {isImage && (
           <>
             <div className="flex items-center gap-1">
               <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw")}>
@@ -268,8 +275,10 @@ export function Viewer() {
       </div>
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1">
-          {isFont ? (
+          {item.kind === "font" ? (
             <FontView item={item} />
+          ) : item.kind === "file" ? (
+            <FileView item={item} />
           ) : (
             <div
               ref={boxRef}
@@ -344,7 +353,7 @@ function Details({ item, items }: { item: Item; items: Item[] }) {
           {item.name}
         </div>
         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs text-white/70">
-          <dt className="text-white/45">{item.kind === "font" ? "種類" : "サイズ"}</dt>
+          <dt className="text-white/45">{item.kind === "image" ? "サイズ" : "種類"}</dt>
           <dd className="tabular-nums">
             {sizeLabel(item)}
           </dd>
@@ -406,7 +415,11 @@ function Details({ item, items }: { item: Item; items: Item[] }) {
       <p className="mt-auto pt-2 text-[11px] leading-5 text-white/35">
         1〜5 で評価、0 で解除、Shift+数字で評価して次へ
         <br />F お気に入り / P ピン留め / I 詳細 / T サムネイル
-        <br />⌘⇧L / ⌘⇧R 左右に回転
+        {item.kind === "image" && (
+          <>
+            <br />⌘⇧L / ⌘⇧R 左右に回転
+          </>
+        )}
       </p>
     </aside>
   );

@@ -1,7 +1,7 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, FONT_EXTS, kindLabel, type Item, type LibraryInfo, type OrientOp } from "./api";
+import { api, EMPTY_FILTER, kindLabel, kindOfExt, type Item, type LibraryInfo, type OrientOp } from "./api";
 import { activeConditions, currentFolderId, useStore, type Mode } from "../store";
 
 const st = () => useStore.getState();
@@ -133,7 +133,7 @@ export function importPaths(paths: string[], folderId?: string) {
 /** Picks files of the current mode's kind (any supported file can still be dropped). */
 export async function importFilesDialog() {
   const mode = st().mode;
-  const exts = (await api.supportedExts()).filter((e) => FONT_EXTS.includes(e) === (mode === "font"));
+  const exts = (await api.supportedExts()).filter((e) => kindOfExt(e) === mode);
   const picked = await open({
     title: `${kindLabel(mode)}を追加`,
     multiple: true,

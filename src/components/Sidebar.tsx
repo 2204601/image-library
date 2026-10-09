@@ -2,6 +2,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  FileText,
   Folder as FolderIcon,
   FolderPlus,
   FolderSearch,
@@ -432,30 +433,35 @@ function SmartFolderList() {
 }
 
 const KIND_ICON: Record<ItemKind, React.ReactNode> = {
-  image: <ImageIcon size={15} />,
-  font: <Type size={15} />,
+  image: <ImageIcon size={14} />,
+  font: <Type size={14} />,
+  file: <FileText size={14} />,
 };
 
-/** Images or fonts: the app shows one kind at a time (⌘1 / ⌘2). */
+/** Images, fonts or files: the app shows one kind at a time (⌘1 / ⌘2 / ⌘3). */
 function ModeSwitch() {
   const mode = useStore((s) => s.mode);
   const setMode = useStore((s) => s.setMode);
   const kinds = useStore((s) => s.counts.kinds);
   return (
-    <div className="mx-2 mb-1 flex h-8 items-stretch overflow-hidden rounded-md border border-line text-xs">
+    <div className="mx-2 mb-1 flex items-stretch overflow-hidden rounded-md border border-line text-xs">
       {KINDS.map(({ kind, label }, i) => (
         <button
           key={kind}
           title={`${label}を表示（⌘${i + 1}）`}
           aria-pressed={mode === kind}
           onClick={() => setMode(kind as Mode)}
-          className={`flex flex-1 items-center justify-center gap-1.5 ${i > 0 ? "border-l border-line" : ""} ${
+          className={`flex min-w-0 flex-1 flex-col items-center justify-center py-1 ${i > 0 ? "border-l border-line" : ""} ${
             mode === kind ? "bg-accent/20 font-medium text-accent" : "text-dim hover:bg-white/5 hover:text-fg"
           }`}
         >
-          {KIND_ICON[kind]}
-          {label}
-          <span className={`tabular-nums ${mode === kind ? "text-accent/70" : "text-dim/70"}`}>{kinds[kind] ?? 0}</span>
+          <span className="flex items-center gap-1 whitespace-nowrap">
+            {KIND_ICON[kind]}
+            {label}
+          </span>
+          <span className={`text-[10px] leading-4 tabular-nums ${mode === kind ? "text-accent/70" : "text-dim/70"}`}>
+            {kinds[kind] ?? 0}
+          </span>
         </button>
       ))}
     </div>

@@ -122,6 +122,30 @@ function seed() {
       hue: 0,
     });
   }
+  // Files: PDF and office documents, 0 × 0 like fonts.
+  const docFiles = ["企画書.pdf", "議事録 2026-10.docx", "売上集計.xlsx", "提案資料.pptx", "カタログ.pdf", "メモ.pages", "発表.key", "旧仕様書.doc"];
+  for (const [i, file] of docFiles.entries()) {
+    items.push({
+      id: id(),
+      kind: "file",
+      name: file,
+      fileName: file,
+      ext: file.split(".").pop()!,
+      width: 0,
+      height: 0,
+      size: 180_000 * (i + 2),
+      thumb: "",
+      note: "",
+      rating: i === 0 ? 4 : 0,
+      importedAt: Date.now() - 20_000 + i,
+      deletedAt: null,
+      favorite: i === 1,
+      pinnedAt: null,
+      rotation: 0,
+      flipped: false,
+      hue: (i * 67) % 360,
+    });
+  }
   const animals = { id: id(), parentId: null, name: "動物", color: "orange" };
   folders.push(
     animals,
@@ -187,6 +211,42 @@ function fontSvg(it: MockItem) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
 }
 
+/** File thumbnail: a page (PDF / Word / Pages), a slide or a sheet, roughly what Quick Look gives. */
+function fileSvg(it: MockItem) {
+  const wide = ["ppt", "pptx", "key"].includes(it.ext);
+  const [w, h] = wide ? [512, 288] : [362, 512];
+  const lines = Array.from({ length: wide ? 3 : 14 }, (_, k) => {
+    const y = (wide ? 150 : 110) + k * (wide ? 30 : 26);
+    return `<rect x="${wide ? 60 : 40}" y="${y}" width="${(wide ? 300 : 280) - ((k * 37) % 90)}" height="${wide ? 12 : 8}" rx="3" fill="#c4c4cc"/>`;
+  }).join("");
+  const head = `<rect x="${wide ? 60 : 40}" y="${wide ? 70 : 50}" width="${wide ? 320 : 200}" height="${wide ? 40 : 22}" rx="4" fill="hsl(${it.hue},55%,45%)"/>`;
+  const s = `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"><rect width="100%" height="100%" fill="#ffffff"/>${head}${lines}</svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+}
+
+/** A one-page PDF with the item's name, for the viewer's PDF frame. */
+function pdfData(it: MockItem) {
+  const text = `BT /F1 28 Tf 72 760 Td (${it.name.replace(/[^\x20-\x7e]/g, "?")}) Tj ET`;
+  const objs = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
+    `<< /Length ${text.length} >>\nstream\n${text}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  let out = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objs.forEach((o, k) => {
+    offsets.push(out.length);
+    out += `${k + 1} 0 obj\n${o}\nendobj\n`;
+  });
+  const xref = out.length;
+  out += `xref\n0 ${objs.length + 1}\n0000000000 65535 f \n`;
+  out += offsets.map((o) => `${String(o).padStart(10, "0")} 00000 n \n`).join("");
+  out += `trailer\n<< /Size ${objs.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return `data:application/pdf;base64,${btoa(out)}`;
+}
+
 /** The "file" (unrotated), or with `oriented` the thumbnail showing the item's rotation / flip. */
 function svg(it: MockItem, scale: number, oriented = false) {
   const sideways = it.rotation % 2 === 1;
@@ -203,7 +263,7 @@ function svg(it: MockItem, scale: number, oriented = false) {
 /** The mock image drawn to PNG data, as the real command hands it out. */
 async function sheetImage(it: MockItem, maxSide: number): Promise<ArrayBuffer> {
   const img = new Image();
-  img.src = it.kind === "font" ? fontSvg(it) : svg(it, 1, true);
+  img.src = it.kind === "font" ? fontSvg(it) : it.kind === "file" ? fileSvg(it) : svg(it, 1, true);
   await img.decode();
   const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
   const canvas = document.createElement("canvas");
@@ -215,10 +275,10 @@ async function sheetImage(it: MockItem, maxSide: number): Promise<ArrayBuffer> {
 }
 
 const view = (it: MockItem): Item => {
-  const filePath = svg(it, 1);
+  const filePath = it.kind === "file" ? (it.ext === "pdf" ? pdfData(it) : fileSvg(it)) : svg(it, 1);
   const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
   const tagIds = tags.filter((t) => hasTag(it.id, t.id)).map((t) => t.id);
-  const thumbPath = it.kind === "font" ? fontSvg(it) : svg(it, 3, true);
+  const thumbPath = it.kind === "font" ? fontSvg(it) : it.kind === "file" ? fileSvg(it) : svg(it, 3, true);
   return {
     ...it,
     sourceUrl: it.sourceUrl ?? null,
@@ -429,7 +489,7 @@ function handle(cmd: string, a: any): unknown {
         pinned: of(live()).filter((i) => i.pinnedAt !== null).length,
         tray: of(live()).filter((i) => tray.has(i.id)).length,
         kinds: Object.fromEntries(
-          (["image", "font"] as const)
+          (["image", "font", "file"] as const)
             .map((k) => [k, live().filter((i) => i.kind === k).length])
             .filter(([, n]) => n),
         ),
@@ -612,7 +672,11 @@ function handle(cmd: string, a: any): unknown {
       return effects;
     }
     case "supported_exts":
-      return ["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif"];
+      return [
+        ...["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif"],
+        ...["ttf", "otf", "woff", "woff2", "ttc", "otc"],
+        ...["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key"],
+      ];
     case "import_paths":
     case "import_bytes":
       return { imported: 0, duplicates: 0, failed: ["mock backend: import is not available in the browser"] };

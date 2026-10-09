@@ -42,6 +42,8 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # Local HTTP server for the browser extension (webimport.rs).
 tiny_http = "0.12"
+# Files: the preview inside iWork / Office files (files/mod.rs). Reading only.
+zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
@@ -58,7 +60,7 @@ strip = true
 [dev-dependencies]
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation", "Win32_Networking_WinHttp"] }
+windows = { version = "0.62", features = ["Win32_Graphics_Imaging", "Win32_System_Com", "Win32_Foundation", "Win32_Networking_WinHttp", "Data_Pdf", "Storage_Streams"] }
 
 # System proxy lookup (PAC) for the updater, see proxy.rs.
 [target."cfg(target_os = \"macos\")".dependencies]

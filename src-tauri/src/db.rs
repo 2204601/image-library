@@ -256,6 +256,8 @@ pub enum Kind {
     #[default]
     Image,
     Font,
+    /// PDF and office documents (files/mod.rs).
+    File,
 }
 
 impl Kind {
@@ -263,11 +265,16 @@ impl Kind {
         match self {
             Kind::Image => "image",
             Kind::Font => "font",
+            Kind::File => "file",
         }
     }
 
     fn parse(s: &str) -> Self {
-        if s == "font" { Kind::Font } else { Kind::Image }
+        match s {
+            "font" => Kind::Font,
+            "file" => Kind::File,
+            _ => Kind::Image,
+        }
     }
 }
 
