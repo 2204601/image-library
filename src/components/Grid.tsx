@@ -2,30 +2,19 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, Heart, ImagePlus, Layers, Pin, Star, Trash2 } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  moveToLastFolder,
-  copySelection,
-  copyTags,
-  createFolder,
-  createFolderHere,
-  createSmartFolder,
-  deleteSelection,
   exportSelection,
   importFilesDialog,
-  openSelection,
   openSheet,
-  orient,
-  pasteTags,
   keepPlan,
   keeperOf,
   dismissDuplicates,
   reviewDuplicates,
   similarGroups,
   setRating,
-  shiftFolder,
   toggleFavorite,
-  togglePinned,
-  toggleTray,
 } from "../lib/actions";
+import { command, isEnabled, runKey } from "../lib/commands";
+import { applicable, commandIcon, commandItem } from "../lib/menuItems";
 import { FontListCells, SpecimenRow } from "../features/fonts/FontRows";
 import { api, formatBytes, kindLabel, sizeLabel, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
@@ -41,8 +30,8 @@ import {
   visibleRange,
   type Placement,
 } from "../lib/layouts";
-import { activeConditions, currentFolderId, MODES, usedModes, useStore, type Mode, type ShowInfo } from "../store";
-import { useMenu } from "./ContextMenu";
+import { activeConditions, currentFolderId, useStore, type Mode, type ShowInfo } from "../store";
+import { useMenu, type MenuItem } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 
 /** Extra rows rendered above / below the viewport. */
@@ -393,69 +382,60 @@ export function Stars({ n, size = 9 }: { n: number; size?: number }) {
   );
 }
 
-export function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
+/** The menu of an item (and the rest of the selection); also the details panel's "…". */
+export function showItemMenu(e: React.MouseEvent | { clientX: number; clientY: number }, item: Item, index: number) {
+  const s0 = useStore.getState();
+  if (!s0.selected.has(item.id)) s0.select(item.id, "only");
   const s = useStore.getState();
-  if (!s.selected.has(item.id)) s.select(item.id, "only");
-  const ids = [...useStore.getState().selected];
-  const folder = currentFolderId();
-  const many = ids.length > 1 ? `（${ids.length} 件）` : "";
+  const ids = [...s.selected];
+  const header: MenuItem[] = ids.length > 1 ? [{ header: `${ids.length} 件を選択中` }] : [];
   if (s.view.kind === "trash") {
     useMenu.getState().show(e, [
-      { label: `復元${many}`, onClick: () => s.run(() => api.restoreItems(ids)) },
-      { label: `完全に削除${many}`, danger: true, onClick: () => deleteSelection(ids) },
+      ...header,
+      { label: "復元", onClick: () => s.run(() => api.restoreItems(ids)) },
+      commandItem("item.trash", { label: "完全に削除", danger: true }),
     ]);
     return;
   }
-  const all = (flag: (i: Item) => boolean) => ids.every((id) => flag(s.rawItems.find((i) => i.id === id)!));
-  const allFav = all((i) => i.favorite);
-  const allPinned = all((i) => i.pinnedAt !== null);
-  const allInTray = all((i) => i.inTray);
-  const turned = !all((i) => i.rotation === 0 && !i.flipped);
-  // Only images can be rotated; the entries go when there are none selected.
-  const rotatable = !all((i) => i.kind !== "image");
+  const byId = new Map(s.rawItems.map((i) => [i.id, i]));
+  const ratings = new Set(ids.map((id) => byId.get(id)?.rating ?? 0));
+  const rotate = applicable(["item.rotateCcw", "item.rotateCw", "item.flipH", "item.flipV"]);
+  const turned = isEnabled(command("item.resetOrientation"), s);
+  const folder = currentFolderId();
   useMenu.getState().show(e, [
-    { label: "表示", hint: "Enter", onClick: () => s.openViewer(index) },
-    { label: "既定のアプリで開く", onClick: () => openSelection(ids) },
-    { label: "Finder / エクスプローラで表示", onClick: () => s.run(() => api.revealItem(item.id)) },
+    ...header,
+    commandItem("item.show", { onClick: () => s.openViewer(index) }),
+    commandItem("item.open"),
+    commandItem("item.reveal", { onClick: () => s.run(() => api.revealItem(item.id)) }),
     { separator: true },
-    { label: allFav ? `お気に入りから外す${many}` : `お気に入りに追加${many}`, hint: "F", onClick: () => toggleFavorite(ids) },
-    { label: allPinned ? `ピン留めを解除${many}` : `ピン留め${many}`, hint: "P", onClick: () => togglePinned(ids) },
-    { label: allInTray ? `作業台から外す${many}` : `作業台に追加${many}`, hint: "B", onClick: () => toggleTray(ids) },
-    { separator: true },
-    ...(rotatable
-      ? [
-          { label: `左に回転${many}`, hint: "⌘⇧L", onClick: () => orient(ids, "rotateCcw") },
-          { label: `右に回転${many}`, hint: "⌘⇧R", onClick: () => orient(ids, "rotateCw") },
-          { label: `左右反転${many}`, onClick: () => orient(ids, "flipH") },
-          { label: `上下反転${many}`, onClick: () => orient(ids, "flipV") },
-          ...(turned ? [{ label: `元の向きに戻す${many}`, onClick: () => orient(ids, "reset") }] : []),
-          { separator: true as const },
-        ]
-      : []),
-    { label: `コピー${many}`, hint: "⌘C", onClick: () => copySelection(ids) },
-    { label: `書き出し…${many}`, onClick: () => exportSelection(ids) },
-    { label: `まとめて出力…${many}`, onClick: () => openSheet(ids) },
-    { separator: true },
-    { label: "フォルダへ移動…", hint: "⌘⇧J", onClick: () => s.setPicker("move") },
-    ...(s.recentFolders[0]
-      ? [
-          {
-            label: `「${s.folders.find((f) => f.id === s.recentFolders[0])?.name}」へ移動`,
-            hint: "⇧D",
-            onClick: () => moveToLastFolder(ids),
-          },
-        ]
-      : []),
-    { label: "選択から新規フォルダ", onClick: () => createFolder(null, ids) },
     {
-      label: `別のライブラリへ…${many}`,
-      onClick: () => s.setTransfer({ ids, kind: s.mode, count: ids.length }),
+      icons: ["item.favorite", "item.pin", "item.tray"].map(commandIcon),
+      rating: { current: ratings.size === 1 ? [...ratings][0] : null, onPick: (n) => setRating(ids, n) },
     },
-    ...(folder
-      ? [{ label: "未分類に戻す", onClick: () => s.run(() => api.removeFromFolder(ids, folder)) }]
-      : []),
+    // Only images turn; "元の向きに戻す" once one has been turned.
+    ...(rotate.length ? [{ icons: [...rotate, ...(turned ? ["item.resetOrientation"] : [])].map(commandIcon) }] : []),
     { separator: true },
-    { label: `ゴミ箱へ移動${many}`, hint: "⌘⌫", danger: true, onClick: () => deleteSelection(ids) },
+    commandItem("item.copy"),
+    {
+      label: "書き出し",
+      submenu: [
+        commandItem("list.export", { onClick: () => exportSelection(ids) }),
+        commandItem("list.sheet", { onClick: () => openSheet(ids) }),
+        commandItem("list.transfer", { onClick: () => s.setTransfer({ ids, kind: s.mode, count: ids.length }) }),
+      ],
+    },
+    {
+      label: "フォルダ",
+      submenu: [
+        commandItem("item.moveTo"),
+        ...(s.recentFolders[0] ? [commandItem("item.moveToLast")] : []),
+        commandItem("item.newFolder"),
+        ...(folder ? [commandItem("item.unfile")] : []),
+      ],
+    },
+    { label: "タグ", submenu: [commandItem("item.copyTags"), commandItem("item.pasteTags")] },
+    { separator: true },
+    commandItem("item.trash", { danger: true }),
   ]);
 }
 
@@ -633,74 +613,13 @@ export function Grid() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as Element).closest?.("input, textarea, select")) return;
       const s = useStore.getState();
-      if (s.viewer !== null || s.drag || s.picker || s.sheet || s.settingsTab) return;
-      const mod = e.metaKey || e.ctrlKey;
+      if (s.viewer !== null || s.drag || s.picker || s.sheet || s.settingsTab || s.exporting || s.transfer) return;
       const sel = () => [...useStore.getState().selected];
+
+      // Everything with a command (commands.ts): the same table as the menus.
+      if (runKey(e)) return;
+      const mod = e.metaKey || e.ctrlKey;
       const handled = () => e.preventDefault();
-
-      // Panels
-      if (mod && e.altKey && e.code === "Digit1") return handled(), s.toggleSidebar();
-      if (mod && e.altKey && e.code === "Digit2") return handled(), s.toggleInspector();
-      // ⌘1 / ⌘2 / ⌘3: images / fonts / files.
-      const modeKey = MODES[Number(/^Digit([1-9])$/.exec(e.code)?.[1]) - 1];
-      if (mod && !e.altKey && !e.shiftKey && modeKey) {
-        // A kind the library isn't used for does nothing (the keys stay fixed).
-        return handled(), usedModes(s).includes(modeKey) && s.setMode(modeKey);
-      }
-      if (mod && !e.altKey && e.code === "KeyI") return handled(), s.toggleInspector();
-      if (e.key === "Tab" && !mod && !e.shiftKey) return handled(), s.toggleSidebar();
-
-      // Selection / navigation
-      if (mod && e.code === "KeyA") return handled(), s.setSelection(s.items.map((i) => i.id));
-      if (mod && e.shiftKey && e.code === "KeyF") return handled(), s.toggleFilterOpen();
-      if (mod && e.code === "KeyF") return handled(), document.getElementById("search")?.focus();
-      if (mod && !e.shiftKey && e.code === "KeyJ") return handled(), s.setPicker("goto");
-
-      // Organizing
-      if (mod && e.shiftKey && e.code === "KeyJ") return handled(), s.selected.size && s.setPicker("move");
-      if (mod && e.shiftKey && e.altKey && e.code === "KeyN") return handled(), void createSmartFolder();
-      if (mod && e.shiftKey && e.code === "KeyN") return handled(), void createFolderHere();
-      // Folder order: ⌘[ / ⌘] one step, with Shift to the top / bottom.
-      if (mod && (e.code === "BracketLeft" || e.code === "BracketRight") && s.view.kind === "folder") {
-        handled();
-        void shiftFolder(s.view.id, e.code === "BracketLeft" ? -1 : 1, e.shiftKey);
-        return;
-      }
-      if (mod && e.shiftKey && e.code === "KeyC") return handled(), void copyTags(sel());
-      if (mod && e.shiftKey && e.code === "KeyV") return handled(), void pasteTags(sel());
-      if (!mod && e.shiftKey && e.code === "KeyD") return handled(), void moveToLastFolder(sel());
-      if (mod && !e.shiftKey && e.code === "KeyC") return handled(), void copySelection(sel());
-      // Favourite / pin (not in the trash).
-      if (!mod && !e.shiftKey && !e.altKey && e.code === "KeyF" && s.view.kind !== "trash") {
-        return handled(), void toggleFavorite(sel());
-      }
-      if (!mod && !e.shiftKey && !e.altKey && e.code === "KeyP" && s.view.kind !== "trash") {
-        return handled(), void togglePinned(sel());
-      }
-      if (!mod && !e.shiftKey && !e.altKey && e.code === "KeyB" && s.view.kind !== "trash") {
-        return handled(), void toggleTray(sel());
-      }
-      // Rotate (before ⌘R = rename). The files are not changed.
-      if (mod && e.shiftKey && !e.altKey && (e.code === "KeyR" || e.code === "KeyL") && s.view.kind !== "trash") {
-        return handled(), void orient(sel(), e.code === "KeyR" ? "rotateCw" : "rotateCcw");
-      }
-      if (e.key === "F2" || (mod && e.code === "KeyR")) {
-        handled();
-        if (s.selected.size === 1) s.requestItemRename();
-        else if (s.view.kind === "folder") s.setRenamingFolder(s.view.id);
-        return;
-      }
-
-      // Thumbnail size
-      // (the sample size in the specimen layout)
-      if (mod && (e.key === "=" || e.key === "+" || e.key === ";")) {
-        if (s.layout === "specimen") return handled(), s.setSpecimenSize(s.specimenSize + 8);
-        return handled(), s.setThumbSize(Math.min(360, s.thumbSize + 20));
-      }
-      if (mod && e.key === "-") {
-        if (s.layout === "specimen") return handled(), s.setSpecimenSize(s.specimenSize - 8);
-        return handled(), s.setThumbSize(Math.max(80, s.thumbSize - 20));
-      }
 
       // Ratings: 0-5, Shift+number rates and moves to the next image.
       const digit = /^(Digit|Numpad)([0-5])$/.exec(e.code);
@@ -720,15 +639,9 @@ export function Grid() {
       if (key in delta && !mod) {
         handled();
         move(delta[key], e.shiftKey);
-      } else if ((e.key === " " || e.key === "Enter") && cur >= 0) {
+      } else if ((e.key === " " || e.key === "Enter") && !mod && cur >= 0) {
         handled();
         s.openViewer(cur);
-      } else if (e.key === "Delete" || (mod && e.key === "Backspace")) {
-        // Plain Backspace no longer deletes (too easy to hit by accident).
-        handled();
-        void deleteSelection(sel());
-      } else if (e.key === "Escape") {
-        s.setSelection([]);
       }
     };
     /** ±1 = previous/next item, ±2 = the box above/below (layout-aware). */

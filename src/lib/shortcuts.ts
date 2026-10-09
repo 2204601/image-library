@@ -1,14 +1,15 @@
 /**
  * The keyboard shortcuts and mouse gestures, for the shortcut list (⌘/).
- * The handlers themselves are in Grid.tsx / Viewer.tsx and the dialogs; keep
- * this in step with them. (See docs/MENUS.md: this becomes the seed of a
- * single command table that the menus and the handlers also use.)
+ * Rows of operations come from the command table (commands.ts), which the
+ * menus and the list's key handler use too; the rest (moving around, the
+ * viewer, the mouse) are described here.
  *
  * A combo is written like "Mod+Shift+R": Mod is ⌘ on macOS and Ctrl elsewhere.
  * "Click", "Drag", "Wheel" and "Pinch" are mouse gestures, "0-5" and "Arrows"
  * key ranges, "=" the ⌘+ key.
  */
 import { KINDS, type ItemKind } from "./api";
+import { command } from "./commands";
 import type { Layout } from "../store";
 
 export type ShortcutRow = {
@@ -23,97 +24,112 @@ export type ShortcutRow = {
 
 export type ShortcutSection = { id: string; title: string; rows: ShortcutRow[] };
 
-const modes: ShortcutRow = {
-  label: KINDS.map((k) => k.label).join(" / "),
-  keys: KINDS.map((_, i) => `Mod+${i + 1}`),
-};
+/** A row for a command; `extra` adds keys only the list or the viewer handles. */
+function cmd(id: string, over: Partial<ShortcutRow> = {}): ShortcutRow {
+  const c = command(id);
+  return { label: c.title, keys: c.keys ?? [], kinds: c.kinds, ...over };
+}
 
-export const SHORTCUTS: ShortcutSection[] = [
-  {
-    id: "general",
-    title: "全体",
-    rows: [
-      modes,
-      { label: "サイドバーの表示・非表示", keys: ["Tab", "Mod+Alt+1"] },
-      { label: "詳細パネルの表示・非表示", keys: ["Mod+I", "Mod+Alt+2"] },
-      { label: "検索", keys: ["Mod+F"] },
-      { label: "絞り込み", keys: ["Mod+Shift+F"] },
-      { label: "フォルダを開く（名前で探す）", keys: ["Mod+J"] },
-      {
-        label: "サムネイルを大きく / 小さく",
-        labelIn: { specimen: "見本の文字を大きく / 小さく" },
-        keys: ["Mod+=", "Mod+-"],
-      },
-      { label: "ショートカット一覧", keys: ["Mod+/", "?"] },
-    ],
-  },
-  {
-    id: "list",
-    title: "一覧の移動と選択",
-    rows: [
-      { label: "移動", keys: ["Arrows", "A", "D"] },
-      { label: "範囲を選択", keys: ["Shift+Arrows", "Shift+Click"] },
-      { label: "選択に追加・外す", keys: ["Mod+Click"] },
-      { label: "囲んで選択（背景からドラッグ）", keys: ["Drag", "Shift+Drag"] },
-      { label: "すべてを選択", keys: ["Mod+A"] },
-      { label: "選択を解除", keys: ["Esc"] },
-      { label: "表示（ビューアで開く）", keys: ["Space", "Enter"] },
-    ],
-  },
-  {
-    id: "item",
-    title: "選択した項目",
-    rows: [
-      { label: "お気に入り", keys: ["F"] },
-      { label: "ピン留め", keys: ["P"] },
-      { label: "作業台に追加・外す", keys: ["B"] },
-      { label: "評価", keys: ["0-5"] },
-      { label: "評価して次へ", keys: ["Shift+0-5"] },
-      { label: "左に回転 / 右に回転", keys: ["Mod+Shift+L", "Mod+Shift+R"], kinds: ["image"] },
-      { label: "名前を変更", keys: ["F2", "Mod+R"] },
-      { label: "コピー", keys: ["Mod+C"] },
-      { label: "タグをコピー / 貼り付け", keys: ["Mod+Shift+C", "Mod+Shift+V"] },
-      { label: "ゴミ箱へ移動", keys: ["Mod+Backspace", "Delete"] },
-    ],
-  },
-  {
-    id: "organize",
-    title: "整理",
-    rows: [
-      { label: "フォルダへ移動…", keys: ["Mod+Shift+J"] },
-      { label: "最後に使ったフォルダへ移動", keys: ["Shift+D"] },
-      { label: "フォルダへ入れる", keys: ["Drag"] },
-      { label: "新しいフォルダ", keys: ["Mod+Shift+N"] },
-      { label: "新しいスマートフォルダ", keys: ["Mod+Shift+Alt+N"] },
-      { label: "フォルダを上へ / 下へ", keys: ["Mod+[", "Mod+]"] },
-      { label: "フォルダを先頭へ / 末尾へ", keys: ["Mod+Shift+[", "Mod+Shift+]"] },
-    ],
-  },
-  {
-    id: "viewer",
-    title: "ビューア",
-    rows: [
-      { label: "前 / 次", keys: ["Arrows", "A", "D"] },
-      { label: "最初 / 最後", keys: ["Home", "End"] },
-      { label: "閉じる", keys: ["Esc", "Space", "Enter"] },
-      { label: "全体表示 ⇔ 実寸", keys: ["Z"], kinds: ["image"] },
-      { label: "拡大 / 縮小", keys: ["Mod+=", "Mod+-", "Alt+Wheel", "Pinch"], kinds: ["image"] },
-      { label: "実寸 / 全体を表示", keys: ["Mod+0", "Mod+9"], kinds: ["image"] },
-      { label: "詳細", keys: ["I"] },
-      { label: "前後のサムネイル", keys: ["T"] },
-      { label: "お気に入り・ピン留め・作業台・評価", keys: ["F", "P", "B", "0-5"] },
-      { label: "左に回転 / 右に回転", keys: ["Mod+Shift+L", "Mod+Shift+R"], kinds: ["image"] },
-    ],
-  },
-  {
-    id: "dialog",
-    title: "ダイアログ・入力",
-    rows: [
-      { label: "閉じる・入力をやめる", keys: ["Esc"] },
-      { label: "候補を選ぶ / 決定（フォルダ選び・タグ）", keys: ["↑", "↓", "Enter"] },
-    ],
-  },
-];
+/** Two commands on one row ("左に回転 / 右に回転"). */
+function pair(a: string, b: string, label: string): ShortcutRow {
+  const x = command(a);
+  const y = command(b);
+  return { label, keys: [...(x.keys ?? []), ...(y.keys ?? [])], kinds: x.kinds };
+}
+
+let sections: ShortcutSection[] | null = null;
+
+/** Built on first use: the command table must be loaded first (it imports the shortcut list's store). */
+export function shortcutSections(): ShortcutSection[] {
+  sections ??= [
+    {
+      id: "general",
+      title: "全体",
+      rows: [
+        { label: KINDS.map((k) => k.label).join(" / "), keys: KINDS.map((_, i) => `Mod+${i + 1}`) },
+        cmd("view.sidebar", { label: "サイドバーの表示・非表示" }),
+        cmd("view.inspector", { label: "詳細パネルの表示・非表示" }),
+        cmd("edit.search"),
+        cmd("edit.filter"),
+        cmd("go.folder", { label: "フォルダを開く（名前で探す）" }),
+        {
+          ...pair("view.zoomIn", "view.zoomOut", "サムネイルを大きく / 小さく"),
+          labelIn: { specimen: "見本の文字を大きく / 小さく" },
+        },
+        cmd("app.settings", { label: "設定" }),
+        cmd("help.shortcuts", { label: "ショートカット一覧" }),
+      ],
+    },
+    {
+      id: "list",
+      title: "一覧の移動と選択",
+      rows: [
+        { label: "移動", keys: ["Arrows", "A", "D"] },
+        { label: "範囲を選択", keys: ["Shift+Arrows", "Shift+Click"] },
+        { label: "選択に追加・外す", keys: ["Mod+Click"] },
+        { label: "囲んで選択（背景からドラッグ）", keys: ["Drag", "Shift+Drag"] },
+        cmd("edit.selectAll"),
+        cmd("edit.deselect"),
+        cmd("item.show", { label: "表示（ビューアで開く）" }),
+      ],
+    },
+    {
+      id: "item",
+      title: "選択した項目",
+      rows: [
+        cmd("item.favorite"),
+        cmd("item.pin"),
+        cmd("item.tray", { label: "作業台に追加・外す" }),
+        { label: "評価", keys: ["0-5"] },
+        { label: "評価して次へ", keys: ["Shift+0-5"] },
+        pair("item.rotateCcw", "item.rotateCw", "左に回転 / 右に回転"),
+        cmd("item.rename"),
+        cmd("item.copy"),
+        pair("item.copyTags", "item.pasteTags", "タグをコピー / 貼り付け"),
+        cmd("list.export", { label: "書き出し（選択がなければ一覧）" }),
+        cmd("item.trash"),
+      ],
+    },
+    {
+      id: "organize",
+      title: "整理",
+      rows: [
+        cmd("item.moveTo"),
+        cmd("item.moveToLast"),
+        { label: "フォルダへ入れる", keys: ["Drag"] },
+        cmd("folder.new"),
+        cmd("smart.new"),
+        pair("folder.up", "folder.down", "フォルダを上へ / 下へ"),
+        pair("folder.top", "folder.bottom", "フォルダを先頭へ / 末尾へ"),
+      ],
+    },
+    {
+      id: "viewer",
+      title: "ビューア",
+      rows: [
+        { label: "前 / 次", keys: ["Arrows", "A", "D"] },
+        { label: "最初 / 最後", keys: ["Home", "End"] },
+        { label: "閉じる", keys: ["Esc", "Space", "Enter"] },
+        { label: "全体表示 ⇔ 実寸", keys: ["Z"], kinds: ["image"] },
+        { label: "拡大 / 縮小", keys: ["Mod+=", "Mod+-", "Alt+Wheel", "Pinch"], kinds: ["image"] },
+        { label: "実寸 / 全体を表示", keys: ["Mod+0", "Mod+9"], kinds: ["image"] },
+        { label: "詳細", keys: ["I"] },
+        { label: "前後のサムネイル", keys: ["T"] },
+        { label: "お気に入り・ピン留め・作業台・評価", keys: ["F", "P", "B", "0-5"] },
+        pair("item.rotateCcw", "item.rotateCw", "左に回転 / 右に回転"),
+      ],
+    },
+    {
+      id: "dialog",
+      title: "ダイアログ・入力",
+      rows: [
+        { label: "閉じる・入力をやめる", keys: ["Esc"] },
+        { label: "候補を選ぶ / 決定（フォルダ選び・タグ）", keys: ["↑", "↓", "Enter"] },
+      ],
+    },
+  ];
+  return sections;
+}
 
 // ------------------------------------------------------------ display
 
@@ -144,8 +160,8 @@ export function keyParts(combo: string): KeyPart[] {
   });
 }
 
-/** "⌘⇧R" / "Ctrl+Shift+R": how a combo reads, for searching. */
-const comboText = (combo: string) =>
+/** "⌘⇧R" / "Ctrl+Shift+R": how a combo reads (menus, searching). */
+export const comboText = (combo: string) =>
   keyParts(combo)
     .map((p) => p.text)
     .join(isMac ? "" : "+");

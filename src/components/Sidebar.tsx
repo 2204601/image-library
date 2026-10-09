@@ -12,6 +12,7 @@ import {
   Inbox,
   Keyboard,
   Layers,
+  MoreHorizontal,
   Pin,
   Tag as TagIcon,
   Tags,
@@ -29,20 +30,25 @@ import {
   createFolder,
   createSmartFolder,
   emptyTrash,
+  exportList,
   exportTray,
   renameSmartFolder,
   sheetFromTray,
   shiftFolder,
   sortFoldersByName,
+  sheetList,
+  transferList,
+  trayList,
 } from "../lib/actions";
 import { FontFilters } from "../features/fonts/FontFilters";
 import { api, KINDS, kindLabel, type Folder, type ItemKind, type View } from "../lib/api";
-import { activeConditions, isHidden, MODES, usedModes, useStore, type Mode } from "../store";
+import { activeConditions, isHidden, MODES, usedModes, useStore, type ListSource, type Mode } from "../store";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
 import { SHORTCUT_HELP_KEY, useShortcutHelp } from "./ShortcutHelp";
 import { colorHex } from "../lib/colors";
+import { comboText } from "../lib/shortcuts";
 
 const collapsedKey = (root: string) => `collapsed:${root}`;
 function loadCollapsed(root: string): Set<string> {
@@ -71,6 +77,16 @@ function hideItem(id: string): MenuItem {
   };
 }
 
+/** The same "contents of this list" actions for every list in the sidebar (docs/MENUS.md §3). */
+function contentsMenu(source: ListSource, what = "中身"): MenuItem[] {
+  return [
+    { label: `${what}を書き出し…`, onClick: () => exportList(source) },
+    { label: "まとめて出力…", onClick: () => sheetList(source) },
+    ...(source.kind === "tray" ? [] : [{ label: "作業台にすべて追加", onClick: () => trayList(source) }]),
+    { label: "別のライブラリへ…", onClick: () => transferList(source) },
+  ];
+}
+
 const sameView = (a: View, b: View) =>
   a.kind === b.kind && (!("id" in a) || ("id" in b && a.id === b.id));
 
@@ -91,6 +107,7 @@ export function Row({
   label,
   count,
   children,
+  onContextMenu,
   ...rest
 }: {
   active?: boolean;
@@ -108,6 +125,7 @@ export function Row({
   return (
     <div
       {...rest}
+      onContextMenu={onContextMenu}
       data-drop={dropId}
       className={`group relative flex h-7 cursor-default items-center gap-1.5 rounded-md pr-2 transition-[background-color,transform,box-shadow] duration-150 ${
         over
@@ -138,10 +156,27 @@ export function Row({
       {count !== undefined && (
         <span
           key={`count-${flash ?? ""}`}
-          className={`text-xs tabular-nums ${over ? "text-white" : "text-dim"} ${flash !== null ? "animate-pop" : ""}`}
+          className={`text-xs tabular-nums ${over ? "text-white" : "text-dim"} ${flash !== null ? "animate-pop" : ""} ${
+            onContextMenu ? "group-hover:hidden" : ""
+          }`}
         >
           {count}
         </span>
+      )}
+      {/* The right-click menu, for those who don't right-click. */}
+      {onContextMenu && (
+        <button
+          title="メニュー"
+          aria-label="メニュー"
+          className="-mr-1 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-dim group-hover:flex hover:bg-white/10 hover:text-fg"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.stopPropagation();
+            onContextMenu(e as unknown as React.MouseEvent<HTMLDivElement>);
+          }}
+        >
+          <MoreHorizontal size={14} />
+        </button>
       )}
     </div>
   );
@@ -278,26 +313,34 @@ function FolderTree() {
             onDoubleClick={() => setEditing(f.id)}
             onContextMenu={(e) =>
               showMenu(e, [
-                { label: "サブフォルダを作成", onClick: () => create(f.id) },
+                { label: "新しいサブフォルダ", onClick: () => create(f.id) },
                 { label: "名前を変更", hint: "F2", onClick: () => setEditing(f.id) },
+                { separator: true },
+                ...contentsMenu({ kind: "folder", id: f.id }),
+                { separator: true },
+                { colors: { current: f.color, onPick: (c) => run(() => api.setFolderColor(f.id, c)) } },
+                { separator: true },
                 {
-                  label: `${showSubfolders ? "✓ " : ""}サブフォルダの内容を表示`,
+                  label: "並べ替え",
+                  submenu: [
+                    { label: "上へ", hint: comboText("Mod+["), onClick: () => shiftFolder(f.id, -1) },
+                    { label: "下へ", hint: comboText("Mod+]"), onClick: () => shiftFolder(f.id, 1) },
+                    ...(f.parentId
+                      ? [{ label: "最上位へ移動", onClick: () => run(() => api.moveFolder(f.id, null)) }]
+                      : []),
+                    ...(kids
+                      ? [{ label: "サブフォルダを名前順に", onClick: () => sortFoldersByName(f.id) }]
+                      : []),
+                  ],
+                },
+                {
+                  label: "サブフォルダの内容を表示",
+                  checked: showSubfolders,
                   onClick: () => {
                     setView({ kind: "folder", id: f.id });
                     setShowSubfolders(!showSubfolders);
                   },
                 },
-                ...(f.parentId
-                  ? [{ label: "最上位へ移動", onClick: () => run(() => api.moveFolder(f.id, null)) }]
-                  : []),
-                { separator: true },
-                { colors: { current: f.color, onPick: (c) => run(() => api.setFolderColor(f.id, c)) } },
-                { separator: true },
-                { label: "上へ", hint: "⌘[", onClick: () => shiftFolder(f.id, -1) },
-                { label: "下へ", hint: "⌘]", onClick: () => shiftFolder(f.id, 1) },
-                ...(kids
-                  ? [{ label: "サブフォルダを名前順に並べ替え", onClick: () => sortFoldersByName(f.id) }]
-                  : []),
                 { separator: true },
                 { label: "削除", danger: true, onClick: () => confirmDeleteFolder(f.id, f.name) },
               ])
@@ -445,6 +488,9 @@ function SmartFolderList() {
             showMenu(e, [
               { label: "条件を編集", onClick: () => startEditSmart(sf) },
               { label: "名前を変更", hint: "F2", onClick: () => setEditing(sf.id) },
+              { separator: true },
+              ...contentsMenu({ kind: "smart", id: sf.id }),
+              { separator: true },
               { colors: { current: sf.color, onPick: (c) => run(() => api.setSmartFolderColor(sf.id, c)) } },
               { separator: true },
               { label: "削除", danger: true, onClick: () => confirmDeleteSmartFolder(sf.id, sf.name) },
@@ -564,6 +610,9 @@ function TagList() {
           onContextMenu={(e) =>
             showMenu(e, [
               { label: "名前を変更", onClick: () => setEditing(t.id) },
+              { separator: true },
+              ...contentsMenu({ kind: "tag", id: t.id }, "このタグの項目"),
+              { separator: true },
               { colors: { current: t.color, onPick: (c) => run(() => api.setTagColor(t.id, c)) } },
               { separator: true },
               { label: "削除", danger: true, onClick: () => confirmDeleteTag(t.id, t.name) },
@@ -610,8 +659,9 @@ export function Sidebar() {
       ? [{ label: "ゴミ箱を空にする", danger: true, onClick: emptyTrash }]
       : v.kind === "tray" && counts.tray > 0
         ? [
-            { label: "まとめて出力…", onClick: sheetFromTray },
             { label: "書き出し…", onClick: exportTray },
+            { label: "まとめて出力…", onClick: sheetFromTray },
+            { label: "別のライブラリへ…", onClick: () => transferList({ kind: "tray" }) },
             { separator: true },
             { label: "作業台を空にする", onClick: clearTray },
           ]
@@ -632,11 +682,17 @@ export function Sidebar() {
             dropId={s.dropId}
             title={s.title}
             onClick={() => setView(s.view)}
-            onContextMenu={(e) => {
-              const items = menuOf(s.view);
-              if (hideable(s.view)) items.push(...(items.length ? [{ separator: true } as const] : []), hideItem(s.view.kind));
-              if (items.length) showMenu(e, items);
-            }}
+            onContextMenu={
+              // "すべて" has nothing to offer (no "…" either).
+              hideable(s.view) || menuOf(s.view).length
+                ? (e) => {
+                    const items = menuOf(s.view);
+                    if (hideable(s.view))
+                      items.push(...(items.length ? [{ separator: true } as const] : []), hideItem(s.view.kind));
+                    showMenu(e, items);
+                  }
+                : undefined
+            }
           />
         ))}
         {mode === "font" && <FontFilters />}

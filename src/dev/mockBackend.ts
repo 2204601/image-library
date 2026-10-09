@@ -458,7 +458,44 @@ function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
 const ofKind = (kind: string | null | undefined) => (xs: MockItem[]) =>
   kind ? xs.filter((i) => i.kind === kind) : xs;
 
+// The menu bar (src/lib/menuBar.ts): items by resource id, and the menu set
+// as the app menu, for checking its structure in the browser
+// (`window.__MOCK_MENU__()` prints it as text).
+const menuItems = new Map<number, { kind: string; options: any }>();
+let menuSeq = 0;
+let appMenu: number | null = null;
+function menuText(rid: number, depth = 0): string[] {
+  const m = menuItems.get(rid);
+  if (!m) return [];
+  const o = m.options ?? {};
+  const pad = "  ".repeat(depth);
+  const flags = `${o.enabled === false ? " [off]" : ""}${o.checked ? " ✓" : ""}${o.accelerator ? `  <${o.accelerator}>` : ""}`;
+  const name = m.kind === "Predefined" ? `(${typeof o.item === "string" ? o.item : "About"})` : (o.text ?? "");
+  const head = m.kind === "Menu" ? [] : [`${pad}${name}${flags}`];
+  const kids = (o.items ?? []).flatMap((i: [number, string]) => menuText(i[0], m.kind === "Menu" ? depth : depth + 1));
+  return [...head, ...kids];
+}
+(window as unknown as { __MOCK_MENU__: () => string }).__MOCK_MENU__ = () =>
+  appMenu === null ? "(no menu)" : menuText(appMenu).join("\n");
+
 function handle(cmd: string, a: any): unknown {
+  if (cmd.startsWith("plugin:menu|")) {
+    const op = cmd.slice("plugin:menu|".length);
+    if (op === "new") {
+      const rid = ++menuSeq;
+      menuItems.set(rid, { kind: a.kind, options: a.options });
+      return [rid, `m${rid}`];
+    }
+    if (op === "set_as_app_menu") {
+      appMenu = a.rid;
+      return null;
+    }
+    const item = menuItems.get(a.rid);
+    if (item && op === "set_text") item.options.text = a.text;
+    if (item && op === "set_enabled") item.options.enabled = a.enabled;
+    if (item && op === "set_checked") item.options.checked = a.checked;
+    return null;
+  }
   switch (cmd) {
     case "open_last_library":
     case "create_library":

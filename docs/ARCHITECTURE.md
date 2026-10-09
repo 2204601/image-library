@@ -8,6 +8,9 @@
 ## モード
 
 - `store.ts` の `mode`（`"image" | "font" | "file"`）。サイドバー上部の切替、⌘1 / ⌘2 / ⌘3（`MODES` の順）
+- **ライブラリごとに記憶する**：ライブラリは最後に開いていたモードで開く（`library.db` の `settings` テーブルの `lastMode`。
+  無ければ件数の多い種類、`lib/librarySettings.ts` の `openingMode`）。ライブラリごとに「使う種類」（`modes`）を選べ、
+  使わない種類はモード切替に出ず、⌘1〜⌘3 も何もしない（キーの割り当ては `MODES` のまま）。docs/SETTINGS.md
 - 一覧のクエリは常に `filter.kinds = [mode]` で問い合わせる。件数（`get_counts`）、フォルダ・タグ・スマートフォルダの件数、
   絞り込みバーの形式一覧（`list_exts`）も `kind` 引数でモードのものだけを数える（`db.rs` の `kind_where`）
   - `Counts.kinds` だけは常に全種類の件数（モード切替のバッジ用）
@@ -19,6 +22,19 @@
 
 モードを増やすとき（例：動画）：`ItemKind` と `KINDS`（`lib/api.ts`）、`MODE_LAYOUTS` / `MODE_GROUPS`、
 サイドバーの `ModeSwitch`、`features/<kind>/` を足す。
+
+## コマンド
+
+アプリの操作は `src/lib/commands.ts` の `COMMANDS` に 1 つずつ定義する（id・名前・状態に応じた表示名・キー・使える種類・
+使えるか・チェック・実行）。次はすべてこの表から作るので、操作を足すときはまずここに足す（docs/MENUS.md）。
+
+- 一覧のキー処理（`Grid.tsx` → `runKey`）。一覧の中だけの移動・評価の数字・Space / Enter は `Grid.tsx` に残す
+- メニューバー（`lib/menuBar.ts`）。⌘ 付きのキーはアクセラレータ、1 文字のキーは表示だけ
+- 右クリックメニューの行（`lib/menuItems.ts` の `commandItem` / `commandIcon`）
+- ショートカット一覧（`lib/shortcuts.ts` の `shortcutSections`）。マウス操作やビューアだけのキーは説明の行として持つ
+
+「一覧の中身への操作」（書き出し・まとめて出力・作業台にすべて追加・別のライブラリへ）は、対象を `ListSource`
+（選択・表示中の一覧・フォルダ・スマートフォルダ・タグ・作業台）で受け、中身は `listTargets`（`lib/actions.ts`）で取る。
 
 ## 境界
 

@@ -533,13 +533,41 @@ pub fn copy_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<usize> 
 
 /// Copies the original files into `dest`, never overwriting existing files.
 #[tauri::command]
-pub fn export_items(state: State<AppState>, ids: Vec<String>, dest: PathBuf) -> CmdResult<usize> {
+pub fn export_items(
+    state: State<AppState>,
+    ids: Vec<String>,
+    dest: PathBuf,
+    subdirs: Option<Vec<String>>,
+) -> CmdResult<usize> {
     let items = item_paths(&state, &ids)?;
     for (item, src) in &items {
-        let target = export_target(&dest, &item.name, &item.ext);
-        fs::copy(src, target).map_err(err)?;
+        // The folder under `dest` given for this item (same position as its id).
+        let sub = subdirs
+            .as_ref()
+            .and_then(|s| s.get(ids.iter().position(|x| *x == item.id)?))
+            .map_or("", String::as_str);
+        let dir = export_dir(&dest, sub);
+        fs::create_dir_all(&dir).map_err(err)?;
+        fs::copy(src, export_target(&dir, &item.name, &item.ext)).map_err(err)?;
     }
     Ok(items.len())
+}
+
+/// `dest` plus a relative folder path ("旅行/2025/京都", `/`-separated), each
+/// part made safe as a file name. Empty parts, "." and ".." are dropped so
+/// nothing lands outside `dest`.
+fn export_dir(dest: &std::path::Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .fold(dest.to_path_buf(), |d, p| d.join(safe_name(p)))
+}
+
+/// Characters not allowed in file names on Windows (or anywhere) become `_`.
+fn safe_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect()
 }
 
 /// `dest/name.ext`, or `name (2).ext`… when taken. Keeps a renamed item's
@@ -549,10 +577,7 @@ fn export_target(dest: &std::path::Path, name: &str, ext: &str) -> PathBuf {
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case(ext));
     let stem = if has_ext { &name[..name.len() - ext.len() - 1] } else { name };
-    let clean: String = stem
-        .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
-        .collect();
+    let clean = safe_name(stem);
     let mut candidate = dest.join(format!("{clean}.{ext}"));
     let mut n = 2;
     while candidate.exists() {
@@ -1121,6 +1146,16 @@ mod tests {
         std::fs::write(d.join("cat.png"), "x").unwrap();
         std::fs::write(d.join("cat (2).png"), "x").unwrap();
         assert_eq!(super::export_target(d, "cat.png", "png"), d.join("cat (3).png"));
+    }
+
+    #[test]
+    fn export_folders() {
+        let d = std::path::Path::new("/out");
+        assert_eq!(super::export_dir(d, ""), d);
+        assert_eq!(super::export_dir(d, "旅行/2025/京都"), d.join("旅行").join("2025").join("京都"));
+        // Names unsafe on Windows are replaced; nothing climbs out of `dest`.
+        assert_eq!(super::export_dir(d, "a:b/../c*"), d.join("a_b").join("c_"));
+        assert_eq!(super::export_dir(d, "/./ x /"), d.join("x"));
     }
 
     #[test]

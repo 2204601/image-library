@@ -42,7 +42,7 @@ import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
 const Divider = () => <div className="mx-0.5 h-5 w-px shrink-0 bg-line" />;
 
 /** Sort keys; `only` limits one to a mode (fonts have no pixel size). */
-const SORTS: { key: SortKey; label: string; only?: Mode }[] = [
+export const SORTS: { key: SortKey; label: string; only?: Mode }[] = [
   { key: "importedAt", label: "追加日" },
   { key: "name", label: "名前" },
   { key: "size", label: "ファイルサイズ" },

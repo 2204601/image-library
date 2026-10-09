@@ -17,10 +17,12 @@ import { ShortcutHelp } from "./components/ShortcutHelp";
 import { TransferDialog } from "./components/TransferDialog";
 import { PairDialog } from "./components/WebImportDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
+import { ExportDialog } from "./components/ExportDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
 import { api, type ImportSummary } from "./lib/api";
-import { checkForUpdate, loadAppVersion, scheduleUpdateCheck } from "./lib/update";
+import { loadAppVersion, scheduleUpdateCheck } from "./lib/update";
+import { installMenuBar } from "./lib/menuBar";
 import { notifyUnusedKinds, useStore } from "./store";
 
 /** Sidebar folder under a native file drag (position is in physical pixels). */
@@ -50,13 +52,8 @@ export default function App() {
     return scheduleUpdateCheck();
   }, []);
 
-  // macOS menu bar: Image Library › アップデートを確認… (see src-tauri/src/lib.rs).
-  useEffect(() => {
-    const unlisten = listen("check-update", () => checkForUpdate(true));
-    return () => {
-      unlisten.then((f) => f());
-    };
-  }, []);
+  // The menu bar (macOS and Windows), made from the command table.
+  useEffect(() => installMenuBar(), []);
 
   // Saved from the browser extension (src-tauri/src/webimport.rs). A batch
   // from the extension's image list arrives one by one: report it once.
@@ -193,6 +190,7 @@ export default function App() {
       <DuplicateReview />
       <SheetDialog />
       <TransferDialog />
+      <ExportDialog />
       <SettingsDialog />
       <PairDialog />
       <ShortcutHelp />

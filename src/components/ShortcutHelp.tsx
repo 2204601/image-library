@@ -2,7 +2,7 @@ import { Keyboard, Search, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import { kindLabel } from "../lib/api";
-import { isMac, keyParts, matchRow, SHORTCUTS } from "../lib/shortcuts";
+import { isMac, keyParts, matchRow, shortcutSections } from "../lib/shortcuts";
 import { useStore } from "../store";
 
 export const useShortcutHelp = create<{ open: boolean; setOpen: (open: boolean) => void }>((set) => ({
@@ -60,7 +60,7 @@ function Panel() {
     // What applies where the list was opened from comes first.
     const first = inViewer ? ["viewer"] : ["list", "item"];
     const rank = (id: string) => (first.includes(id) ? first.indexOf(id) : first.length);
-    return [...SHORTCUTS]
+    return [...shortcutSections()]
       .sort((a, b) => rank(a.id) - rank(b.id))
       .map((s) => ({
         ...s,

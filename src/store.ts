@@ -104,6 +104,24 @@ export interface TransferRequest {
   count: number;
 }
 
+/**
+ * What a "the contents of this list" action works on: given items, the list
+ * on screen, or a folder / smart folder / tag / the tray from the sidebar.
+ */
+export type ListSource =
+  | { kind: "ids"; ids: string[] }
+  | { kind: "shown" }
+  | { kind: "folder"; id: string }
+  | { kind: "smart"; id: string }
+  | { kind: "tag"; id: number }
+  | { kind: "tray" };
+
+/** The export dialog: what to write and its title ("「旅行」を書き出し"). */
+export interface ExportRequest {
+  source: ListSource;
+  title: string;
+}
+
 /** The settings screen and where in it to open. */
 export type SettingsTab = "general" | "library" | "integration";
 
@@ -177,6 +195,8 @@ interface State {
   sheet: Item[] | null;
   /** The "別のライブラリへ" dialog: selected items, or every item of a kind. */
   transfer: TransferRequest | null;
+  /** The export dialog (書き出し…). */
+  exporting: ExportRequest | null;
 
   /** What the grid shows: the query result, regrouped by `groupBy`. */
   items: Item[];
@@ -262,6 +282,7 @@ interface State {
   setReview: (r: DuplicateReview | null) => void;
   setSheet: (items: Item[] | null) => void;
   setTransfer: (t: TransferRequest | null) => void;
+  setExporting: (r: ExportRequest | null) => void;
   refresh: () => Promise<void>;
 
   select: (id: string, mode: "only" | "toggle" | "range") => void;
@@ -467,6 +488,7 @@ export const useStore = create<State>((set, get) => ({
   review: null,
   sheet: null,
   transfer: null,
+  exporting: null,
 
   items: [],
   rawItems: [],
@@ -773,6 +795,7 @@ export const useStore = create<State>((set, get) => ({
   setReview: (review) => set({ review }),
   setSheet: (sheet) => set({ sheet }),
   setTransfer: (transfer) => set({ transfer }),
+  setExporting: (exporting) => set({ exporting }),
 
   refresh: async () => {
     if (!get().library) return;

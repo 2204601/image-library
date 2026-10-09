@@ -369,7 +369,9 @@ export const api = {
   setPinned: (ids: string[], on: boolean) => invoke<void>("set_pinned", { ids, on }),
   orientItems: (ids: string[], op: OrientOp) => invoke<number>("orient_items", { ids, op }),
   copyItems: (ids: string[]) => invoke<number>("copy_items", { ids }),
-  exportItems: (ids: string[], dest: string) => invoke<number>("export_items", { ids, dest }),
+  /** `subdirs[i]`: folder under `dest` for `ids[i]` ("旅行/2025", "" = `dest` itself). */
+  exportItems: (ids: string[], dest: string, subdirs?: string[]) =>
+    invoke<number>("export_items", { ids, dest, subdirs: subdirs ?? null }),
 
   /** Puts items on the work tray, after the ones there; returns how many were new. */
   addToTray: (ids: string[]) => invoke<number>("add_to_tray", { ids }),

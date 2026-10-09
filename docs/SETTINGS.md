@@ -159,6 +159,9 @@ CREATE TABLE IF NOT EXISTS settings (
 
 ## 実装の順番
 
+すべて実装済み（1〜7）。`src/lib/librarySettings.ts`（読み込み・開くときのモード・サイドバーの項目の一覧）、
+`components/SettingsDialog.tsx`、`db.rs` の `library_settings` / `set_library_setting` / `used_kinds`。
+
 1. `settings` テーブルと `get_library_settings` / `set_library_setting`（`db.rs`、`commands.rs`）、テスト
 2. `store` に `librarySettings`。`setLibrary` で開くときのモードを決め、`setMode` で `lastMode` を保存
 3. `ModeSwitch` を使う種類だけに。⌘1〜⌘3 で使っていない種類を無視
