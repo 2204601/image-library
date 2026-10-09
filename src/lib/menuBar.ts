@@ -77,6 +77,7 @@ const APP_WIDE = new Set([
   "app.checkUpdate",
   "help.shortcuts",
   "help.webImport",
+  "help.claude",
 ]);
 
 async function live(
@@ -300,6 +301,7 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
   const help = submenu("ヘルプ", [
     cmd("help.shortcuts"),
     cmd("help.webImport"),
+    cmd("help.claude"),
     ...(isMac ? [] : [sep(), cmd("app.checkUpdate"), PredefinedMenuItem.new({ item: { About: null }, text: "バージョン情報" })]),
   ]);
 

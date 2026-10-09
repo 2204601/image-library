@@ -40,8 +40,10 @@ flate2 = "1"
 tempfile = "3.27.0"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-# Local HTTP server for the browser extension (webimport.rs).
+# Local HTTP servers for the browser extension (webimport.rs) and Claude (mcp/).
 tiny_http = "0.12"
+# Images handed to Claude (mcp/tools.rs).
+base64 = "0.22"
 # Files: the preview inside iWork / Office files (files/mod.rs). Reading only.
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 

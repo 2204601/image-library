@@ -751,3 +751,21 @@ export async function pasteTags(ids: string[]) {
   st().rememberTags(names);
   st().toast(`${ids.length} 件にタグ ${names.length} 件を貼り付けました`);
 }
+
+/** Undoes changes made from Claude (newest first) and says how it went. */
+export async function undoChanges(ids: number[]) {
+  let skipped = 0;
+  let done = 0;
+  await st().run(async () => {
+    for (const id of [...ids].sort((a, b) => b - a)) {
+      skipped += (await api.undoChange(id)).skipped;
+      done++;
+    }
+  });
+  if (!done) return;
+  st().notify({
+    title: done > 1 ? `Claude の変更 ${done} 件を元に戻しました` : "Claude の変更を元に戻しました",
+    detail: skipped ? `${skipped} 件はその後に変更されていたため、そのままにしました` : undefined,
+    kind: "success",
+  });
+}

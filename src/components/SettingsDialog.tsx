@@ -11,6 +11,7 @@ import { isMac } from "../lib/shortcuts";
 import { appVersion, checkForUpdate } from "../lib/update";
 import { usedModes, useStore, type SettingsTab } from "../store";
 import { WebImportSettings } from "./WebImportDialog";
+import { ClaudeSettings } from "./ClaudeSettings";
 
 export const SETTINGS_KEY = isMac ? "⌘," : "Ctrl+,";
 
@@ -93,7 +94,13 @@ function Dialog({ tab }: { tab: SettingsTab }) {
           <div className="h-full overflow-y-auto px-6 py-5">
             {tab === "general" && <GeneralTab />}
             {tab === "library" && <LibraryTab />}
-            {tab === "integration" && <WebImportSettings />}
+            {tab === "integration" && (
+              <>
+                <WebImportSettings />
+                <div className="my-6 border-t border-line" />
+                <ClaudeSettings />
+              </>
+            )}
           </div>
           <button
             onClick={close}

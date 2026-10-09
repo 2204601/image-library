@@ -106,6 +106,7 @@ export const COMMANDS: Command[] = [
     run: () => useShortcutHelp.getState().setOpen(true),
   },
   { id: "help.webImport", title: "ブラウザ拡張と連携…", run: (s) => s.openSettings("integration") },
+  { id: "help.claude", title: "Claude と連携…", run: (s) => s.openSettings("integration", "settings-claude") },
 
   // ------------------------------------------------------------ library
   { id: "library.new", title: "新しいライブラリ…", run: () => void createLibraryDialog() },
