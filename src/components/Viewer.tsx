@@ -111,6 +111,7 @@ export function Viewer() {
     const go = (d: number) => show(index + d);
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as Element).closest?.("input, textarea, select")) return;
+      if (useStore.getState().settingsTab) return;
       const mod = e.metaKey || e.ctrlKey;
       // Ratings: 0-5, Shift+number rates and moves on.
       const digit = /^(Digit|Numpad)([0-5])$/.exec(e.code);

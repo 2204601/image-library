@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 14;
+const SCHEMA_VERSION: i32 = 15;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -237,6 +237,16 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
             "CREATE TABLE IF NOT EXISTS tray (
                item_id  TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
                position REAL NOT NULL
+             )",
+        )
+    })?;
+    // Settings of this library (docs/SETTINGS.md): the kinds it is used
+    // for, the mode it was left in, sidebar entries hidden. Values are JSON.
+    step(15, &|c| {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS settings (
+               key   TEXT PRIMARY KEY,
+               value TEXT NOT NULL
              )",
         )
     })?;
@@ -1272,6 +1282,55 @@ pub fn counts(conn: &Connection, kind: Option<Kind>) -> DbResult<Counts> {
     )
 }
 
+// ------------------------------------------------------------- settings
+
+/// Every setting of the library as JSON; values that don't parse are left out
+/// (written by something else, read by an older or newer build).
+pub fn library_settings(conn: &Connection) -> DbResult<BTreeMap<String, serde_json::Value>> {
+    let mut stmt = conn.prepare("SELECT key, value FROM settings")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut out = BTreeMap::new();
+    for row in rows {
+        let (key, value) = row?;
+        if let Ok(v) = serde_json::from_str(&value) {
+            out.insert(key, v);
+        }
+    }
+    Ok(out)
+}
+
+/// Stores a setting; `None` (or JSON null) removes it.
+pub fn set_library_setting(conn: &Connection, key: &str, value: Option<&serde_json::Value>) -> DbResult<()> {
+    match value.filter(|v| !v.is_null()) {
+        Some(v) => conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, v.to_string()],
+        )?,
+        None => conn.execute("DELETE FROM settings WHERE key = ?1", [key])?,
+    };
+    Ok(())
+}
+
+/// The kinds the library is used for (the `modes` setting); None = all of
+/// them. Kinds this build doesn't know are skipped.
+pub fn used_kinds(conn: &Connection) -> DbResult<Option<Vec<Kind>>> {
+    let value: Option<String> = conn
+        .query_row("SELECT value FROM settings WHERE key = 'modes'", [], |r| r.get(0))
+        .optional()?;
+    let names: Vec<String> = value.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
+    let kinds: Vec<Kind> = [Kind::Image, Kind::Font, Kind::File]
+        .into_iter()
+        .filter(|k| names.iter().any(|n| n == k.as_str()))
+        .collect();
+    Ok((!kinds.is_empty()).then_some(kinds))
+}
+
+/// Total size of the files in the library (trash included).
+pub fn total_size(conn: &Connection) -> DbResult<i64> {
+    conn.query_row("SELECT COALESCE(SUM(size), 0) FROM items", [], |r| r.get(0))
+}
+
 // -------------------------------------------------------------- folders
 
 #[derive(Debug, Clone, Serialize)]
@@ -2197,6 +2256,34 @@ mod tests {
         set_pinned(&conn, &s(&["a", "c"]), false).unwrap();
         assert_eq!(ids(query_items(&conn, &q(View::All)).unwrap()), s(&["a", "b", "c"]));
         assert_eq!(counts(&conn, None).unwrap().pinned, 0);
+    }
+
+    #[test]
+    fn library_settings_round_trip() {
+        let conn = mem();
+        assert!(library_settings(&conn).unwrap().is_empty());
+        assert_eq!(used_kinds(&conn).unwrap(), None);
+
+        let modes = serde_json::json!(["font", "video", "image"]);
+        set_library_setting(&conn, "modes", Some(&modes)).unwrap();
+        set_library_setting(&conn, "lastMode", Some(&serde_json::json!("font"))).unwrap();
+        // Unknown kinds are skipped, the order is the app's.
+        assert_eq!(used_kinds(&conn).unwrap(), Some(vec![Kind::Image, Kind::Font]));
+        let all = library_settings(&conn).unwrap();
+        assert_eq!(all["modes"], modes);
+        assert_eq!(all["lastMode"], "font");
+
+        // Overwrite, then remove with null; broken JSON is ignored.
+        set_library_setting(&conn, "lastMode", Some(&serde_json::json!("image"))).unwrap();
+        assert_eq!(library_settings(&conn).unwrap()["lastMode"], "image");
+        set_library_setting(&conn, "lastMode", Some(&serde_json::Value::Null)).unwrap();
+        set_library_setting(&conn, "modes", None).unwrap();
+        conn.execute("INSERT INTO settings VALUES ('broken', '{')", []).unwrap();
+        assert!(library_settings(&conn).unwrap().is_empty());
+        assert_eq!(used_kinds(&conn).unwrap(), None);
+        // Only unknown kinds = none chosen = all.
+        set_library_setting(&conn, "modes", Some(&serde_json::json!(["video"]))).unwrap();
+        assert_eq!(used_kinds(&conn).unwrap(), None);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 // The library menu (sidebar header) and the list of known libraries: the ones
 // opened or created before, favourites first. Also used on the welcome screen.
-import { Check, ChevronDown, FolderInput, FolderOpen, Library, Plus, Puzzle, RefreshCw, Star, X } from "lucide-react";
+import { Check, ChevronDown, FolderInput, FolderOpen, Library, Plus, Puzzle, Settings, Star, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   createLibraryDialog,
@@ -9,8 +9,8 @@ import {
   transferAllOfMode,
 } from "../lib/actions";
 import { api, kindLabel, type LibraryEntry } from "../lib/api";
-import { appVersion, checkForUpdate } from "../lib/update";
 import { useStore } from "../store";
+import { SETTINGS_KEY } from "./SettingsDialog";
 
 export function useLibraries() {
   const [list, setList] = useState<LibraryEntry[] | null>(null);
@@ -185,13 +185,13 @@ function Panel({ close }: { close: () => void }) {
           <MenuButton
             icon={<Puzzle size={15} />}
             label="ブラウザ拡張と連携…"
-            onClick={then(() => useStore.getState().setWebImportOpen(true))}
+            onClick={then(() => useStore.getState().openSettings("integration"))}
           />
           <MenuButton
-            icon={<RefreshCw size={15} />}
-            label="アップデートを確認…"
-            hint={appVersion()}
-            onClick={then(() => checkForUpdate(true))}
+            icon={<Settings size={15} />}
+            label="設定…"
+            hint={SETTINGS_KEY}
+            onClick={then(() => useStore.getState().openSettings("general"))}
           />
         </div>
       </div>

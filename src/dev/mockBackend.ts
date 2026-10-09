@@ -442,6 +442,10 @@ const mockLibraries = [
   { root: "/Volumes/Archive/Old.library", name: "Old", favorite: false, lastOpened: 1, exists: false, current: false },
 ];
 
+// library.db `settings` (JSON by key) and settings.json's app settings.
+const librarySettings: Record<string, unknown> = {};
+const appSettings = { startup: "last", autoUpdate: true };
+
 const webImport = { enabled: false, running: false, port: 41620, error: null, extensionDir: null as string | null };
 
 function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
@@ -462,6 +466,19 @@ function handle(cmd: string, a: any): unknown {
       return { root: "/mock/Demo.library", name: "Demo (mock)" };
     case "list_libraries":
       return mockLibraries;
+    case "get_app_settings":
+      return { ...appSettings };
+    case "set_app_settings":
+      Object.assign(appSettings, a.settings);
+      return { ...appSettings };
+    case "get_library_settings":
+      return { ...librarySettings };
+    case "set_library_setting":
+      if (a.value === null) delete librarySettings[a.key];
+      else librarySettings[a.key] = a.value;
+      return null;
+    case "library_size":
+      return items.reduce((n, i) => n + i.size, 0);
     case "set_library_favorite": {
       const l = mockLibraries.find((x) => x.root === a.path);
       if (l) l.favorite = a.favorite;
@@ -474,7 +491,7 @@ function handle(cmd: string, a: any): unknown {
     case "transfer_items": {
       const ids: string[] = a.ids ?? items.filter((i) => i.kind === a.kind && i.deletedAt === null).map((i) => i.id);
       if (a.moveItems) for (const i of items) if (ids.includes(i.id)) i.deletedAt = Date.now();
-      return { copied: ids.length - 1, duplicates: 1, failed: [] };
+      return { copied: ids.length - 1, duplicates: 1, failed: [], unusedKinds: {} };
     }
     case "query_items":
       return query(a.query);

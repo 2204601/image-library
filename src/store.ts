@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   api,
   EMPTY_FILTER,
+  kindLabel,
   type Counts,
   type DuplicateEffect,
   type Filter,
@@ -18,6 +19,12 @@ import {
   type View,
 } from "./lib/api";
 import { fontApi } from "./features/fonts/api";
+import {
+  DEFAULT_LIBRARY_SETTINGS,
+  openingMode,
+  parseLibrarySettings,
+  type LibrarySettings,
+} from "./lib/librarySettings";
 import { groupItems, similarSections, type GroupBy, type Section } from "./lib/grouping";
 
 /**
@@ -97,6 +104,9 @@ export interface TransferRequest {
   count: number;
 }
 
+/** The settings screen and where in it to open. */
+export type SettingsTab = "general" | "library" | "integration";
+
 /** A long task shown with a progress bar (bottom right). */
 export interface Progress {
   label: string;
@@ -106,6 +116,8 @@ export interface Progress {
 
 interface State {
   library: LibraryInfo | null;
+  /** The open library's own settings (docs/SETTINGS.md). */
+  librarySettings: LibrarySettings;
 
   mode: Mode;
   view: View;
@@ -147,8 +159,10 @@ interface State {
   /** Bumped to ask the inspector to focus the item name field. */
   renameItemSeq: number;
   picker: "move" | "goto" | null;
-  /** The "ブラウザ拡張と連携" dialog is open. */
-  webImportOpen: boolean;
+  /** The settings screen (⌘,) is open, on this tab. */
+  settingsTab: SettingsTab | null;
+  /** Part of the tab to scroll to (element id), once. */
+  settingsAnchor: string | null;
   /** A browser extension asks to connect; `code` is also shown in the extension. */
   pairRequest: { id: string; code: string } | null;
   /** Similar view: how alike images must be. */
@@ -199,9 +213,14 @@ interface State {
   analyzing: boolean;
   toasts: Toast[];
 
-  setLibrary: (lib: LibraryInfo | null) => void;
+  /** Opens a library in the mode it was left in (see `openingMode`). */
+  setLibrary: (lib: LibraryInfo | null) => Promise<void>;
   /** Switches kind; starts in "all" with no conditions, on the mode's own layout and grouping. */
   setMode: (mode: Mode) => void;
+  /** Kinds the library is used for / switches to drop or bring back a kind. */
+  setUsedModes: (modes: Mode[]) => void;
+  /** Hides (or shows again) sidebar entries of a mode. */
+  setSidebarHidden: (mode: Mode, ids: string[]) => void;
   setView: (view: View) => void;
   setSearch: (s: string) => void;
   toggleTagFilter: (id: number) => void;
@@ -235,7 +254,7 @@ interface State {
   setRenamingFolder: (id: string | null) => void;
   requestItemRename: () => void;
   setPicker: (p: State["picker"]) => void;
-  setWebImportOpen: (open: boolean) => void;
+  openSettings: (tab: SettingsTab | null, anchor?: string) => void;
   setPairRequest: (r: State["pairRequest"]) => void;
   setSimilarLevel: (l: SimilarLevel) => void;
   /** Marks `id` as the copy to keep in its group. */
@@ -293,7 +312,6 @@ const loadJson = (key: string): object => {
   }
 };
 
-const loadMode = (): Mode => MODES.find((m) => m === load("mode")) ?? "image";
 /** The mode's saved layout (the pre-mode "layout" key counts for images), else its default. */
 const loadLayout = (mode: Mode): Layout => {
   const saved = load(`layout:${mode}`) ?? (mode === "image" ? load("layout") : null);
@@ -375,10 +393,42 @@ function arrange(s: {
   return groupItems(s.rawItems, s.groupBy, s.tags, s.folders);
 }
 
-const initialMode = loadMode();
+// The mode comes from the library being opened (setLibrary).
+const initialMode: Mode = "image";
+
+let librarySeq = 0;
+
+/** Saves one setting of the open library, reporting failures. */
+function saveLibrarySetting(key: string, value: unknown) {
+  api.setLibrarySetting(key, value).catch((e) => useStore.getState().toast(String(e), true));
+}
+
+/** Kinds the open library is used for, in `MODES` order. */
+export const usedModes = (s: { librarySettings: LibrarySettings }): Mode[] =>
+  MODES.filter((m) => s.librarySettings.modes.includes(m));
+
+/** Whether a sidebar entry (SIDEBAR_ENTRIES id) is hidden in the current mode. */
+export const isHidden = (s: { librarySettings: LibrarySettings; mode: Mode }, id: string) =>
+  s.librarySettings.hidden[s.mode]?.includes(id) ?? false;
+
+/** Sidebar entry a view is listed under, if it can be hidden. */
+export function entryOfView(v: View): string | null {
+  switch (v.kind) {
+    case "folder":
+      return "section:folders";
+    case "smart":
+      return "section:smart";
+    case "all":
+    case "trash":
+      return null;
+    default:
+      return v.kind;
+  }
+}
 
 export const useStore = create<State>((set, get) => ({
   library: null,
+  librarySettings: DEFAULT_LIBRARY_SETTINGS,
 
   mode: initialMode,
   view: { kind: "all" },
@@ -408,7 +458,8 @@ export const useStore = create<State>((set, get) => ({
   renamingFolder: null,
   renameItemSeq: 0,
   picker: null,
-  webImportOpen: false,
+  settingsTab: null,
+  settingsAnchor: null,
   pairRequest: null,
   similarLevel: (["strict", "standard", "loose"] as const).find((l) => l === load("similarLevel")) ?? "standard",
   keepPick: new Set(),
@@ -452,10 +503,32 @@ export const useStore = create<State>((set, get) => ({
   analyzing: false,
   toasts: [],
 
-  setLibrary: (library) => {
+  setLibrary: async (library) => {
+    const seq = ++librarySeq;
+    let librarySettings = DEFAULT_LIBRARY_SETTINGS;
+    let mode = get().mode;
+    if (library) {
+      try {
+        const [raw, counts] = await Promise.all([api.getLibrarySettings(), api.getCounts()]);
+        librarySettings = parseLibrarySettings(raw);
+        mode = openingMode(librarySettings, counts.kinds);
+      } catch (e) {
+        get().toast(String(e), true);
+      }
+      if (seq !== librarySeq) return; // another library was opened meanwhile
+    }
+    const sortNow = { ...get(), ...traySort(get().view, { kind: "all" }, get()) };
     set({
       library,
-      ...traySort(get().view, { kind: "all" }, get()),
+      librarySettings,
+      mode,
+      layout: loadLayout(mode),
+      groupBy: loadGroupBy(mode),
+      sort: sortNow.sort === "dimensions" && mode !== "image" ? "importedAt" : sortNow.sort,
+      desc: sortNow.desc,
+      items: [],
+      rawItems: [],
+      sections: [],
       view: { kind: "all" },
       search: "",
       tagFilter: [],
@@ -481,7 +554,11 @@ export const useStore = create<State>((set, get) => ({
   },
   setMode: (mode) => {
     if (mode === get().mode) return;
-    persist("mode", mode);
+    // Remembered per library: it opens in this mode next time.
+    if (get().library) {
+      set({ librarySettings: { ...get().librarySettings, lastMode: mode } });
+      saveLibrarySetting("lastMode", mode);
+    }
     // Leaving the tray (if there) restores the sort it replaced.
     const sortNow = { ...get(), ...traySort(get().view, { kind: "all" }, get()) };
     set({
@@ -506,6 +583,27 @@ export const useStore = create<State>((set, get) => ({
       viewer: null,
     });
     get().refresh();
+  },
+  setUsedModes: (modes) => {
+    const used = MODES.filter((m) => modes.includes(m));
+    if (!used.length) return;
+    set({ librarySettings: { ...get().librarySettings, modes: used } });
+    // Every kind = nothing to remember (a kind added later is used too).
+    saveLibrarySetting("modes", used.length === MODES.length ? null : used);
+    if (!used.includes(get().mode)) get().setMode(used[0]);
+  },
+  setSidebarHidden: (mode, ids) => {
+    const hidden = { ...get().librarySettings.hidden, [mode]: ids };
+    set({ librarySettings: { ...get().librarySettings, hidden } });
+    saveLibrarySetting(`hidden:${mode}`, ids.length ? ids : null);
+    if (mode !== get().mode) return;
+    // Hiding what is open moves to "すべて"; hiding the tags drops their filter.
+    const entry = entryOfView(get().view);
+    if (entry && ids.includes(entry)) get().setView({ kind: "all" });
+    if (ids.includes("section:tags") && get().tagFilter.length) get().clearTagFilter();
+    if (ids.includes("section:fontFilters") && (get().filter.fontScripts.length || get().filter.fontCategories.length)) {
+      get().setFilter({ fontScripts: [], fontCategories: [] });
+    }
   },
   setView: (view) => {
     // The similar view may take a moment to prepare; don't leave the old list up.
@@ -659,7 +757,7 @@ export const useStore = create<State>((set, get) => ({
   setRenamingFolder: (renamingFolder) => set({ renamingFolder }),
   requestItemRename: () => set({ renameItemSeq: get().renameItemSeq + 1, inspectorOpen: true }),
   setPicker: (picker) => set({ picker }),
-  setWebImportOpen: (webImportOpen) => set({ webImportOpen }),
+  openSettings: (settingsTab, anchor) => set({ settingsTab, settingsAnchor: anchor ?? null }),
   setPairRequest: (pairRequest) => set({ pairRequest }),
   setSimilarLevel: (similarLevel) => {
     set({ similarLevel, keepPick: new Set(), selected: new Set(), anchor: null, focus: null });
@@ -840,8 +938,29 @@ export const useStore = create<State>((set, get) => ({
       kind: s.failed.length && !s.imported ? "error" : s.imported ? "success" : "info",
     });
     if (s.failed.length) console.warn("import failures", s.failed);
+    notifyUnusedKinds(s.kinds ?? {});
   },
 }));
+
+/**
+ * After an import: tells about items of kinds the library isn't used for
+ * (they are imported all the same; the kind comes from the file), with a
+ * button to start using the kind.
+ */
+export function notifyUnusedKinds(kinds: Partial<Record<Mode, number>>) {
+  const s = useStore.getState();
+  const used = usedModes(s);
+  for (const m of MODES) {
+    const n = kinds[m] ?? 0;
+    if (!n || used.includes(m)) continue;
+    s.notify({
+      title: `${kindLabel(m)} ${n} 件を取り込みました`,
+      detail: "このライブラリでは使っていない種類です",
+      action: { label: `${kindLabel(m)}も使う`, onClick: () => useStore.getState().setUsedModes([...usedModes(useStore.getState()), m]) },
+      duration: 12000,
+    });
+  }
+}
 
 export function currentFolderId(): string | null {
   const v = useStore.getState().view;

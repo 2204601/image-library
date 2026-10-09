@@ -1,10 +1,18 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, kindLabel, kindOfExt, type Item, type LibraryInfo, type OrientOp } from "./api";
-import { activeConditions, currentFolderId, useStore, type Mode } from "../store";
+import { api, EMPTY_FILTER, kindLabel, kindOfExt, type Item, type LibraryInfo, type OrientOp, type View } from "./api";
+import { activeConditions, currentFolderId, isHidden, useStore, type Mode, type ToastAction } from "../store";
 
 const st = () => useStore.getState();
+
+/**
+ * A toast button to the view something was just added to, when its sidebar
+ * entry is hidden: hiding is only for display, so it must stay reachable.
+ */
+function hiddenViewAction(entry: string, label: string, view: View): ToastAction | undefined {
+  return isHidden(st(), entry) ? { label, onClick: () => st().setView(view) } : undefined;
+}
 
 export async function createLibraryDialog() {
   const path = await save({ title: "新しいライブラリの保存先", defaultPath: "MyPictures.library" });
@@ -74,6 +82,9 @@ export async function transferTo(
     const n = r.copied + r.duplicates;
     const parts = [];
     if (r.duplicates) parts.push(`${r.duplicates} 件はすでにあったため、タグとフォルダだけ統合`);
+    const unused = Object.keys(r.unusedKinds ?? {}) as Mode[];
+    if (unused.length)
+      parts.push(`「${dest.name}」は${unused.map(kindLabel).join("・")}を使わない設定です（開いて設定から使う種類に追加できます）`);
     if (r.failed.length) parts.push(`${r.failed.length} 件は失敗：${r.failed.slice(0, 2).join("、")}`);
     if (move && n) parts.push("元のライブラリではゴミ箱に入っています");
     st().notify({
@@ -333,7 +344,12 @@ export async function moveToFolder(ids: string[], folderId: string) {
   await st().run(() => api.moveToFolder(ids, folderId));
   st().rememberFolders([folderId]);
   st().flashTarget(`folder:${folderId}`);
-  st().toast(`${ids.length} 件を「${folderName(folderId)}」へ移動しました`);
+  const name = folderName(folderId);
+  st().toast(
+    `${ids.length} 件を「${name}」へ移動しました`,
+    false,
+    hiddenViewAction("section:folders", `「${name}」を開く`, { kind: "folder", id: folderId }),
+  );
 }
 
 /** Shift+D: repeat the last "move to folder". */
@@ -383,6 +399,8 @@ export async function toggleFavorite(ids: string[]) {
   if (!ids.length) return;
   const on = !allHave(ids, (i) => i.favorite);
   await st().run(() => api.setFavorite(ids, on));
+  const open = on ? hiddenViewAction("favorites", "お気に入りを開く", { kind: "favorites" }) : undefined;
+  if (open) st().toast(`${ids.length} 件をお気に入りに追加しました`, false, open);
 }
 
 /** P: pins to the top of every list, or unpins when all are pinned. */
@@ -390,7 +408,12 @@ export async function togglePinned(ids: string[]) {
   if (!ids.length) return;
   const on = !allHave(ids, (i) => i.pinnedAt !== null);
   await st().run(() => api.setPinned(ids, on));
-  if (on) st().toast(`${ids.length} 件をピン留めしました（一覧の先頭に表示）`);
+  if (on)
+    st().toast(
+      `${ids.length} 件をピン留めしました（一覧の先頭に表示）`,
+      false,
+      hiddenViewAction("pinned", "ピン留めを開く", { kind: "pinned" }),
+    );
 }
 
 /** Rotates / flips the images without changing the files. */
@@ -417,7 +440,11 @@ export async function addToTray(ids: string[]) {
     added = await api.addToTray(ids);
   });
   st().flashTarget("tray");
-  st().toast(added ? `${added} 件を作業台に追加しました` : "すでに作業台にあります");
+  st().toast(
+    added ? `${added} 件を作業台に追加しました` : "すでに作業台にあります",
+    false,
+    hiddenViewAction("tray", "作業台を開く", { kind: "tray" }),
+  );
 }
 
 /** B: puts items on the tray, or takes them off when all are already there. */

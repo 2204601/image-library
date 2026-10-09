@@ -15,12 +15,13 @@ import { Viewer } from "./components/Viewer";
 import { SheetDialog } from "./components/SheetDialog";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { TransferDialog } from "./components/TransferDialog";
-import { PairDialog, WebImportDialog } from "./components/WebImportDialog";
+import { PairDialog } from "./components/WebImportDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
 import { api, type ImportSummary } from "./lib/api";
 import { checkForUpdate, loadAppVersion, scheduleUpdateCheck } from "./lib/update";
-import { useStore } from "./store";
+import { notifyUnusedKinds, useStore } from "./store";
 
 /** Sidebar folder under a native file drag (position is in physical pixels). */
 function folderAt(pos: { x: number; y: number }): string | null {
@@ -62,10 +63,12 @@ export default function App() {
   useEffect(() => {
     let added = 0;
     let known = 0;
+    let kinds: Record<string, number> = {};
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unlisten = listen<ImportSummary>("web-import", (e) => {
       added += e.payload.imported;
       known += e.payload.duplicates;
+      for (const [k, n] of Object.entries(e.payload.kinds ?? {})) kinds[k] = (kinds[k] ?? 0) + (n ?? 0);
       clearTimeout(timer);
       timer = setTimeout(() => {
         const s = useStore.getState();
@@ -75,7 +78,9 @@ export default function App() {
           detail: known ? `${known} 件はすでにライブラリにあります` : undefined,
           kind: added ? "success" : "info",
         });
+        notifyUnusedKinds(kinds);
         added = known = 0;
+        kinds = {};
       }, 800);
     });
     return () => {
@@ -188,7 +193,7 @@ export default function App() {
       <DuplicateReview />
       <SheetDialog />
       <TransferDialog />
-      <WebImportDialog />
+      <SettingsDialog />
       <PairDialog />
       <ShortcutHelp />
       <DragLayer />

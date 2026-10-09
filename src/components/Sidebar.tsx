@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   confirmDeleteFolder,
   confirmDeleteSmartFolder,
@@ -36,8 +37,8 @@ import {
 } from "../lib/actions";
 import { FontFilters } from "../features/fonts/FontFilters";
 import { api, KINDS, kindLabel, type Folder, type ItemKind, type View } from "../lib/api";
-import { activeConditions, useStore, type Mode } from "../store";
-import { useMenu } from "./ContextMenu";
+import { activeConditions, isHidden, MODES, usedModes, useStore, type Mode } from "../store";
+import { useMenu, type MenuItem } from "./ContextMenu";
 import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
 import { SHORTCUT_HELP_KEY, useShortcutHelp } from "./ShortcutHelp";
@@ -57,6 +58,17 @@ function saveCollapsed(root: string, c: Set<string>) {
   } catch {
     /* ignore */
   }
+}
+
+/** "サイドバーから隠す" for an entry of the current mode (settings → このライブラリ brings it back). */
+function hideItem(id: string): MenuItem {
+  return {
+    label: "サイドバーから隠す",
+    onClick: () => {
+      const s = useStore.getState();
+      s.setSidebarHidden(s.mode, [...(s.librarySettings.hidden[s.mode] ?? []), id]);
+    },
+  };
 }
 
 const sameView = (a: View, b: View) =>
@@ -312,12 +324,11 @@ function FolderTree() {
   return (
     <Section
       title="フォルダ"
-      onContextMenu={(e) =>
-        showMenu(e, [
-          { label: "フォルダを作成", hint: "⌘⇧N", onClick: () => create(null) },
-          { label: "最上位のフォルダを名前順に並べ替え", onClick: () => sortFoldersByName(null) },
-        ])
-      }
+      hideId="section:folders"
+      menu={[
+        { label: "フォルダを作成", hint: "⌘⇧N", onClick: () => create(null) },
+        { label: "最上位のフォルダを名前順に並べ替え", onClick: () => sortFoldersByName(null) },
+      ]}
       action={
         <button title="フォルダを作成（⌘⇧N）" className="text-dim hover:text-fg" onClick={() => create(null)}>
           <FolderPlus size={15} />
@@ -343,21 +354,31 @@ function FolderTree() {
   );
 }
 
+/**
+ * A titled block of the sidebar. With `hideId` it can be hidden from its
+ * heading's menu (after `menu`), and renders nothing while hidden.
+ */
 export function Section({
   title,
   action,
-  onContextMenu,
+  hideId,
+  menu = [],
   children,
 }: {
   title: string;
   action?: React.ReactNode;
-  onContextMenu?: (e: React.MouseEvent) => void;
+  hideId?: string;
+  menu?: MenuItem[];
   children: React.ReactNode;
 }) {
+  const hidden = useStore((s) => hideId !== undefined && isHidden(s, hideId));
+  const showMenu = useMenu((s) => s.show);
+  if (hidden) return null;
+  const items: MenuItem[] = hideId ? [...menu, ...(menu.length ? [{ separator: true } as const] : []), hideItem(hideId)] : menu;
   return (
     <div className="mt-4">
       <div
-        onContextMenu={onContextMenu}
+        onContextMenu={items.length ? (e) => showMenu(e, items) : undefined}
         className="mb-1 flex items-center justify-between px-2 text-xs font-semibold tracking-wide text-dim"
       >
         <span>{title}</span>
@@ -383,6 +404,7 @@ function SmartFolderList() {
   return (
     <Section
       title="スマートフォルダ"
+      hideId="section:smart"
       action={
         <button
           title={hasConditions ? "今の条件をスマートフォルダとして保存（⌘⇧⌥N）" : "スマートフォルダを作成（⌘⇧⌥N）"}
@@ -445,12 +467,16 @@ function ModeSwitch() {
   const mode = useStore((s) => s.mode);
   const setMode = useStore((s) => s.setMode);
   const kinds = useStore((s) => s.counts.kinds);
+  const used = useStore(useShallow(usedModes));
+  // A library used for one kind only has nothing to switch to.
+  if (used.length < 2) return null;
   return (
     <div className="mx-2 mb-1 flex items-stretch overflow-hidden rounded-md border border-line text-xs">
-      {KINDS.map(({ kind, label }, i) => (
+      {KINDS.filter((k) => used.includes(k.kind)).map(({ kind, label }, i) => (
         <button
           key={kind}
-          title={`${label}を表示（⌘${i + 1}）`}
+          // ⌘1〜⌘3 follow MODES whichever kinds are shown.
+          title={`${label}を表示（⌘${MODES.indexOf(kind) + 1}）`}
           aria-pressed={mode === kind}
           onClick={() => setMode(kind as Mode)}
           className={`flex min-w-0 flex-1 flex-col items-center justify-center py-1 ${i > 0 ? "border-l border-line" : ""} ${
@@ -496,6 +522,7 @@ function TagList() {
   return (
     <Section
       title="タグ"
+      hideId="section:tags"
       action={
         tagFilter.length > 0 && (
           <div className="flex items-center gap-1.5 tracking-normal">
@@ -553,6 +580,8 @@ export function Sidebar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const mode = useStore((s) => s.mode);
+  const hidden = useStore(useShallow((s) => s.librarySettings.hidden[s.mode] ?? []));
+  const openSettings = useStore((s) => s.openSettings);
   const showMenu = useMenu((s) => s.show);
 
   const smart: { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string }[] = [
@@ -574,12 +603,26 @@ export function Sidebar() {
     { view: { kind: "trash" }, label: "ゴミ箱", icon: <Trash2 size={15} />, count: counts.trash },
   ];
 
+  // "すべて" and "ゴミ箱" always stay (see SIDEBAR_ENTRIES).
+  const hideable = (v: View) => v.kind !== "all" && v.kind !== "trash";
+  const menuOf = (v: View): MenuItem[] =>
+    v.kind === "trash"
+      ? [{ label: "ゴミ箱を空にする", danger: true, onClick: emptyTrash }]
+      : v.kind === "tray" && counts.tray > 0
+        ? [
+            { label: "まとめて出力…", onClick: sheetFromTray },
+            { label: "書き出し…", onClick: exportTray },
+            { separator: true },
+            { label: "作業台を空にする", onClick: clearTray },
+          ]
+        : [];
+
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-panel">
       <LibrarySwitcher />
       <ModeSwitch />
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-        {smart.map((s) => (
+        {smart.filter((s) => !hidden.includes(s.view.kind)).map((s) => (
           <Row
             key={s.view.kind}
             active={sameView(view, s.view)}
@@ -589,19 +632,11 @@ export function Sidebar() {
             dropId={s.dropId}
             title={s.title}
             onClick={() => setView(s.view)}
-            onContextMenu={
-              s.view.kind === "trash"
-                ? (e) => showMenu(e, [{ label: "ゴミ箱を空にする", danger: true, onClick: emptyTrash }])
-                : s.view.kind === "tray" && counts.tray > 0
-                  ? (e) =>
-                      showMenu(e, [
-                        { label: "まとめて出力…", onClick: sheetFromTray },
-                        { label: "書き出し…", onClick: exportTray },
-                        { separator: true },
-                        { label: "作業台を空にする", onClick: clearTray },
-                      ])
-                  : undefined
-            }
+            onContextMenu={(e) => {
+              const items = menuOf(s.view);
+              if (hideable(s.view)) items.push(...(items.length ? [{ separator: true } as const] : []), hideItem(s.view.kind));
+              if (items.length) showMenu(e, items);
+            }}
           />
         ))}
         {mode === "font" && <FontFilters />}
@@ -609,6 +644,15 @@ export function Sidebar() {
         <SmartFolderList />
         <TagList />
       </nav>
+      {hidden.length > 0 && (
+        <button
+          onClick={() => openSettings("library", "settings-sidebar")}
+          title="サイドバーに出す項目は、設定の「このライブラリ」で選べます"
+          className="shrink-0 px-4 pb-1.5 text-left text-[11px] text-dim hover:text-fg"
+        >
+          {hidden.length} 項目を非表示（表示…）
+        </button>
+      )}
       <button
         onClick={() => useShortcutHelp.getState().setOpen(true)}
         className="flex shrink-0 items-center gap-2 border-t border-line px-4 py-2 text-xs text-dim hover:bg-white/5 hover:text-fg"

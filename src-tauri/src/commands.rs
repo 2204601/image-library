@@ -49,6 +49,31 @@ struct Settings {
     /// Libraries opened or created before (the library switcher's list).
     libraries: Vec<KnownLibrary>,
     web_import: WebImportSettings,
+    #[serde(flatten)]
+    app: AppSettings,
+}
+
+/// The settings screen's "一般" tab (docs/SETTINGS.md).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppSettings {
+    /// What opens at launch: the last library, or the list to choose from.
+    startup: Startup,
+    /// Look for a new version a few seconds after launch.
+    auto_update: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self { startup: Startup::Last, auto_update: true }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Startup {
+    Last,
+    Choose,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -142,10 +167,15 @@ fn library_name(root: &std::path::Path) -> String {
     root.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// Re-opens the library used last time, if it still exists.
+/// Re-opens the library used last time, if it still exists (and the user
+/// didn't choose to pick one at launch).
 #[tauri::command]
 pub fn open_last_library(app: AppHandle, state: State<AppState>) -> CmdResult<Option<LibraryInfo>> {
-    match load_settings(&app).last_library {
+    let settings = load_settings(&app);
+    if settings.app.startup == Startup::Choose {
+        return Ok(None);
+    }
+    match settings.last_library {
         Some(p) => match Library::open(&p) {
             Ok(lib) => activate(&app, &state, lib).map(Some),
             Err(_) => Ok(None),
@@ -273,6 +303,37 @@ pub async fn transfer_items(
 #[tauri::command]
 pub fn open_library(app: AppHandle, state: State<AppState>, path: PathBuf) -> CmdResult<LibraryInfo> {
     activate(&app, &state, Library::open(&path)?)
+}
+
+#[tauri::command]
+pub fn get_app_settings(app: AppHandle) -> AppSettings {
+    load_settings(&app).app
+}
+
+#[tauri::command]
+pub fn set_app_settings(app: AppHandle, settings: AppSettings) -> CmdResult<AppSettings> {
+    let mut all = load_settings(&app);
+    all.app = settings;
+    save_settings(&app, &all)?;
+    Ok(all.app)
+}
+
+/// The open library's own settings (`settings` table in library.db), as JSON by key.
+#[tauri::command]
+pub fn get_library_settings(state: State<AppState>) -> CmdResult<std::collections::BTreeMap<String, serde_json::Value>> {
+    with_lib(&state, |lib| db::library_settings(&lib.conn).map_err(err))
+}
+
+/// `value: null` removes the setting.
+#[tauri::command]
+pub fn set_library_setting(state: State<AppState>, key: String, value: serde_json::Value) -> CmdResult<()> {
+    with_lib(&state, |lib| db::set_library_setting(&lib.conn, &key, Some(&value)).map_err(err))
+}
+
+/// Bytes of the files in the open library (the settings screen).
+#[tauri::command]
+pub fn library_size(state: State<AppState>) -> CmdResult<i64> {
+    with_lib(&state, |lib| db::total_size(&lib.conn).map_err(err))
 }
 
 // ---------------------------------------------------------------- items

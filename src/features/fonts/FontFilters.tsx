@@ -33,6 +33,7 @@ export function FontFilters() {
     return (
       <Section
         title={title}
+        hideId="section:fontFilters"
         action={
           on.length > 0 && (
             <button title={`${title}の絞り込みを解除`} className="text-dim hover:text-fg" onClick={() => set([])}>

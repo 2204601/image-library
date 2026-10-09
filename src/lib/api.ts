@@ -22,6 +22,15 @@ export interface TransferSummary {
   /** Already in the destination; their tags and folder were merged in. */
   duplicates: number;
   failed: string[];
+  /** Arrived items of kinds the destination isn't used for (its `modes` setting). */
+  unusedKinds: Partial<Record<ItemKind, number>>;
+}
+
+/** Settings of the whole app (settings.json): the settings screen's "一般" tab. */
+export interface AppSettings {
+  /** At launch: open the last library, or show the list to choose from. */
+  startup: "last" | "choose";
+  autoUpdate: boolean;
 }
 
 /**
@@ -302,6 +311,8 @@ export interface ImportSummary {
   imported: number;
   duplicates: number;
   failed: string[];
+  /** New items by kind. */
+  kinds?: Partial<Record<ItemKind, number>>;
 }
 
 /** Saving from the browser extension (src-tauri/src/webimport.rs). */
@@ -324,6 +335,13 @@ export const api = {
   listLibraries: () => invoke<LibraryEntry[]>("list_libraries"),
   setLibraryFavorite: (path: string, favorite: boolean) => invoke<void>("set_library_favorite", { path, favorite }),
   forgetLibrary: (path: string) => invoke<void>("forget_library", { path }),
+  getAppSettings: () => invoke<AppSettings>("get_app_settings"),
+  setAppSettings: (settings: AppSettings) => invoke<AppSettings>("set_app_settings", { settings }),
+  /** The open library's settings (library.db), JSON by key. */
+  getLibrarySettings: () => invoke<Record<string, unknown>>("get_library_settings"),
+  /** `null` removes the setting. */
+  setLibrarySetting: (key: string, value: unknown) => invoke<void>("set_library_setting", { key, value }),
+  librarySize: () => invoke<number>("library_size"),
   /** Without `ids`, every item of `kind` not in the trash. `move` puts them in this library's trash afterwards. */
   transferItems: (dest: string, scope: { ids: string[] } | { kind: ItemKind }, move: boolean) =>
     invoke<TransferSummary>("transfer_items", {

@@ -41,7 +41,7 @@ import {
   visibleRange,
   type Placement,
 } from "../lib/layouts";
-import { activeConditions, currentFolderId, MODES, useStore, type Mode, type ShowInfo } from "../store";
+import { activeConditions, currentFolderId, MODES, usedModes, useStore, type Mode, type ShowInfo } from "../store";
 import { useMenu } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 
@@ -633,7 +633,7 @@ export function Grid() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as Element).closest?.("input, textarea, select")) return;
       const s = useStore.getState();
-      if (s.viewer !== null || s.drag || s.picker || s.sheet) return;
+      if (s.viewer !== null || s.drag || s.picker || s.sheet || s.settingsTab) return;
       const mod = e.metaKey || e.ctrlKey;
       const sel = () => [...useStore.getState().selected];
       const handled = () => e.preventDefault();
@@ -643,7 +643,10 @@ export function Grid() {
       if (mod && e.altKey && e.code === "Digit2") return handled(), s.toggleInspector();
       // ⌘1 / ⌘2 / ⌘3: images / fonts / files.
       const modeKey = MODES[Number(/^Digit([1-9])$/.exec(e.code)?.[1]) - 1];
-      if (mod && !e.altKey && !e.shiftKey && modeKey) return handled(), s.setMode(modeKey);
+      if (mod && !e.altKey && !e.shiftKey && modeKey) {
+        // A kind the library isn't used for does nothing (the keys stay fixed).
+        return handled(), usedModes(s).includes(modeKey) && s.setMode(modeKey);
+      }
       if (mod && !e.altKey && e.code === "KeyI") return handled(), s.toggleInspector();
       if (e.key === "Tab" && !mod && !e.shiftKey) return handled(), s.toggleSidebar();
 
