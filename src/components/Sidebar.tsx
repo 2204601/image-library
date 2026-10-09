@@ -42,7 +42,7 @@ import {
 } from "../lib/actions";
 import { FontFilters } from "../features/fonts/FontFilters";
 import { api, KINDS, kindLabel, type Folder, type ItemKind, type View } from "../lib/api";
-import { activeConditions, isHidden, MODES, usedModes, useStore, type ListSource, type Mode } from "../store";
+import { activeConditions, isHidden, MODES, usedModes, useStore, type ListSource } from "../store";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
@@ -508,36 +508,87 @@ const KIND_ICON: Record<ItemKind, React.ReactNode> = {
   file: <FileText size={14} />,
 };
 
-/** Images, fonts or files: the app shows one kind at a time (⌘1 / ⌘2 / ⌘3). */
+/**
+ * Which kind the app shows (one at a time): a menu rather than tabs, so it
+ * stays one line however many kinds there are (videos, audio later). Lists
+ * the kinds the library is used for, with counts and ⌘1〜⌘3 (MODES order).
+ */
 function ModeSwitch() {
   const mode = useStore((s) => s.mode);
   const setMode = useStore((s) => s.setMode);
   const kinds = useStore((s) => s.counts.kinds);
   const used = useStore(useShallow(usedModes));
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => !ref.current?.contains(e.target as Node) && setOpen(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("pointerdown", away);
+    window.addEventListener("keydown", esc);
+    return () => {
+      window.removeEventListener("pointerdown", away);
+      window.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
   // A library used for one kind only has nothing to switch to.
   if (used.length < 2) return null;
+  const label = kindLabel(mode);
   return (
-    <div className="mx-2 mb-1 flex items-stretch overflow-hidden rounded-md border border-line text-xs">
-      {KINDS.filter((k) => used.includes(k.kind)).map(({ kind, label }, i) => (
-        <button
-          key={kind}
-          // ⌘1〜⌘3 follow MODES whichever kinds are shown.
-          title={`${label}を表示（⌘${MODES.indexOf(kind) + 1}）`}
-          aria-pressed={mode === kind}
-          onClick={() => setMode(kind as Mode)}
-          className={`flex min-w-0 flex-1 flex-col items-center justify-center py-1 ${i > 0 ? "border-l border-line" : ""} ${
-            mode === kind ? "bg-accent/20 font-medium text-accent" : "text-dim hover:bg-white/5 hover:text-fg"
-          }`}
+    <div ref={ref} className="relative mx-2 mb-1">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        title={`表示する種類（${used.map((m) => comboText(`Mod+${MODES.indexOf(m) + 1}`)).join(" / ")}）`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        className={`flex h-8 w-full items-center gap-2 rounded-md border border-line px-2.5 text-left hover:bg-white/5 ${
+          open ? "bg-white/5" : ""
+        }`}
+      >
+        <span className="text-accent">{KIND_ICON[mode]}</span>
+        <span className="font-medium">{label}</span>
+        <span className="text-xs text-dim tabular-nums">{kinds[mode] ?? 0}</span>
+        <ChevronDown size={14} className={`ml-auto text-dim transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div
+          role="menu"
+          className="absolute top-full right-0 left-0 z-40 mt-1 animate-slide-down rounded-lg border border-line bg-raised p-1 shadow-xl"
         >
-          <span className="flex items-center gap-1 whitespace-nowrap">
-            {KIND_ICON[kind]}
-            {label}
-          </span>
-          <span className={`text-[10px] leading-4 tabular-nums ${mode === kind ? "text-accent/70" : "text-dim/70"}`}>
-            {kinds[kind] ?? 0}
-          </span>
-        </button>
-      ))}
+          {KINDS.filter((k) => used.includes(k.kind)).map(({ kind, label }) => (
+            <button
+              key={kind}
+              role="menuitemradio"
+              aria-checked={mode === kind}
+              onClick={() => {
+                setOpen(false);
+                setMode(kind);
+              }}
+              className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-accent hover:text-white ${
+                mode === kind ? "text-accent" : ""
+              }`}
+            >
+              {KIND_ICON[kind]}
+              <span className="flex-1">{label}</span>
+              <span className="text-xs tabular-nums opacity-60">{kinds[kind] ?? 0}</span>
+              {/* ⌘1〜⌘3 follow MODES whichever kinds are shown. */}
+              <span className="w-8 text-right text-xs opacity-50">{comboText(`Mod+${MODES.indexOf(kind) + 1}`)}</span>
+            </button>
+          ))}
+          <div className="mx-1.5 my-1 border-t border-line" />
+          <button
+            onClick={() => {
+              setOpen(false);
+              useStore.getState().openSettings("library");
+            }}
+            className="flex w-full items-center rounded px-2 py-1.5 text-left text-xs text-dim hover:bg-accent hover:text-white"
+          >
+            使う種類を選ぶ…
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -626,6 +677,7 @@ function TagList() {
 
 export function Sidebar() {
   const counts = useStore((s) => s.counts);
+  const sidebarWidth = useStore((s) => s.sidebarWidth);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const mode = useStore((s) => s.mode);
@@ -668,7 +720,7 @@ export function Sidebar() {
         : [];
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-panel">
+    <aside className="flex shrink-0 flex-col border-r border-line bg-panel" style={{ width: sidebarWidth }}>
       <LibrarySwitcher />
       <ModeSwitch />
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">

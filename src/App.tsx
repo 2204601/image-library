@@ -3,6 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { ImageDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ContextMenu } from "./components/ContextMenu";
+import { ResizeHandle } from "./components/ResizeHandle";
 import { DragLayer } from "./components/DragLayer";
 import { DuplicateReview } from "./components/DuplicateReview";
 import { FolderPicker } from "./components/FolderPicker";
@@ -37,6 +38,10 @@ export default function App() {
   const library = useStore((s) => s.library);
   const inspectorOpen = useStore((s) => s.inspectorOpen);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const sidebarWidth = useStore((s) => s.sidebarWidth);
+  const inspectorWidth = useStore((s) => s.inspectorWidth);
+  // A panel's edge is being dragged: no width animation.
+  const [resizing, setResizing] = useState(false);
   const fileOver = useStore((s) => s.fileDrag);
   const fileTarget = useStore((s) => (s.fileDrag ? s.dropTarget : null));
   const folders = useStore((s) => s.folders);
@@ -148,22 +153,22 @@ export default function App() {
       {library ? (
         <>
           <div
-            className={`flex shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-              sidebarOpen ? "w-60" : "w-0"
-            }`}
+            className={`relative flex shrink-0 overflow-hidden ${resizing ? "" : "transition-[width] duration-200 ease-out"}`}
+            style={{ width: sidebarOpen ? sidebarWidth : 0 }}
           >
             <Sidebar />
+            {sidebarOpen && <ResizeHandle panel="sidebar" onResizing={setResizing} />}
           </div>
           <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
             <Toolbar />
             <Grid />
           </main>
           <div
-            className={`flex shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-              inspectorOpen ? "w-72" : "w-0"
-            }`}
+            className={`relative flex shrink-0 overflow-hidden ${resizing ? "" : "transition-[width] duration-200 ease-out"}`}
+            style={{ width: inspectorOpen ? inspectorWidth : 0 }}
           >
             <Inspector />
+            {inspectorOpen && <ResizeHandle panel="inspector" onResizing={setResizing} />}
           </div>
         </>
       ) : (

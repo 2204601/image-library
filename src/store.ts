@@ -151,6 +151,9 @@ interface State {
   specimenSize: number;
   inspectorOpen: boolean;
   sidebarOpen: boolean;
+  /** Widths of the sidebar and the details panel (px), dragged at their edge. */
+  sidebarWidth: number;
+  inspectorWidth: number;
   /** Folder views include items from subfolders. */
   showSubfolders: boolean;
   minRating: number;
@@ -252,6 +255,8 @@ interface State {
   setSpecimenSize: (px: number) => void;
   toggleInspector: () => void;
   toggleSidebar: () => void;
+  /** Sets a panel's width (kept within its limits, see PANEL_WIDTH). */
+  setPanelWidth: (panel: "sidebar" | "inspector", px: number) => void;
   setShowSubfolders: (on: boolean) => void;
   setMinRating: (n: number) => void;
   setFilter: (patch: Partial<Filter>) => void;
@@ -323,6 +328,15 @@ const loadNumber = (key: string, fallback: number) => {
   const v = Number(load(key));
   return Number.isFinite(v) && v > 0 ? v : fallback;
 };
+
+/** Default, smallest and largest width of the side panels. */
+export const PANEL_WIDTH = {
+  sidebar: { initial: 240, min: 190, max: 420 },
+  inspector: { initial: 288, min: 240, max: 560 },
+} as const;
+
+const clampWidth = (panel: keyof typeof PANEL_WIDTH, px: number) =>
+  Math.round(Math.min(PANEL_WIDTH[panel].max, Math.max(PANEL_WIDTH[panel].min, px)));
 
 const loadJson = (key: string): object => {
   try {
@@ -461,6 +475,8 @@ export const useStore = create<State>((set, get) => ({
   thumbSize: loadNumber("thumbSize", 180),
   inspectorOpen: load("inspectorOpen") !== "false",
   sidebarOpen: load("sidebarOpen") !== "false",
+  sidebarWidth: clampWidth("sidebar", loadNumber("sidebarWidth", PANEL_WIDTH.sidebar.initial)),
+  inspectorWidth: clampWidth("inspector", loadNumber("inspectorWidth", PANEL_WIDTH.inspector.initial)),
   showSubfolders: load("showSubfolders") === "true",
   minRating: 0,
   filter: EMPTY_FILTER,
@@ -692,6 +708,11 @@ export const useStore = create<State>((set, get) => ({
     const sidebarOpen = !get().sidebarOpen;
     set({ sidebarOpen });
     persist("sidebarOpen", String(sidebarOpen));
+  },
+  setPanelWidth: (panel, px) => {
+    const w = clampWidth(panel, px);
+    set(panel === "sidebar" ? { sidebarWidth: w } : { inspectorWidth: w });
+    persist(`${panel}Width`, String(w));
   },
   setShowSubfolders: (showSubfolders) => {
     set({ showSubfolders });
