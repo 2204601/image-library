@@ -1,6 +1,6 @@
 // The library menu (sidebar header) and the list of known libraries: the ones
 // opened or created before, favourites first. Also used on the welcome screen.
-import { Check, ChevronDown, FolderInput, FolderOpen, Library, Plus, Puzzle, RefreshCw, Star, X } from "lucide-react";
+import { Bot, Check, ChevronDown, FolderInput, FolderOpen, Library, Plus, Puzzle, RefreshCw, Star, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import {
   createLibraryDialog,
@@ -186,6 +186,11 @@ function Panel({ close }: { close: () => void }) {
             icon={<Puzzle size={15} />}
             label="ブラウザ拡張と連携…"
             onClick={then(() => useStore.getState().setWebImportOpen(true))}
+          />
+          <MenuButton
+            icon={<Bot size={15} />}
+            label="Claude と連携…"
+            onClick={then(() => useStore.getState().setClaudeOpen(true))}
           />
           <MenuButton
             icon={<RefreshCw size={15} />}

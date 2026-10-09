@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 14;
+const SCHEMA_VERSION: i32 = 15;
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -237,6 +237,20 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
             "CREATE TABLE IF NOT EXISTS tray (
                item_id  TEXT PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
                position REAL NOT NULL
+             )",
+        )
+    })?;
+    // Changes made from outside the UI (Claude through MCP, see changes.rs),
+    // with what is needed to undo them.
+    step(15, &|c| {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS changes (
+               id        INTEGER PRIMARY KEY,
+               at        INTEGER NOT NULL,
+               source    TEXT NOT NULL,
+               summary   TEXT NOT NULL,
+               undo      TEXT NOT NULL,
+               undone_at INTEGER
              )",
         )
     })?;

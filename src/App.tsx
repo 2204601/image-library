@@ -15,10 +15,11 @@ import { Viewer } from "./components/Viewer";
 import { SheetDialog } from "./components/SheetDialog";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { TransferDialog } from "./components/TransferDialog";
+import { ClaudeDialog } from "./components/ClaudeDialog";
 import { PairDialog, WebImportDialog } from "./components/WebImportDialog";
 import { Welcome } from "./components/Welcome";
-import { importClipboardFiles, importPaths } from "./lib/actions";
-import { api, type ImportSummary } from "./lib/api";
+import { importClipboardFiles, importPaths, undoChanges } from "./lib/actions";
+import { api, type Change, type ImportSummary } from "./lib/api";
 import { checkForUpdate, loadAppVersion, scheduleUpdateCheck } from "./lib/update";
 import { useStore } from "./store";
 
@@ -77,6 +78,33 @@ export default function App() {
         });
         added = known = 0;
       }, 800);
+    });
+    return () => {
+      clearTimeout(timer);
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  // Changed from Claude (src-tauri/src/mcp/). Claude often calls several
+  // tools in a row: one toast for the run, undoing all of it.
+  useEffect(() => {
+    let changes: Change[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unlisten = listen<Change>("library-changed", (e) => {
+      changes.push(e.payload);
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const s = useStore.getState();
+        const ids = changes.map((c) => c.id);
+        s.refresh();
+        s.notify({
+          title: changes.length > 1 ? `Claude が ${changes.length} 件の変更をしました` : `Claude：${changes[0].summary}`,
+          detail: changes.length > 1 ? changes.map((c) => c.summary).join(" / ") : undefined,
+          kind: "info",
+          action: { label: "元に戻す", onClick: () => undoChanges(ids) },
+        });
+        changes = [];
+      }, 1500);
     });
     return () => {
       clearTimeout(timer);
@@ -189,6 +217,7 @@ export default function App() {
       <SheetDialog />
       <TransferDialog />
       <WebImportDialog />
+      <ClaudeDialog />
       <PairDialog />
       <ShortcutHelp />
       <DragLayer />

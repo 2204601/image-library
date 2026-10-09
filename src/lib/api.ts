@@ -316,6 +316,28 @@ export interface WebImportStatus {
   extensionDir: string | null;
 }
 
+/** Organizing from Claude (src-tauri/src/mcp/). */
+export interface McpStatus {
+  enabled: boolean;
+  /** The local server is listening. */
+  running: boolean;
+  port: number;
+  /** Why it isn't running although enabled (e.g. the port is taken). */
+  error: string | null;
+  /** What to paste to connect, once turned on. */
+  claudeCodeCommand: string | null;
+  desktopConfig: string | null;
+}
+
+/** A change made from Claude, recorded so it can be undone (src-tauri/src/changes.rs). */
+export interface Change {
+  id: number;
+  at: number;
+  source: string;
+  summary: string;
+  undone: boolean;
+}
+
 export const api = {
   openLastLibrary: () => invoke<LibraryInfo | null>("open_last_library"),
   /** `open: false` only creates it (and adds it to the list). */
@@ -383,6 +405,13 @@ export const api = {
   installExtension: () => invoke<string>("install_extension"),
   /** Answers an extension's request to connect (the "web-pair" event). */
   answerWebPair: (id: string, allow: boolean) => invoke<void>("answer_web_pair", { id, allow }),
+  mcpStatus: () => invoke<McpStatus>("mcp_status"),
+  setMcp: (enabled: boolean) => invoke<McpStatus>("set_mcp", { enabled }),
+  /** A new token: Claude Code has to be set up again. */
+  resetMcpToken: () => invoke<McpStatus>("reset_mcp_token"),
+  listChanges: () => invoke<Change[]>("list_changes"),
+  /** Reverts a change made from Claude; `skipped` = entries edited again since, left alone. */
+  undoChange: (id: number) => invoke<{ summary: string; skipped: number }>("undo_change", { id }),
   indexSimilar: () => invoke<number>("index_similar"),
   /** Treats these images as "not duplicates" so they aren't proposed together again. */
   dismissDuplicates: (ids: string[]) => invoke<void>("dismiss_duplicates", { ids }),

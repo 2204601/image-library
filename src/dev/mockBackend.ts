@@ -443,6 +443,27 @@ const mockLibraries = [
 ];
 
 const webImport = { enabled: false, running: false, port: 41620, error: null, extensionDir: null as string | null };
+const mcp = { enabled: false, running: false, port: 41621, error: null, token: "mock-token" };
+const claudeChanges = [
+  { id: 2, at: Date.now() - 60_000, source: "mcp", summary: "フォルダへ移しました（「写真/旅行/京都」4 件）", undone: false },
+  { id: 1, at: Date.now() - 120_000, source: "mcp", summary: "タグを付けました（「京都」4 件、「東京」2 件）", undone: false },
+];
+
+function mcpStatus() {
+  const on = mcp.enabled;
+  return {
+    enabled: on,
+    running: mcp.running,
+    port: mcp.port,
+    error: mcp.error,
+    claudeCodeCommand: on
+      ? `claude mcp add --scope user --transport http image-library http://127.0.0.1:41621/mcp --header "Authorization: Bearer ${mcp.token}"`
+      : null,
+    desktopConfig: on
+      ? JSON.stringify({ mcpServers: { "image-library": { command: "/Applications/Image Library.app/Contents/MacOS/image-library", args: ["--mcp"] } } }, null, 2)
+      : null,
+  };
+}
 
 function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
   const out: Record<string, number> = {};
@@ -689,6 +710,23 @@ function handle(cmd: string, a: any): unknown {
       return { ...webImport };
     case "answer_web_pair":
       return null;
+    case "mcp_status":
+      return mcpStatus();
+    case "set_mcp":
+      mcp.enabled = mcp.running = a.enabled;
+      return mcpStatus();
+    case "reset_mcp_token":
+      mcp.token = `mock-${Date.now()}`;
+      return mcpStatus();
+    case "list_changes":
+      return claudeChanges.map((c) => ({ ...c }));
+    case "undo_change": {
+      const c = claudeChanges.find((x) => x.id === a.id);
+      if (!c) throw "この変更の記録はもうありません";
+      if (c.undone) throw "この変更はすでに元に戻しています";
+      c.undone = true;
+      return { summary: c.summary, skipped: 0 };
+    }
     case "install_extension":
       webImport.extensionDir = "/Users/mock/Library/Application Support/com.local.imagelibrary/chrome-extension";
       return webImport.extensionDir;
