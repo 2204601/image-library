@@ -6,7 +6,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FolderDown, FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listTargets } from "../lib/actions";
-import { api, kindLabel, type Folder, type Item } from "../lib/api";
+import { api, type Folder, type Item } from "../lib/api";
+import { modeNoun } from "../lib/modes";
 import { useStore, type ExportRequest } from "../store";
 
 const LAST_DEST = "exportDest";
@@ -152,7 +153,7 @@ function Dialog({ req }: { req: ExportRequest }) {
             対象：
             {items === null
               ? "数えています…"
-              : `${kindLabel(mode)} ${items.length} 件${isFolder && hasSubfolders && subfolders ? "（サブフォルダを含む）" : ""}`}
+              : `${modeNoun(mode)} ${items.length} 件${isFolder && hasSubfolders && subfolders ? "（サブフォルダを含む）" : ""}`}
             。ファイルはそのままの形式でコピーします
           </p>
         </div>

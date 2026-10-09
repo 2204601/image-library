@@ -31,6 +31,7 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             start_web_import(app.handle());
+            start_lock_refresh(app.handle());
             start_mcp(app.handle());
             Ok(())
         })
@@ -69,6 +70,8 @@ pub fn run() {
             fonts::commands::index_fonts,
             fonts::commands::set_font_category,
             fonts::commands::font_data,
+            files::commands::file_preview,
+            files::commands::prepare_file_thumbs,
             copy_items,
             export_items,
             add_to_tray,
@@ -124,6 +127,13 @@ pub fn run() {
             set_tag_color,
             delete_tag,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Close the library before quitting: library.db complete on its
+            // own (for cloud sync) and the lock removed.
+            if let tauri::RunEvent::Exit = event {
+                close_library(app);
+            }
+        });
 }

@@ -1,12 +1,12 @@
-// Splits the list into sections (rating bands, tags, folders, font
+// Splits the list into sections (kinds, rating bands, tags, folders, font
 // families) for the grid.
 // The result is a flattened display list plus the [start, end) of each
 // section, so layouts and navigation keep working on plain indices.
-import type { Folder, Item, Tag } from "./api";
+import { KINDS, type Folder, type Item, type Tag } from "./api";
 
-export type GroupBy = "none" | "rating" | "tag" | "folder" | "family";
+export type GroupBy = "none" | "kind" | "rating" | "tag" | "folder" | "family";
 
-export const GROUP_BYS: GroupBy[] = ["none", "rating", "tag", "folder", "family"];
+export const GROUP_BYS: GroupBy[] = ["none", "kind", "rating", "tag", "folder", "family"];
 
 export interface Section {
   /** Index of the first item, and one past the last. */
@@ -70,6 +70,7 @@ function build(buckets: { items: Item[]; title: string; color?: string | null; r
  */
 export function groupItems(items: Item[], by: GroupBy, tags: Tag[], folders: Folder[]): Grouped {
   if (by === "none" || !items.length) return { items, sections: [] };
+  if (by === "kind") return build(KINDS.map((k) => ({ items: items.filter((i) => i.kind === k.kind), title: k.label })));
   if (by === "rating") {
     return build(
       [5, 4, 3, 2, 1, 0].map((n) => ({

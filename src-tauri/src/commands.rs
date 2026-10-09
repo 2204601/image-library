@@ -5,7 +5,7 @@
 use crate::changes;
 use crate::db::{self, Counts, Folder, Item, ItemQuery, SelectionInfo, Tag};
 use crate::import::{self, ImportSummary, Source};
-use crate::library::Library;
+use crate::library::{Holder, Library};
 use crate::mcp;
 use crate::webimport;
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,8 @@ pub(crate) fn with_lib<T>(state: &AppState, f: impl FnOnce(&mut Library) -> CmdR
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Settings {
+    /// This PC's id in library.lock (made once; see `this_app`).
+    machine_id: String,
     last_library: Option<PathBuf>,
     /// Libraries opened or created before (the library switcher's list).
     libraries: Vec<KnownLibrary>,
@@ -160,7 +162,69 @@ pub struct LibraryInfo {
     name: String,
 }
 
-fn activate(app: &AppHandle, state: &AppState, lib: Library) -> CmdResult<LibraryInfo> {
+// ---------------------------------------------------------- library lock
+
+/// This app as the holder of a library's lock (library.rs `Holder`).
+pub(crate) fn this_app(app: &AppHandle) -> Holder {
+    let mut settings = load_settings(app);
+    if settings.machine_id.is_empty() {
+        settings.machine_id = uuid::Uuid::new_v4().simple().to_string();
+        let _ = save_settings(app, &settings);
+    }
+    Holder { machine: settings.machine_id, name: computer_name(), pid: std::process::id(), at: db::now_ms() }
+}
+
+/// The PC's name as the user knows it ("鈴木の MacBook Pro").
+fn computer_name() -> String {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        #[cfg(target_os = "macos")]
+        if let Ok(out) = std::process::Command::new("scutil").args(["--get", "ComputerName"]).output() {
+            let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if out.status.success() && !name.is_empty() {
+                return name;
+            }
+        }
+        std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .unwrap_or_else(|_| "別のパソコン".into())
+    })
+    .clone()
+}
+
+/// The error opening a library open elsewhere: "LOCKED:" and the holder as
+/// JSON, for the frontend to ask whether to open it anyway (lib/libraryLock.ts).
+fn locked(h: &Holder) -> String {
+    format!("LOCKED:{}", serde_json::to_string(h).unwrap_or_default())
+}
+
+/// Refuses (unless `force`) a library another app has open.
+fn check_lock(app: &AppHandle, root: &std::path::Path, force: bool) -> CmdResult<()> {
+    match crate::library::other_holder(root, &this_app(app)) {
+        Some(h) if !force => Err(locked(&h)),
+        _ => Ok(()),
+    }
+}
+
+/// Keeps the open library's lock fresh, so another PC can tell it is in use.
+pub fn start_lock_refresh(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_millis(crate::library::LOCK_REFRESH_MS));
+        if let Some(lib) = app.state::<AppState>().lib.lock().unwrap().as_mut() {
+            lib.refresh_lock();
+        }
+    });
+}
+
+/// Closes the open library (on quitting): writes the database back into
+/// library.db and removes the lock.
+pub fn close_library(app: &AppHandle) {
+    drop(app.state::<AppState>().lib.lock().unwrap().take());
+}
+
+fn activate(app: &AppHandle, state: &AppState, mut lib: Library) -> CmdResult<LibraryInfo> {
+    lib.take_lock(this_app(app))?;
     app.asset_protocol_scope()
         .allow_directory(&lib.root, true)
         .map_err(err)?;
@@ -183,17 +247,23 @@ fn library_name(root: &std::path::Path) -> String {
 /// Re-opens the library used last time, if it still exists (and the user
 /// didn't choose to pick one at launch).
 #[tauri::command]
-pub fn open_last_library(app: AppHandle, state: State<AppState>) -> CmdResult<Option<LibraryInfo>> {
+pub fn open_last_library(
+    app: AppHandle,
+    state: State<AppState>,
+    force: Option<bool>,
+) -> CmdResult<Option<LibraryInfo>> {
     let settings = load_settings(&app);
     if settings.app.startup == Startup::Choose {
         return Ok(None);
     }
-    match settings.last_library {
-        Some(p) => match Library::open(&p) {
-            Ok(lib) => activate(&app, &state, lib).map(Some),
-            Err(_) => Ok(None),
-        },
-        None => Ok(None),
+    // Gone (deleted, a drive not connected): the welcome screen instead.
+    let Some(p) = settings.last_library.filter(|p| p.join(crate::library::DB_FILE).is_file()) else {
+        return Ok(None);
+    };
+    check_lock(&app, &p, force.unwrap_or(false))?;
+    match Library::open(&p) {
+        Ok(lib) => activate(&app, &state, lib).map(Some),
+        Err(_) => Ok(None),
     }
 }
 
@@ -205,12 +275,17 @@ pub fn create_library(
     state: State<AppState>,
     path: PathBuf,
     open: Option<bool>,
+    force: Option<bool>,
 ) -> CmdResult<LibraryInfo> {
     let path = if path.extension().is_some_and(|e| e == "library") {
         path
     } else {
         path.with_extension("library")
     };
+    // An existing library at the path is opened: it may be open elsewhere.
+    if open.unwrap_or(true) {
+        check_lock(&app, &path, force.unwrap_or(false))?;
+    }
     let lib = Library::create(&path)?;
     if open.unwrap_or(true) {
         return activate(&app, &state, lib);
@@ -290,6 +365,13 @@ pub async fn transfer_items(
     move_items: bool,
 ) -> CmdResult<crate::transfer::TransferSummary> {
     tauri::async_runtime::spawn_blocking(move || {
+        // Writing into a library another PC has open (and is refreshing)
+        // would race its changes through the sync.
+        if let Some(h) = crate::library::other_holder(&dest, &this_app(&app)) {
+            if !h.stale(db::now_ms()) {
+                return Err(format!("「{}」は「{}」で開かれています。そちらで閉じてから、もう一度試してください", library_name(&dest), h.name));
+            }
+        }
         let state = app.state::<AppState>();
         let src = with_lib(&state, |lib| {
             let ids = match ids {
@@ -314,7 +396,13 @@ pub async fn transfer_items(
 }
 
 #[tauri::command]
-pub fn open_library(app: AppHandle, state: State<AppState>, path: PathBuf) -> CmdResult<LibraryInfo> {
+pub fn open_library(
+    app: AppHandle,
+    state: State<AppState>,
+    path: PathBuf,
+    force: Option<bool>,
+) -> CmdResult<LibraryInfo> {
+    check_lock(&app, &path, force.unwrap_or(false))?;
     activate(&app, &state, Library::open(&path)?)
 }
 

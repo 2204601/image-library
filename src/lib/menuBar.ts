@@ -21,7 +21,7 @@ import { command, isEnabled, labelOf, runCommand, type Command } from "./command
 import { comboText, isMac } from "./shortcuts";
 import { GROUPS, LAYOUTS } from "../components/ViewMenu";
 import { SORTS } from "../components/Toolbar";
-import { MODE_GROUPS, MODE_LAYOUTS, MODES, usedModes, useStore } from "../store";
+import { MODE_GROUPS, MODE_LAYOUTS, shownModes, usedModes, useStore } from "../store";
 
 type S = ReturnType<typeof useStore.getState>;
 type Item = MenuItem | CheckMenuItem | Submenu | PredefinedMenuItem;
@@ -215,7 +215,8 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
       "評価",
       [0, 1, 2, 3, 4, 5].map((n) => cmd(`item.rate${n}`)),
     ),
-    ...(mode === "image"
+    // In "すべて", greyed out unless only images are selected (`appliesTo`).
+    ...(mode === "image" || mode === "all"
       ? [
           submenu("回転・反転", [
             cmd("item.rotateCcw"),
@@ -234,8 +235,8 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
   ]);
 
   const view = submenu("表示", [
-    // Only the kinds in use; ⌘1〜⌘3 stay those of MODES.
-    ...(used.length > 1 ? [...MODES.filter((m) => used.includes(m)).map((m) => cmd(`mode.${m}`)), sep()] : []),
+    // "すべて" and the kinds in use; ⌘1〜⌘4 stay those of MODES.
+    ...(used.length > 1 ? [...shownModes(st()).map((m) => cmd(`mode.${m}`)), sep()] : []),
     submenu(
       "レイアウト",
       LAYOUTS.filter((l) => MODE_LAYOUTS[mode].includes(l.key)).map((l) =>

@@ -1,12 +1,13 @@
 // The settings screen (⌘,), see docs/SETTINGS.md: the whole app (一般), the
 // open library's own settings (このライブラリ, stored in its library.db) and
 // the browser extension (連携). Changes are saved as they are made.
-import { FileText, FolderInput, FolderOpen, Image as ImageIcon, Library, Puzzle, Settings, Type, X } from "lucide-react";
+import { FileText, FolderInput, FolderOpen, Image as ImageIcon, Library, Puzzle, Settings, Shapes, Type, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { transferAllOfMode } from "../lib/actions";
-import { api, formatBytes, KINDS, kindLabel, type AppSettings, type ItemKind } from "../lib/api";
+import { api, formatBytes, KINDS, kindLabel, type AppSettings } from "../lib/api";
 import { sidebarEntriesOf } from "../lib/librarySettings";
+import { modeLabel, modesFor, type Mode } from "../lib/modes";
 import { isMac } from "../lib/shortcuts";
 import { appVersion, checkForUpdate } from "../lib/update";
 import { usedModes, useStore, type SettingsTab } from "../store";
@@ -15,7 +16,8 @@ import { ClaudeSettings } from "./ClaudeSettings";
 
 export const SETTINGS_KEY = isMac ? "⌘," : "Ctrl+,";
 
-const KIND_ICON: Record<ItemKind, React.ReactNode> = {
+const KIND_ICON: Record<Mode, React.ReactNode> = {
+  all: <Shapes size={14} />,
   image: <ImageIcon size={14} />,
   font: <Type size={14} />,
   file: <FileText size={14} />,
@@ -253,22 +255,25 @@ function LibraryTab() {
           {isMac ? "Finder で表示" : "エクスプローラで表示"}
         </button>
       </div>
-      <button
-        onClick={() => {
-          useStore.getState().openSettings(null);
-          transferAllOfMode();
-        }}
-        disabled={!(kinds[mode] ?? 0)}
-        className="mt-2 flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs enabled:hover:bg-white/5 disabled:opacity-40"
-      >
-        <FolderInput size={14} />
-        {kindLabel(mode)}をすべて別のライブラリへ移す…
-        {(kinds[mode] ?? 0) > 0 && <span className="text-dim tabular-nums">（{kinds[mode]} 件）</span>}
-      </button>
+      {/* A kind at a time ("すべて" shows every kind, not one to move). */}
+      {mode !== "all" && (
+        <button
+          onClick={() => {
+            useStore.getState().openSettings(null);
+            transferAllOfMode();
+          }}
+          disabled={!(kinds[mode] ?? 0)}
+          className="mt-2 flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs enabled:hover:bg-white/5 disabled:opacity-40"
+        >
+          <FolderInput size={14} />
+          {kindLabel(mode)}をすべて別のライブラリへ移す…
+          {(kinds[mode] ?? 0) > 0 && <span className="text-dim tabular-nums">（{kinds[mode]} 件）</span>}
+        </button>
+      )}
 
       <Heading
         title="使う種類"
-        sub="使う種類だけがモードの切り替えに出ます（1 種類ならモードの切り替えは出しません）。この設定はライブラリに保存されます"
+        sub="使う種類と「すべて」がモードの切り替えに出ます（1 種類ならモードの切り替えは出しません）。この設定はライブラリに保存されます"
       />
       {KINDS.map(({ kind, label }) => {
         const on = used.includes(kind);
@@ -299,15 +304,15 @@ function LibraryTab() {
         title="サイドバーの項目"
         sub="チェックを外した項目はサイドバーに出しません。表示を隠すだけで、作業台へ追加（B キー）などの操作はそのまま使えます。「すべて」と「ゴミ箱」はいつも出ます"
       />
-      <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${used.length}, minmax(0, 1fr))` }}>
-        {used.map((m) => {
+      <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${modesFor(used).length}, minmax(0, 1fr))` }}>
+        {modesFor(used).map((m) => {
           const off = hidden[m] ?? [];
           return (
             <div key={m}>
               {used.length > 1 && (
                 <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-dim">
                   {KIND_ICON[m]}
-                  {kindLabel(m)}モード
+                  {modeLabel(m)}
                 </div>
               )}
               {sidebarEntriesOf(m).map((e) => (

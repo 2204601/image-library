@@ -24,6 +24,7 @@ import { importClipboardFiles, importPaths, undoChanges } from "./lib/actions";
 import { api, type Change, type ImportSummary } from "./lib/api";
 import { loadAppVersion, scheduleUpdateCheck } from "./lib/update";
 import { installMenuBar } from "./lib/menuBar";
+import { openGuarded } from "./lib/libraryLock";
 import { notifyUnusedKinds, useStore } from "./store";
 
 /** Sidebar folder under a native file drag (position is in physical pixels). */
@@ -48,8 +49,8 @@ export default function App() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    api
-      .openLastLibrary()
+    // The last library may be open on another PC (cloud sync): ask first.
+    openGuarded(null, (force) => api.openLastLibrary(force))
       .then((lib) => lib && useStore.getState().setLibrary(lib))
       .catch((e) => useStore.getState().toast(String(e), true))
       .finally(() => setReady(true));

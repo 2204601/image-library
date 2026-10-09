@@ -144,9 +144,17 @@ Eagle（jp.eagle.cool）との比較をもとにした、AI 以外の機能追�
   - Windows のシェルのサムネイル API は Office ではファイル内のプレビューを読むだけなので使わない
 - 幅・高さは 0（フォントと同じ）。レイアウトはグリッド／リスト。回転・似た画像の検出・画像サイズの絞り込みは対象外
 - ビューア：PDF は WebView の PDF 表示（`<iframe>`）、オフィス文書はサムネイルと「既定のアプリで開く」
+  → 2026-10-09 に全ページのプレビューを追加（`files/preview.rs`）。初めて開いたときに作り、`previews/` に残す
+  - macOS：Quick Look のプレビュー（`qlmanage -p -o`）。Word は全文、Excel はシートのタブ付きの HTML。
+    `previews/<id>.qlpreview/` をビューアの `<iframe sandbox="allow-scripts">` で表示
+  - Windows：Office が入っていれば、Office に PDF へ書き出させる（`files/win_office.rs`、PowerShell から COM）。
+    `previews/<id>.pdf`。読み取り専用・マクロ無効・パスワード付きは失敗扱い、90 秒で打ち切って自動化で起動した Office を終了
+  - Windows のサムネイル：ライブラリを開いたときと取り込みの後に、裏で 1 件ずつ PDF を作り、1 ページ目をサムネイルにする
+    （`files/thumbs.rs`、`<id>_p.*`）。Office が無ければ何もしない
+  - どちらで作ったものも両方の OS で表示する（PDF を優先）
 - パッケージ形式（フォルダ）の古い iWork 文書は取り込まず、中身も取り込まない
 
-今後の候補：PDF のページ数、PDF の中の文字での検索、Windows の Office 文書のサムネイル（Office が入っていれば描画できる）。
+今後の候補：PDF のページ数、PDF の中の文字での検索。
 
 ---
 

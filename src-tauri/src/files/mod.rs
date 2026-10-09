@@ -7,6 +7,11 @@
 //! 2. the preview saved inside the file (iWork, and Office files saved with one)
 //! 3. a card with the file type
 //!
+//! On Windows, Office (when installed) later makes a PDF of each office
+//! document, and its first page replaces the thumbnail (thumbs.rs).
+//! The viewer shows documents other than PDF from a preview kept in
+//! `previews/` (preview.rs).
+//!
 //! Files have no pixel size (0 × 0) and take no part in the look-alike search.
 
 use image::{DynamicImage, RgbaImage};
@@ -14,6 +19,12 @@ use std::io::Read;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
+pub mod commands;
+pub mod preview;
+#[cfg(windows)]
+mod thumbs;
+#[cfg(windows)]
+mod win_office;
 #[cfg(windows)]
 mod win_pdf;
 
@@ -52,34 +63,45 @@ fn is_blank(img: &DynamicImage) -> bool {
     hi.saturating_sub(lo) < 4
 }
 
+/// Runs Quick Look (`qlmanage <args> <out> <path>`), which writes what it
+/// made into `out`. False when it failed or hung.
 #[cfg(target_os = "macos")]
-fn from_os(path: &Path, _ext: &str, max: u32) -> Option<DynamicImage> {
+fn run_quicklook(args: &[&str], out: &Path, path: &Path) -> bool {
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
-    // qlmanage writes <file name>.png into the output folder; nothing when it can't.
-    let out = tempfile::tempdir().ok()?;
-    let mut child = Command::new("/usr/bin/qlmanage")
-        .args(["-t", "-s", &max.to_string(), "-o"])
-        .arg(out.path())
+    let Ok(mut child) = Command::new("/usr/bin/qlmanage")
+        .args(args)
+        .arg(out)
         .arg(path)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
+    else {
+        return false;
+    };
     // A broken document can make it hang (seen with a damaged .docx);
     // a real one takes well under a second.
     let start = Instant::now();
     loop {
         match child.try_wait() {
-            Ok(Some(status)) if status.success() => break,
+            Ok(Some(status)) => return status.success(),
             Ok(None) if start.elapsed() < Duration::from_secs(20) => std::thread::sleep(Duration::from_millis(50)),
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return None;
+                return false;
             }
-            _ => return None,
+            Err(_) => return false,
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn from_os(path: &Path, _ext: &str, max: u32) -> Option<DynamicImage> {
+    // qlmanage writes <file name>.png into the output folder; nothing when it can't.
+    let out = tempfile::tempdir().ok()?;
+    if !run_quicklook(&["-t", "-s", &max.to_string(), "-o"], out.path(), path) {
+        return None;
     }
     let png = out.path().join(format!("{}.png", path.file_name()?.to_string_lossy()));
     image::open(png).ok()
