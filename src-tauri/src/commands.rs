@@ -528,7 +528,7 @@ pub fn reorder_tray(state: State<AppState>, ids: Vec<String>, before: Option<Str
 // -------------------------------------------------------- contact sheet
 
 /// One item for the contact sheet: oriented, fitted inside `max_side` px,
-/// as PNG or JPEG (sheet.rs). A font gives its sample (the thumbnail).
+/// as PNG or JPEG (sheet.rs). A font or file gives its thumbnail.
 #[tauri::command]
 pub async fn sheet_image(app: AppHandle, id: String, max_side: u32) -> CmdResult<tauri::ipc::Response> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -538,11 +538,11 @@ pub async fn sheet_image(app: AppHandle, id: String, max_side: u32) -> CmdResult
                 .map_err(err)?
                 .pop()
                 .ok_or("画像が見つかりません")?;
-            let src = if item.kind == db::Kind::Font { lib.thumb_path(&item) } else { lib.display_path(&item) };
+            let src = if item.kind == db::Kind::Image { lib.display_path(&item) } else { lib.thumb_path(&item) };
             Ok((item, src))
         })?;
         let bytes = fs::read(&src).map_err(err)?;
-        let img = if item.kind == db::Kind::Font {
+        let img = if item.kind != db::Kind::Image {
             image::load_from_memory(&bytes).map_err(err)?
         } else {
             let decoded = match (item.preview.is_some(), item.ext.as_str()) {

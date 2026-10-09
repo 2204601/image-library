@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod files;
 pub mod fonts;
 pub mod formats;
 pub mod import;

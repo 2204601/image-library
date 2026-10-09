@@ -13,6 +13,8 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif",
     // Fonts (see fonts.rs).
     "ttf", "otf", "woff", "woff2", "ttc", "otc",
+    // Files: PDF and office documents (see files/mod.rs `EXTS`).
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
 ];
 
 /// Font files are imported with a rendered sample as their thumbnail.

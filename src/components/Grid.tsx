@@ -370,8 +370,8 @@ export function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
   const allPinned = all((i) => i.pinnedAt !== null);
   const allInTray = all((i) => i.inTray);
   const turned = !all((i) => i.rotation === 0 && !i.flipped);
-  // Fonts can't be rotated; the entries go when only fonts are selected.
-  const rotatable = !all((i) => i.kind === "font");
+  // Only images can be rotated; the entries go when there are none selected.
+  const rotatable = !all((i) => i.kind !== "image");
   useMenu.getState().show(e, [
     { label: "表示", hint: "Enter", onClick: () => s.openViewer(index) },
     { label: "既定のアプリで開く", onClick: () => openSelection(ids) },
@@ -598,10 +598,9 @@ export function Grid() {
       // Panels
       if (mod && e.altKey && e.code === "Digit1") return handled(), s.toggleSidebar();
       if (mod && e.altKey && e.code === "Digit2") return handled(), s.toggleInspector();
-      // ⌘1 / ⌘2: images / fonts.
-      if (mod && !e.altKey && !e.shiftKey && (e.code === "Digit1" || e.code === "Digit2")) {
-        return handled(), s.setMode(MODES[e.code === "Digit1" ? 0 : 1]);
-      }
+      // ⌘1 / ⌘2 / ⌘3: images / fonts / files.
+      const modeKey = MODES[Number(/^Digit([1-9])$/.exec(e.code)?.[1]) - 1];
+      if (mod && !e.altKey && !e.shiftKey && modeKey) return handled(), s.setMode(modeKey);
       if (mod && !e.altKey && e.code === "KeyI") return handled(), s.toggleInspector();
       if (e.key === "Tab" && !mod && !e.shiftKey) return handled(), s.toggleSidebar();
 
@@ -897,7 +896,11 @@ function Empty({ kind, mode, filtering, analyzing }: { kind: string; mode: Mode;
     <div className="mt-24 flex flex-col items-center gap-3 text-dim">
       <ImagePlus size={40} strokeWidth={1.25} />
       <p>
-        {mode === "font" ? "フォントファイルやフォルダをここにドラッグ&ドロップ" : "画像やフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け"}
+        {mode === "font"
+          ? "フォントファイルやフォルダをここにドラッグ&ドロップ"
+          : mode === "file"
+            ? "PDF・オフィス文書やフォルダをここにドラッグ&ドロップ"
+            : "画像やフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け"}
       </p>
       <button
         onPointerDown={(e) => e.stopPropagation()}

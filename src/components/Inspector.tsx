@@ -373,7 +373,7 @@ export function Inspector() {
             className="mt-3 w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold outline-none hover:border-line focus:border-accent"
           />
           <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 px-1 text-xs">
-            <dt className="text-dim">{single.kind === "font" ? "種類" : "サイズ"}</dt>
+            <dt className="text-dim">{single.kind === "image" ? "サイズ" : "種類"}</dt>
             <dd className="tabular-nums">
               {sizeLabel(single)}
             </dd>
