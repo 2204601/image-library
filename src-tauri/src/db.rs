@@ -1019,6 +1019,24 @@ pub fn set_orientation(
     Ok(())
 }
 
+/// Replaces an item's thumbnail (files: once a better one could be made).
+pub fn set_thumb(conn: &Connection, id: &str, thumb: &str) -> DbResult<()> {
+    conn.execute("UPDATE items SET thumb = ?2 WHERE id = ?1", params![id, thumb])?;
+    Ok(())
+}
+
+/// Files of these types not in the trash: (id, ext, file name, thumbnail), newest first.
+pub fn files_of_types(conn: &Connection, exts: &[&str]) -> DbResult<Vec<(String, String, String, String)>> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, ext, file_name, thumb FROM items
+         WHERE kind = 'file' AND deleted_at IS NULL AND ext IN ({})
+         ORDER BY imported_at DESC",
+        placeholders(exts.len())
+    ))?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(exts), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    rows.collect()
+}
+
 /// Records the page the items came from. Items that already have one keep it
 /// (saving a known image again from another page doesn't change its origin).
 pub fn set_source_url(conn: &Connection, ids: &[String], url: &str) -> DbResult<()> {
