@@ -60,6 +60,8 @@ pub struct ImportSummary {
     pub imported: usize,
     pub duplicates: usize,
     pub failed: Vec<String>,
+    /// New items by kind (to tell when a kind the library isn't used for arrived).
+    pub kinds: std::collections::BTreeMap<db::Kind, usize>,
     /// The library items the sources ended up as (new and already known), in
     /// import order, for follow-up changes such as tagging.
     #[serde(skip)]
@@ -478,6 +480,7 @@ fn commit(
                 // Offset by index so the import order is preserved when sorting.
                 db::insert_item(&tx, &item, base + i as i64)?;
                 summary.imported += 1;
+                *summary.kinds.entry(item.kind).or_default() += 1;
                 item.id
             }
             Outcome::Duplicate(id) => {
@@ -807,6 +810,7 @@ mod tests {
         let sum = run(&lib, sources, None, |_, _| {}).unwrap();
         assert!(sum.failed.is_empty(), "{:?}", sum.failed);
         assert_eq!(sum.imported, 3);
+        assert_eq!(sum.kinds, std::collections::BTreeMap::from([(db::Kind::Image, 1), (db::Kind::Font, 2)]));
 
         let mut g = lib.lock().unwrap();
         let l = g.as_mut().unwrap();

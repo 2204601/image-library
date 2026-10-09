@@ -9,6 +9,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { ask, message } from "@tauri-apps/plugin-dialog";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
+import { api } from "./api";
 import { useStore } from "../store";
 
 const st = () => useStore.getState();
@@ -118,9 +119,17 @@ async function offer(update: Update) {
   await relaunch();
 }
 
-/** Check a few seconds after launch in release builds. Returns a cleanup. */
+/**
+ * Check a few seconds after launch in release builds, unless turned off in
+ * the settings ("アップデートを自動で確認する"). Returns a cleanup.
+ */
 export function scheduleUpdateCheck(): () => void {
   if (import.meta.env.DEV || !isTauri()) return () => {};
-  const t = setTimeout(() => checkForUpdate(false), 4000);
+  const t = setTimeout(() => {
+    api.getAppSettings().then(
+      (s) => void (s.autoUpdate && checkForUpdate(false)),
+      () => checkForUpdate(false),
+    );
+  }, 4000);
   return () => clearTimeout(t);
 }

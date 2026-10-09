@@ -16,7 +16,7 @@ import type { GroupBy } from "../lib/grouping";
 import { MODE_GROUPS, MODE_LAYOUTS, useStore, type Layout, type Mode, type ShowInfo } from "../store";
 
 /** Every grouping; each mode offers its own subset (MODE_GROUPS). */
-const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
+export const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
   { key: "none", label: "なし", hint: "区切らずに並べる" },
   { key: "rating", label: "評価", hint: "★5 から未評価まで" },
   { key: "tag", label: "タグ", hint: "複数のタグがあるものは各タグに出る" },

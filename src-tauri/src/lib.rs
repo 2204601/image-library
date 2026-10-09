@@ -17,27 +17,9 @@ use commands::*;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default();
-    // macOS: "アップデートを確認…" in the app menu, under "About". Other
-    // platforms keep no menu bar (the same item is in the sidebar's library menu).
-    #[cfg(target_os = "macos")]
-    let builder = builder
-        .menu(|app| {
-            use tauri::menu::{Menu, MenuItem, MenuItemKind};
-            let menu = Menu::default(app)?;
-            if let Some(MenuItemKind::Submenu(app_menu)) = menu.items()?.into_iter().next() {
-                let check = MenuItem::with_id(app, "check-update", "アップデートを確認…", true, None::<&str>)?;
-                app_menu.insert(&check, 1)?;
-            }
-            Ok(menu)
-        })
-        .on_menu_event(|app, event| {
-            use tauri::Emitter;
-            if event.id() == "check-update" {
-                let _ = app.emit("check-update", ());
-            }
-        });
-    builder
+    // The menu bar is made by the frontend from its command table
+    // (src/lib/menuBar.ts); until it loads, macOS shows Tauri's default menu.
+    tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_drag::init())
@@ -52,6 +34,11 @@ pub fn run() {
             open_last_library,
             create_library,
             open_library,
+            get_app_settings,
+            set_app_settings,
+            get_library_settings,
+            set_library_setting,
+            library_size,
             list_libraries,
             set_library_favorite,
             forget_library,

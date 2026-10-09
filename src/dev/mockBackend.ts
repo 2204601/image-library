@@ -442,6 +442,10 @@ const mockLibraries = [
   { root: "/Volumes/Archive/Old.library", name: "Old", favorite: false, lastOpened: 1, exists: false, current: false },
 ];
 
+// library.db `settings` (JSON by key) and settings.json's app settings.
+const librarySettings: Record<string, unknown> = {};
+const appSettings = { startup: "last", autoUpdate: true };
+
 const webImport = { enabled: false, running: false, port: 41620, error: null, extensionDir: null as string | null };
 
 function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
@@ -454,7 +458,44 @@ function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
 const ofKind = (kind: string | null | undefined) => (xs: MockItem[]) =>
   kind ? xs.filter((i) => i.kind === kind) : xs;
 
+// The menu bar (src/lib/menuBar.ts): items by resource id, and the menu set
+// as the app menu, for checking its structure in the browser
+// (`window.__MOCK_MENU__()` prints it as text).
+const menuItems = new Map<number, { kind: string; options: any }>();
+let menuSeq = 0;
+let appMenu: number | null = null;
+function menuText(rid: number, depth = 0): string[] {
+  const m = menuItems.get(rid);
+  if (!m) return [];
+  const o = m.options ?? {};
+  const pad = "  ".repeat(depth);
+  const flags = `${o.enabled === false ? " [off]" : ""}${o.checked ? " ✓" : ""}${o.accelerator ? `  <${o.accelerator}>` : ""}`;
+  const name = m.kind === "Predefined" ? `(${typeof o.item === "string" ? o.item : "About"})` : (o.text ?? "");
+  const head = m.kind === "Menu" ? [] : [`${pad}${name}${flags}`];
+  const kids = (o.items ?? []).flatMap((i: [number, string]) => menuText(i[0], m.kind === "Menu" ? depth : depth + 1));
+  return [...head, ...kids];
+}
+(window as unknown as { __MOCK_MENU__: () => string }).__MOCK_MENU__ = () =>
+  appMenu === null ? "(no menu)" : menuText(appMenu).join("\n");
+
 function handle(cmd: string, a: any): unknown {
+  if (cmd.startsWith("plugin:menu|")) {
+    const op = cmd.slice("plugin:menu|".length);
+    if (op === "new") {
+      const rid = ++menuSeq;
+      menuItems.set(rid, { kind: a.kind, options: a.options });
+      return [rid, `m${rid}`];
+    }
+    if (op === "set_as_app_menu") {
+      appMenu = a.rid;
+      return null;
+    }
+    const item = menuItems.get(a.rid);
+    if (item && op === "set_text") item.options.text = a.text;
+    if (item && op === "set_enabled") item.options.enabled = a.enabled;
+    if (item && op === "set_checked") item.options.checked = a.checked;
+    return null;
+  }
   switch (cmd) {
     case "open_last_library":
     case "create_library":
@@ -462,6 +503,19 @@ function handle(cmd: string, a: any): unknown {
       return { root: "/mock/Demo.library", name: "Demo (mock)" };
     case "list_libraries":
       return mockLibraries;
+    case "get_app_settings":
+      return { ...appSettings };
+    case "set_app_settings":
+      Object.assign(appSettings, a.settings);
+      return { ...appSettings };
+    case "get_library_settings":
+      return { ...librarySettings };
+    case "set_library_setting":
+      if (a.value === null) delete librarySettings[a.key];
+      else librarySettings[a.key] = a.value;
+      return null;
+    case "library_size":
+      return items.reduce((n, i) => n + i.size, 0);
     case "set_library_favorite": {
       const l = mockLibraries.find((x) => x.root === a.path);
       if (l) l.favorite = a.favorite;
@@ -474,7 +528,7 @@ function handle(cmd: string, a: any): unknown {
     case "transfer_items": {
       const ids: string[] = a.ids ?? items.filter((i) => i.kind === a.kind && i.deletedAt === null).map((i) => i.id);
       if (a.moveItems) for (const i of items) if (ids.includes(i.id)) i.deletedAt = Date.now();
-      return { copied: ids.length - 1, duplicates: 1, failed: [] };
+      return { copied: ids.length - 1, duplicates: 1, failed: [], unusedKinds: {} };
     }
     case "query_items":
       return query(a.query);

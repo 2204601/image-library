@@ -15,12 +15,15 @@ import { Viewer } from "./components/Viewer";
 import { SheetDialog } from "./components/SheetDialog";
 import { ShortcutHelp } from "./components/ShortcutHelp";
 import { TransferDialog } from "./components/TransferDialog";
-import { PairDialog, WebImportDialog } from "./components/WebImportDialog";
+import { PairDialog } from "./components/WebImportDialog";
+import { SettingsDialog } from "./components/SettingsDialog";
+import { ExportDialog } from "./components/ExportDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
 import { api, type ImportSummary } from "./lib/api";
-import { checkForUpdate, loadAppVersion, scheduleUpdateCheck } from "./lib/update";
-import { useStore } from "./store";
+import { loadAppVersion, scheduleUpdateCheck } from "./lib/update";
+import { installMenuBar } from "./lib/menuBar";
+import { notifyUnusedKinds, useStore } from "./store";
 
 /** Sidebar folder under a native file drag (position is in physical pixels). */
 function folderAt(pos: { x: number; y: number }): string | null {
@@ -49,23 +52,20 @@ export default function App() {
     return scheduleUpdateCheck();
   }, []);
 
-  // macOS menu bar: Image Library › アップデートを確認… (see src-tauri/src/lib.rs).
-  useEffect(() => {
-    const unlisten = listen("check-update", () => checkForUpdate(true));
-    return () => {
-      unlisten.then((f) => f());
-    };
-  }, []);
+  // The menu bar (macOS and Windows), made from the command table.
+  useEffect(() => installMenuBar(), []);
 
   // Saved from the browser extension (src-tauri/src/webimport.rs). A batch
   // from the extension's image list arrives one by one: report it once.
   useEffect(() => {
     let added = 0;
     let known = 0;
+    let kinds: Record<string, number> = {};
     let timer: ReturnType<typeof setTimeout> | undefined;
     const unlisten = listen<ImportSummary>("web-import", (e) => {
       added += e.payload.imported;
       known += e.payload.duplicates;
+      for (const [k, n] of Object.entries(e.payload.kinds ?? {})) kinds[k] = (kinds[k] ?? 0) + (n ?? 0);
       clearTimeout(timer);
       timer = setTimeout(() => {
         const s = useStore.getState();
@@ -75,7 +75,9 @@ export default function App() {
           detail: known ? `${known} 件はすでにライブラリにあります` : undefined,
           kind: added ? "success" : "info",
         });
+        notifyUnusedKinds(kinds);
         added = known = 0;
+        kinds = {};
       }, 800);
     });
     return () => {
@@ -188,7 +190,8 @@ export default function App() {
       <DuplicateReview />
       <SheetDialog />
       <TransferDialog />
-      <WebImportDialog />
+      <ExportDialog />
+      <SettingsDialog />
       <PairDialog />
       <ShortcutHelp />
       <DragLayer />

@@ -1,10 +1,26 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, kindLabel, kindOfExt, type Item, type LibraryInfo, type OrientOp } from "./api";
-import { activeConditions, currentFolderId, useStore, type Mode } from "../store";
+import { api, EMPTY_FILTER, kindLabel, kindOfExt, type Item, type LibraryInfo, type OrientOp, type View } from "./api";
+import {
+  activeConditions,
+  currentFolderId,
+  isHidden,
+  useStore,
+  type ListSource,
+  type Mode,
+  type ToastAction,
+} from "../store";
 
 const st = () => useStore.getState();
+
+/**
+ * A toast button to the view something was just added to, when its sidebar
+ * entry is hidden: hiding is only for display, so it must stay reachable.
+ */
+function hiddenViewAction(entry: string, label: string, view: View): ToastAction | undefined {
+  return isHidden(st(), entry) ? { label, onClick: () => st().setView(view) } : undefined;
+}
 
 export async function createLibraryDialog() {
   const path = await save({ title: "新しいライブラリの保存先", defaultPath: "MyPictures.library" });
@@ -74,6 +90,9 @@ export async function transferTo(
     const n = r.copied + r.duplicates;
     const parts = [];
     if (r.duplicates) parts.push(`${r.duplicates} 件はすでにあったため、タグとフォルダだけ統合`);
+    const unused = Object.keys(r.unusedKinds ?? {}) as Mode[];
+    if (unused.length)
+      parts.push(`「${dest.name}」は${unused.map(kindLabel).join("・")}を使わない設定です（開いて設定から使う種類に追加できます）`);
     if (r.failed.length) parts.push(`${r.failed.length} 件は失敗：${r.failed.slice(0, 2).join("、")}`);
     if (move && n) parts.push("元のライブラリではゴミ箱に入っています");
     st().notify({
@@ -333,7 +352,12 @@ export async function moveToFolder(ids: string[], folderId: string) {
   await st().run(() => api.moveToFolder(ids, folderId));
   st().rememberFolders([folderId]);
   st().flashTarget(`folder:${folderId}`);
-  st().toast(`${ids.length} 件を「${folderName(folderId)}」へ移動しました`);
+  const name = folderName(folderId);
+  st().toast(
+    `${ids.length} 件を「${name}」へ移動しました`,
+    false,
+    hiddenViewAction("section:folders", `「${name}」を開く`, { kind: "folder", id: folderId }),
+  );
 }
 
 /** Shift+D: repeat the last "move to folder". */
@@ -383,6 +407,8 @@ export async function toggleFavorite(ids: string[]) {
   if (!ids.length) return;
   const on = !allHave(ids, (i) => i.favorite);
   await st().run(() => api.setFavorite(ids, on));
+  const open = on ? hiddenViewAction("favorites", "お気に入りを開く", { kind: "favorites" }) : undefined;
+  if (open) st().toast(`${ids.length} 件をお気に入りに追加しました`, false, open);
 }
 
 /** P: pins to the top of every list, or unpins when all are pinned. */
@@ -390,7 +416,12 @@ export async function togglePinned(ids: string[]) {
   if (!ids.length) return;
   const on = !allHave(ids, (i) => i.pinnedAt !== null);
   await st().run(() => api.setPinned(ids, on));
-  if (on) st().toast(`${ids.length} 件をピン留めしました（一覧の先頭に表示）`);
+  if (on)
+    st().toast(
+      `${ids.length} 件をピン留めしました（一覧の先頭に表示）`,
+      false,
+      hiddenViewAction("pinned", "ピン留めを開く", { kind: "pinned" }),
+    );
 }
 
 /** Rotates / flips the images without changing the files. */
@@ -417,7 +448,11 @@ export async function addToTray(ids: string[]) {
     added = await api.addToTray(ids);
   });
   st().flashTarget("tray");
-  st().toast(added ? `${added} 件を作業台に追加しました` : "すでに作業台にあります");
+  st().toast(
+    added ? `${added} 件を作業台に追加しました` : "すでに作業台にあります",
+    false,
+    hiddenViewAction("tray", "作業台を開く", { kind: "tray" }),
+  );
 }
 
 /** B: puts items on the tray, or takes them off when all are already there. */
@@ -446,32 +481,122 @@ export async function clearTray() {
   await st().refresh();
 }
 
-/** Everything on the tray in its order (whatever the tray view's sort). */
-function trayItems(): Promise<Item[]> {
+/** Items of the current mode in `view`, in the list's sort (the tray: its own order). */
+function queryView(view: View, opts: { tagIds?: number[]; includeSubfolders?: boolean } = {}): Promise<Item[]> {
+  const s = st();
+  const manual = view.kind === "tray" || (view.kind === "folder" && s.sort === "manual");
   return api.queryItems({
-    view: { kind: "tray" },
+    view,
     search: "",
-    tagIds: [],
+    tagIds: opts.tagIds ?? [],
     tagMatchAll: false,
-    includeSubfolders: false,
+    includeSubfolders: opts.includeSubfolders ?? false,
     minRating: 0,
-    filter: EMPTY_FILTER,
+    filter: { ...EMPTY_FILTER, kinds: [s.mode] },
     similarLevel: "standard",
-    sort: "manual",
-    desc: false,
+    sort: manual ? "manual" : s.sort === "manual" ? "importedAt" : s.sort,
+    desc: manual ? false : s.desc,
   });
+}
+
+/**
+ * The items a "contents of this list" action works on (書き出し, まとめて出力,
+ * 作業台にすべて追加, 別のライブラリへ). A folder includes its subfolders
+ * unless `subfolders` is false (the export dialog's choice, not the view's
+ * "サブフォルダの内容を表示").
+ */
+export async function listTargets(source: ListSource, subfolders = true): Promise<Item[]> {
+  switch (source.kind) {
+    case "ids": {
+      const want = new Set(source.ids);
+      return displayOrder().filter((i) => want.has(i.id));
+    }
+    case "shown":
+      return displayOrder();
+    case "tray":
+      return queryView({ kind: "tray" });
+    case "folder":
+      return queryView({ kind: "folder", id: source.id }, { includeSubfolders: subfolders });
+    case "smart":
+      return queryView({ kind: "smart", id: source.id });
+    case "tag":
+      return queryView({ kind: "all" }, { tagIds: [source.id] });
+  }
 }
 
 /**
  * The items an action from the tray works on: what is selected in the tray
  * view, else everything on it in the order shown.
  */
-async function trayTargets(): Promise<Item[]> {
+function traySource(): ListSource {
   const s = st();
-  if (s.view.kind !== "tray") return trayItems();
-  const shown = displayOrder();
-  const sel = shown.filter((i) => s.selected.has(i.id));
-  return sel.length ? sel : shown;
+  if (s.view.kind !== "tray") return { kind: "tray" };
+  const sel = displayOrder().filter((i) => s.selected.has(i.id));
+  return sel.length ? { kind: "ids", ids: sel.map((i) => i.id) } : { kind: "shown" };
+}
+
+/** What the selection-or-list commands (⌘E, まとめて出力…) work on: the selection, else the list on screen. */
+export function selectionOrShown(): ListSource {
+  const s = st();
+  if (s.selected.size) return { kind: "ids", ids: [...s.selected] };
+  // A folder's whole tree, so the export dialog can offer to keep its structure.
+  if (s.view.kind === "folder") return { kind: "folder", id: s.view.id };
+  return { kind: "shown" };
+}
+
+/** Name of a list source for titles ("「旅行」", "選択した 3 件"). */
+export function sourceName(source: ListSource): string {
+  const s = st();
+  switch (source.kind) {
+    case "ids":
+      return `選択した ${source.ids.length} 件`;
+    case "shown":
+      return "表示中の一覧";
+    case "tray":
+      return "作業台";
+    case "folder":
+      return `「${s.folders.find((f) => f.id === source.id)?.name ?? ""}」`;
+    case "smart":
+      return `「${s.smartFolders.find((f) => f.id === source.id)?.name ?? ""}」`;
+    case "tag":
+      return `タグ「${s.tags.find((t) => t.id === source.id)?.name ?? ""}」`;
+  }
+}
+
+/** Runs `fn` on the items of `source`, telling when there are none. */
+async function withTargets(source: ListSource, fn: (items: Item[]) => unknown) {
+  try {
+    const items = await listTargets(source);
+    if (!items.length) {
+      st().toast(`${sourceName(source)}に${kindLabel(st().mode)}はありません`);
+      return;
+    }
+    await fn(items);
+  } catch (e) {
+    st().toast(String(e), true);
+  }
+}
+
+/** 書き出し… for a list (the dialog asks where, and for folders how). */
+export function exportList(source: ListSource) {
+  st().setExporting({ source, title: `${sourceName(source)}を書き出し` });
+}
+
+/** まとめて出力… for a list. */
+export function sheetList(source: ListSource) {
+  return withTargets(source, (items) => st().setSheet(items));
+}
+
+/** 作業台にすべて追加. */
+export function trayList(source: ListSource) {
+  return withTargets(source, (items) => addToTray(items.map((i) => i.id)));
+}
+
+/** 別のライブラリへ… for a list. */
+export function transferList(source: ListSource) {
+  return withTargets(source, (items) =>
+    st().setTransfer({ ids: items.map((i) => i.id), kind: st().mode, count: items.length }),
+  );
 }
 
 /** Items as the list shows them (one listed in several groups counts once, where it first appears). */
@@ -480,22 +605,12 @@ function displayOrder(): Item[] {
   return st().items.filter((i) => !seen.has(i.id) && seen.add(i.id));
 }
 
-export async function sheetFromTray() {
-  try {
-    const items = await trayTargets();
-    if (items.length) st().setSheet(items);
-  } catch (e) {
-    st().toast(String(e), true);
-  }
+export function sheetFromTray() {
+  return sheetList(traySource());
 }
 
-export async function exportTray() {
-  try {
-    const items = await trayTargets();
-    if (items.length) await exportSelection(items.map((i) => i.id));
-  } catch (e) {
-    st().toast(String(e), true);
-  }
+export function exportTray() {
+  exportList(traySource());
 }
 
 // ------------------------------------------------------- contact sheet
@@ -519,16 +634,8 @@ export async function copySelection(ids: string[]) {
   }
 }
 
-export async function exportSelection(ids: string[]) {
-  if (!ids.length) return;
-  const dest = await open({ title: "書き出し先のフォルダを選択", directory: true });
-  if (typeof dest !== "string") return;
-  try {
-    const n = await api.exportItems(ids, dest);
-    st().toast(`${n} 件を書き出しました`);
-  } catch (e) {
-    st().toast(String(e), true);
-  }
+export function exportSelection(ids: string[]) {
+  if (ids.length) exportList({ kind: "ids", ids });
 }
 
 export async function openSelection(ids: string[]) {

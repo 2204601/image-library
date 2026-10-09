@@ -141,7 +141,13 @@ CREATE TABLE IF NOT EXISTS settings (
 
 ### 連携
 
-- 今の「ブラウザ拡張と連携…」ダイアログの中身をここへ移す。ライブラリメニューの項目はこのタブを開くだけにする
+- 今の「ブラウザ拡張と連携…」ダイアログの中身をここへ移す
+
+### ライブラリメニュー（サイドバー上部）
+
+ライブラリの一覧・「ほかのライブラリを開く…」「新しいライブラリを作成…」と「設定…」だけにする。
+ブラウザ拡張は「連携」、アップデートの確認は「一般」、「<種類>をすべて別のライブラリへ移す…」は「このライブラリ」へ移した
+（メニューバーの「ファイル」にも置く。MENUS.md）
 
 ## 後で足す候補（今回は作らない）
 
@@ -152,6 +158,9 @@ CREATE TABLE IF NOT EXISTS settings (
 - 外観（ライト／ダーク）：今はダークのみ
 
 ## 実装の順番
+
+すべて実装済み（1〜7）。`src/lib/librarySettings.ts`（読み込み・開くときのモード・サイドバーの項目の一覧）、
+`components/SettingsDialog.tsx`、`db.rs` の `library_settings` / `set_library_setting` / `used_kinds`。
 
 1. `settings` テーブルと `get_library_settings` / `set_library_setting`（`db.rs`、`commands.rs`）、テスト
 2. `store` に `librarySettings`。`setLibrary` で開くときのモードを決め、`setMode` で `lastMode` を保存

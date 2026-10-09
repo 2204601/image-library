@@ -11,7 +11,7 @@ use crate::db::{self, Item};
 use crate::library::{Library, DB_FILE};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,6 +25,9 @@ pub struct TransferSummary {
     pub duplicates: usize,
     /// "<name>: <reason>" for items that couldn't be copied.
     pub failed: Vec<String>,
+    /// Items that arrived (copied or already there) of kinds the destination
+    /// isn't used for (its `modes` setting), by kind.
+    pub unused_kinds: BTreeMap<db::Kind, usize>,
     /// Source items that are now in the destination (copied or already there).
     /// The ones to take out of the source when moving.
     #[serde(skip)]
@@ -265,6 +268,13 @@ fn copy_attached(
         }
     }
     progress(total, total);
+    if let Some(used) = db::used_kinds(&lib.conn).map_err(e)? {
+        for item in src.items.iter().filter(|i| summary.done_ids.contains(&i.id)) {
+            if !used.contains(&item.kind) {
+                *summary.unused_kinds.entry(item.kind).or_default() += 1;
+            }
+        }
+    }
     Ok(summary)
 }
 
@@ -304,6 +314,21 @@ mod tests {
     }
 
     #[test]
+    fn reports_kinds_the_destination_is_not_used_for() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a = Library::create(&tmp.path().join("A.library")).unwrap();
+        let b_root = tmp.path().join("B.library");
+        let b = Library::create(&b_root).unwrap();
+        db::set_library_setting(&b.conn, "modes", Some(&serde_json::json!(["font"]))).unwrap();
+        drop(b);
+        add(&a, "i1", "h1");
+        add(&a, "i2", "h2");
+        let src = Source::read(&a, &["i1".into(), "i2".into()]).unwrap();
+        let sum = copy_into(&src, &b_root, |_, _| {}).unwrap();
+        assert_eq!(sum.unused_kinds, BTreeMap::from([(db::Kind::Image, 2)]));
+    }
+
+    #[test]
     fn copies_rows_files_tags_and_folders() {
         let tmp = tempfile::tempdir().unwrap();
         let mut a = Library::create(&tmp.path().join("A.library")).unwrap();
@@ -326,6 +351,8 @@ mod tests {
         let sum = copy_into(&src, &b_root, |_, _| {}).unwrap();
         assert_eq!((sum.copied, sum.duplicates, sum.failed.len()), (1, 1, 0));
         assert_eq!(sum.done_ids, vec!["i1".to_string(), "i2".to_string()]);
+        // B is used for every kind (no `modes` setting).
+        assert!(sum.unused_kinds.is_empty());
 
         b = Library::open(&b_root).unwrap();
         assert!(b_root.join("images/i1/a.png").is_file());

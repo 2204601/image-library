@@ -49,6 +49,31 @@ struct Settings {
     /// Libraries opened or created before (the library switcher's list).
     libraries: Vec<KnownLibrary>,
     web_import: WebImportSettings,
+    #[serde(flatten)]
+    app: AppSettings,
+}
+
+/// The settings screen's "一般" tab (docs/SETTINGS.md).
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AppSettings {
+    /// What opens at launch: the last library, or the list to choose from.
+    startup: Startup,
+    /// Look for a new version a few seconds after launch.
+    auto_update: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self { startup: Startup::Last, auto_update: true }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum Startup {
+    Last,
+    Choose,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -142,10 +167,15 @@ fn library_name(root: &std::path::Path) -> String {
     root.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
-/// Re-opens the library used last time, if it still exists.
+/// Re-opens the library used last time, if it still exists (and the user
+/// didn't choose to pick one at launch).
 #[tauri::command]
 pub fn open_last_library(app: AppHandle, state: State<AppState>) -> CmdResult<Option<LibraryInfo>> {
-    match load_settings(&app).last_library {
+    let settings = load_settings(&app);
+    if settings.app.startup == Startup::Choose {
+        return Ok(None);
+    }
+    match settings.last_library {
         Some(p) => match Library::open(&p) {
             Ok(lib) => activate(&app, &state, lib).map(Some),
             Err(_) => Ok(None),
@@ -273,6 +303,37 @@ pub async fn transfer_items(
 #[tauri::command]
 pub fn open_library(app: AppHandle, state: State<AppState>, path: PathBuf) -> CmdResult<LibraryInfo> {
     activate(&app, &state, Library::open(&path)?)
+}
+
+#[tauri::command]
+pub fn get_app_settings(app: AppHandle) -> AppSettings {
+    load_settings(&app).app
+}
+
+#[tauri::command]
+pub fn set_app_settings(app: AppHandle, settings: AppSettings) -> CmdResult<AppSettings> {
+    let mut all = load_settings(&app);
+    all.app = settings;
+    save_settings(&app, &all)?;
+    Ok(all.app)
+}
+
+/// The open library's own settings (`settings` table in library.db), as JSON by key.
+#[tauri::command]
+pub fn get_library_settings(state: State<AppState>) -> CmdResult<std::collections::BTreeMap<String, serde_json::Value>> {
+    with_lib(&state, |lib| db::library_settings(&lib.conn).map_err(err))
+}
+
+/// `value: null` removes the setting.
+#[tauri::command]
+pub fn set_library_setting(state: State<AppState>, key: String, value: serde_json::Value) -> CmdResult<()> {
+    with_lib(&state, |lib| db::set_library_setting(&lib.conn, &key, Some(&value)).map_err(err))
+}
+
+/// Bytes of the files in the open library (the settings screen).
+#[tauri::command]
+pub fn library_size(state: State<AppState>) -> CmdResult<i64> {
+    with_lib(&state, |lib| db::total_size(&lib.conn).map_err(err))
 }
 
 // ---------------------------------------------------------------- items
@@ -472,13 +533,41 @@ pub fn copy_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<usize> 
 
 /// Copies the original files into `dest`, never overwriting existing files.
 #[tauri::command]
-pub fn export_items(state: State<AppState>, ids: Vec<String>, dest: PathBuf) -> CmdResult<usize> {
+pub fn export_items(
+    state: State<AppState>,
+    ids: Vec<String>,
+    dest: PathBuf,
+    subdirs: Option<Vec<String>>,
+) -> CmdResult<usize> {
     let items = item_paths(&state, &ids)?;
     for (item, src) in &items {
-        let target = export_target(&dest, &item.name, &item.ext);
-        fs::copy(src, target).map_err(err)?;
+        // The folder under `dest` given for this item (same position as its id).
+        let sub = subdirs
+            .as_ref()
+            .and_then(|s| s.get(ids.iter().position(|x| *x == item.id)?))
+            .map_or("", String::as_str);
+        let dir = export_dir(&dest, sub);
+        fs::create_dir_all(&dir).map_err(err)?;
+        fs::copy(src, export_target(&dir, &item.name, &item.ext)).map_err(err)?;
     }
     Ok(items.len())
+}
+
+/// `dest` plus a relative folder path ("旅行/2025/京都", `/`-separated), each
+/// part made safe as a file name. Empty parts, "." and ".." are dropped so
+/// nothing lands outside `dest`.
+fn export_dir(dest: &std::path::Path, rel: &str) -> PathBuf {
+    rel.split('/')
+        .map(str::trim)
+        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
+        .fold(dest.to_path_buf(), |d, p| d.join(safe_name(p)))
+}
+
+/// Characters not allowed in file names on Windows (or anywhere) become `_`.
+fn safe_name(name: &str) -> String {
+    name.chars()
+        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect()
 }
 
 /// `dest/name.ext`, or `name (2).ext`… when taken. Keeps a renamed item's
@@ -488,10 +577,7 @@ fn export_target(dest: &std::path::Path, name: &str, ext: &str) -> PathBuf {
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case(ext));
     let stem = if has_ext { &name[..name.len() - ext.len() - 1] } else { name };
-    let clean: String = stem
-        .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
-        .collect();
+    let clean = safe_name(stem);
     let mut candidate = dest.join(format!("{clean}.{ext}"));
     let mut n = 2;
     while candidate.exists() {
@@ -1060,6 +1146,16 @@ mod tests {
         std::fs::write(d.join("cat.png"), "x").unwrap();
         std::fs::write(d.join("cat (2).png"), "x").unwrap();
         assert_eq!(super::export_target(d, "cat.png", "png"), d.join("cat (3).png"));
+    }
+
+    #[test]
+    fn export_folders() {
+        let d = std::path::Path::new("/out");
+        assert_eq!(super::export_dir(d, ""), d);
+        assert_eq!(super::export_dir(d, "旅行/2025/京都"), d.join("旅行").join("2025").join("京都"));
+        // Names unsafe on Windows are replaced; nothing climbs out of `dest`.
+        assert_eq!(super::export_dir(d, "a:b/../c*"), d.join("a_b").join("c_"));
+        assert_eq!(super::export_dir(d, "/./ x /"), d.join("x"));
     }
 
     #[test]

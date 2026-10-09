@@ -1,16 +1,11 @@
 // The library menu (sidebar header) and the list of known libraries: the ones
 // opened or created before, favourites first. Also used on the welcome screen.
-import { Check, ChevronDown, FolderInput, FolderOpen, Library, Plus, Puzzle, RefreshCw, Star, X } from "lucide-react";
+import { Check, ChevronDown, FolderOpen, Library, Plus, Settings, Star, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import {
-  createLibraryDialog,
-  openLibraryAt,
-  openLibraryDialog,
-  transferAllOfMode,
-} from "../lib/actions";
-import { api, kindLabel, type LibraryEntry } from "../lib/api";
-import { appVersion, checkForUpdate } from "../lib/update";
+import { createLibraryDialog, openLibraryAt, openLibraryDialog } from "../lib/actions";
+import { api, type LibraryEntry } from "../lib/api";
 import { useStore } from "../store";
+import { SETTINGS_KEY } from "./SettingsDialog";
 
 export function useLibraries() {
   const [list, setList] = useState<LibraryEntry[] | null>(null);
@@ -140,8 +135,6 @@ function MenuButton({ icon, label, hint, onClick }: { icon: React.ReactNode; lab
 
 function Panel({ close }: { close: () => void }) {
   const { list, reload } = useLibraries();
-  const mode = useStore((s) => s.mode);
-  const count = useStore((s) => s.counts.kinds[s.mode] ?? 0);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
@@ -175,23 +168,14 @@ function Panel({ close }: { close: () => void }) {
           <MenuButton icon={<FolderOpen size={15} />} label="ほかのライブラリを開く…" onClick={then(openLibraryDialog)} />
           <MenuButton icon={<Plus size={15} />} label="新しいライブラリを作成…" onClick={then(createLibraryDialog)} />
         </div>
+        {/* Everything else about the app and this library (browser extension,
+            updates, moving items to another library) is in the settings. */}
         <div className="border-t border-line p-1">
           <MenuButton
-            icon={<FolderInput size={15} />}
-            label={`${kindLabel(mode)}を別のライブラリへ移す…`}
-            hint={count ? `${count} 件` : undefined}
-            onClick={then(transferAllOfMode)}
-          />
-          <MenuButton
-            icon={<Puzzle size={15} />}
-            label="ブラウザ拡張と連携…"
-            onClick={then(() => useStore.getState().setWebImportOpen(true))}
-          />
-          <MenuButton
-            icon={<RefreshCw size={15} />}
-            label="アップデートを確認…"
-            hint={appVersion()}
-            onClick={then(() => checkForUpdate(true))}
+            icon={<Settings size={15} />}
+            label="設定…"
+            hint={SETTINGS_KEY}
+            onClick={then(() => useStore.getState().openSettings("general"))}
           />
         </div>
       </div>
