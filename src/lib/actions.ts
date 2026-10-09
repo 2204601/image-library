@@ -11,6 +11,7 @@ import {
   type Mode,
   type ToastAction,
 } from "../store";
+import { openGuarded } from "./libraryLock";
 
 const st = () => useStore.getState();
 
@@ -26,7 +27,9 @@ export async function createLibraryDialog() {
   const path = await save({ title: "新しいライブラリの保存先", defaultPath: "MyPictures.library" });
   if (!path) return;
   try {
-    st().setLibrary(await api.createLibrary(path));
+    // An existing library at the path opens instead; it may be open elsewhere.
+    const lib = await openGuarded(path, (force) => api.createLibrary(path, true, force));
+    if (lib) st().setLibrary(lib);
   } catch (e) {
     st().toast(String(e), true);
   }
@@ -36,7 +39,8 @@ export async function openLibraryDialog() {
   const path = await open({ title: "ライブラリフォルダを選択", directory: true });
   if (typeof path !== "string") return;
   try {
-    st().setLibrary(await api.openLibrary(path));
+    const lib = await openGuarded(path, (force) => api.openLibrary(path, force));
+    if (lib) st().setLibrary(lib);
   } catch (e) {
     st().toast(String(e), true);
   }
@@ -46,7 +50,8 @@ export async function openLibraryDialog() {
 export async function openLibraryAt(root: string) {
   if (st().library?.root === root) return;
   try {
-    st().setLibrary(await api.openLibrary(root));
+    const lib = await openGuarded(root, (force) => api.openLibrary(root, force));
+    if (lib) st().setLibrary(lib);
   } catch (e) {
     st().notify({ title: "ライブラリを開けませんでした", detail: String(e), kind: "error" });
   }

@@ -350,10 +350,12 @@ export interface Change {
 }
 
 export const api = {
-  openLastLibrary: () => invoke<LibraryInfo | null>("open_last_library"),
+  /** `force`: open even when another PC has it open (see lib/libraryLock.ts). */
+  openLastLibrary: (force = false) => invoke<LibraryInfo | null>("open_last_library", { force }),
   /** `open: false` only creates it (and adds it to the list). */
-  createLibrary: (path: string, open = true) => invoke<LibraryInfo>("create_library", { path, open }),
-  openLibrary: (path: string) => invoke<LibraryInfo>("open_library", { path }),
+  createLibrary: (path: string, open = true, force = false) =>
+    invoke<LibraryInfo>("create_library", { path, open, force }),
+  openLibrary: (path: string, force = false) => invoke<LibraryInfo>("open_library", { path, force }),
   listLibraries: () => invoke<LibraryEntry[]>("list_libraries"),
   setLibraryFavorite: (path: string, favorite: boolean) => invoke<void>("set_library_favorite", { path, favorite }),
   forgetLibrary: (path: string) => invoke<void>("forget_library", { path }),

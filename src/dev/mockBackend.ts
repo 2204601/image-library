@@ -521,6 +521,9 @@ function handle(cmd: string, a: any): unknown {
     case "open_last_library":
     case "create_library":
     case "open_library":
+      // "Fonts" acts as open on another PC (library.lock), to try the question.
+      if (a.path?.endsWith("Fonts.library") && !a.force)
+        throw `LOCKED:${JSON.stringify({ machine: "x", name: "会議室の Windows", pid: 1, at: Date.now() - 60_000 })}`;
       return { root: "/mock/Demo.library", name: "Demo (mock)" };
     case "list_libraries":
       return mockLibraries;
