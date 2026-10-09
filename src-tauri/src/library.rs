@@ -3,6 +3,8 @@
 //!   <name>.library/images/<item id>/<file name>
 //!   <name>.library/thumbs/<item id>.jpg|png
 //!   <name>.library/thumbs/<item id>_o<flip><turns>.jpg|png  (rotated, see orient.rs)
+//!   <name>.library/previews/<item id>.jpg  (display copy, HEIC / TIFF)
+//!   <name>.library/previews/<item id>.pdf|.qlpreview/  (documents, see files/preview.rs)
 //!   <name>.library/library.lock   while the app has it open (see `Holder`)
 //!
 //! A library folder may be synced by Dropbox / OneDrive / iCloud Drive. Two
@@ -161,6 +163,7 @@ impl Library {
             if let Some(p) = &item.preview {
                 let _ = fs::remove_file(self.root.join("previews").join(p));
             }
+            crate::files::preview::remove(&self.root.join("previews"), &item.id);
         }
         Ok(())
     }

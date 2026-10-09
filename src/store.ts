@@ -20,6 +20,7 @@ import {
   type View,
 } from "./lib/api";
 import { fontApi } from "./features/fonts/api";
+import { filesApi, onFileThumbs } from "./features/files/api";
 import { modeKind, modeKinds, modesFor, type Mode } from "./lib/modes";
 import {
   DEFAULT_LIBRARY_SETTINGS,
@@ -593,6 +594,9 @@ export const useStore = create<State>((set, get) => ({
           if (n > 0) get().refresh();
         })
         .catch(() => {});
+      // Windows: office documents' thumbnails made by Office (when installed).
+      watchFileThumbs();
+      filesApi.prepareThumbs().catch(() => {});
     }
   },
   setMode: (mode) => {
@@ -988,8 +992,19 @@ export const useStore = create<State>((set, get) => ({
     });
     if (s.failed.length) console.warn("import failures", s.failed);
     notifyUnusedKinds(s.kinds ?? {});
+    if (s.kinds?.file) filesApi.prepareThumbs().catch(() => {});
   },
 }));
+
+let watchingFileThumbs = false;
+/** Shows office documents' thumbnails as they are replaced in the background. */
+function watchFileThumbs() {
+  if (watchingFileThumbs) return;
+  watchingFileThumbs = true;
+  onFileThumbs(() => useStore.getState().refresh()).catch(() => {
+    watchingFileThumbs = false;
+  });
+}
 
 /**
  * After an import: tells about items of kinds the library isn't used for

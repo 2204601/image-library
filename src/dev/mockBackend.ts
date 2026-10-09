@@ -648,6 +648,11 @@ function handle(cmd: string, a: any): unknown {
         faces: it.ext === "ttc" ? 2 : 1,
       };
     }
+    case "file_preview":
+      // No Quick Look / Office in the browser mock: the viewer shows the thumbnail.
+      return null;
+    case "prepare_file_thumbs":
+      return null;
     case "font_data":
       // No font files in the browser mock: the viewer falls back to the system font.
       throw "モックではフォントを読み込めません";

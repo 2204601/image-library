@@ -70,6 +70,8 @@ pub fn run() {
             fonts::commands::index_fonts,
             fonts::commands::set_font_category,
             fonts::commands::font_data,
+            files::commands::file_preview,
+            files::commands::prepare_file_thumbs,
             copy_items,
             export_items,
             add_to_tray,

@@ -120,6 +120,7 @@ MyPictures.library/
   images/<id>/<元のファイル名>  # 取り込んだ画像のコピー
   thumbs/<id>.jpg|png        # 長辺 512px のサムネイル（透過画像は PNG）
   thumbs/<id>_o<反転><回転>.jpg|png  # 回転・反転した画像のサムネイル（元のサムネイルも残す）
+  previews/<id>.pdf|.qlpreview/  # オフィス文書のビューア用（Windows は Office が作る PDF、macOS は Quick Look）
   previews/<id>.jpg          # HEIC・TIFF の表示用 JPEG（長辺 4096px まで）
   library.lock               # アプリで開いている間だけ（開いている PC の名前と、2 分ごとに更新する時刻）
 ```

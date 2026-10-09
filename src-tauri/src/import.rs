@@ -23,7 +23,7 @@ use std::sync::Mutex;
 use walkdir::WalkDir;
 
 pub use formats::SUPPORTED_EXTS;
-const THUMB_MAX: u32 = 512;
+pub(crate) const THUMB_MAX: u32 = 512;
 /// Longest side of display copies (see `formats::needs_preview`).
 const PREVIEW_MAX: u32 = 4096;
 
@@ -137,7 +137,7 @@ fn write_jpeg(img: &DynamicImage, path: &Path, quality: u8) -> Result<(), String
 
 /// Writes a JPEG thumbnail, or PNG when the image has real transparency.
 /// Returns the thumbnail's file name.
-fn write_thumb(thumb: &DynamicImage, dir: &Path, id: &str) -> Result<String, String> {
+pub(crate) fn write_thumb(thumb: &DynamicImage, dir: &Path, id: &str) -> Result<String, String> {
     let transparent = thumb.color().has_alpha() && thumb.to_rgba8().pixels().any(|p| p[3] < 255);
     if transparent {
         let name = format!("{id}.png");
