@@ -13,6 +13,7 @@ import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
 import { SheetDialog } from "./components/SheetDialog";
+import { TransferDialog } from "./components/TransferDialog";
 import { PairDialog, WebImportDialog } from "./components/WebImportDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths } from "./lib/actions";
@@ -68,10 +69,11 @@ export default function App() {
       timer = setTimeout(() => {
         const s = useStore.getState();
         s.refresh();
-        const parts = [];
-        if (added) parts.push(`ブラウザから ${added} 件を追加しました`);
-        if (known) parts.push(`${known} 件はすでにライブラリにあります`);
-        s.toast(parts.join(" / "));
+        s.notify({
+          title: added ? `ブラウザから ${added} 件を追加しました` : "ブラウザから追加されたものはありません",
+          detail: known ? `${known} 件はすでにライブラリにあります` : undefined,
+          kind: added ? "success" : "info",
+        });
         added = known = 0;
       }, 800);
     });
@@ -119,7 +121,7 @@ export default function App() {
 
   useEffect(() => {
     const unlisten = listen<{ done: number; total: number }>("import-progress", (e) =>
-      useStore.getState().setImporting(e.payload.total > 1 ? e.payload : null),
+      useStore.getState().setImporting(e.payload.total > 1 ? { label: "読み込み中…", ...e.payload } : null),
     );
     const onPaste = (e: ClipboardEvent) => {
       if ((e.target as HTMLElement).closest?.("input, textarea")) return;
@@ -184,6 +186,7 @@ export default function App() {
       <FolderPicker />
       <DuplicateReview />
       <SheetDialog />
+      <TransferDialog />
       <WebImportDialog />
       <PairDialog />
       <DragLayer />

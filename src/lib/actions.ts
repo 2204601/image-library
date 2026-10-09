@@ -1,7 +1,8 @@
 // User-level actions shared by several components (dialogs + API + refresh).
+import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, FONT_EXTS, kindLabel, type Item, type OrientOp } from "./api";
-import { activeConditions, currentFolderId, useStore } from "../store";
+import { api, EMPTY_FILTER, FONT_EXTS, kindLabel, type Item, type LibraryInfo, type OrientOp } from "./api";
+import { activeConditions, currentFolderId, useStore, type Mode } from "../store";
 
 const st = () => useStore.getState();
 
@@ -23,6 +24,84 @@ export async function openLibraryDialog() {
   } catch (e) {
     st().toast(String(e), true);
   }
+}
+
+/** Switches to a library from the list of known ones. */
+export async function openLibraryAt(root: string) {
+  if (st().library?.root === root) return;
+  try {
+    st().setLibrary(await api.openLibrary(root));
+  } catch (e) {
+    st().notify({ title: "ライブラリを開けませんでした", detail: String(e), kind: "error" });
+  }
+}
+
+/** Picks a folder for a new library without opening it (a destination to copy into). */
+export async function createLibraryOnly(): Promise<LibraryInfo | null> {
+  const path = await save({ title: "新しいライブラリの保存先", defaultPath: "MyFonts.library" });
+  if (!path) return null;
+  try {
+    return await api.createLibrary(path, false);
+  } catch (e) {
+    st().toast(String(e), true);
+    return null;
+  }
+}
+
+/** Picks an existing library folder without opening it. */
+export async function pickLibraryFolder(): Promise<string | null> {
+  const path = await open({ title: "ライブラリフォルダを選択", directory: true });
+  return typeof path === "string" ? path : null;
+}
+
+/**
+ * Copies (or moves) items into another library, keeping their tags, folder,
+ * rating, favourite and note. Moving puts them in this library's trash.
+ */
+export async function transferTo(
+  dest: LibraryInfo,
+  scope: { ids: string[] } | { kind: Mode },
+  move: boolean,
+) {
+  const verb = move ? "移動" : "コピー";
+  const label = `「${dest.name}」へ${verb}中…`;
+  st().setImporting({ label, done: 0, total: 0 });
+  const unlisten = await listen<{ done: number; total: number }>("transfer-progress", (e) =>
+    st().setImporting({ label, ...e.payload }),
+  );
+  try {
+    const r = await api.transferItems(dest.root, scope, move);
+    const n = r.copied + r.duplicates;
+    const parts = [];
+    if (r.duplicates) parts.push(`${r.duplicates} 件はすでにあったため、タグとフォルダだけ統合`);
+    if (r.failed.length) parts.push(`${r.failed.length} 件は失敗：${r.failed.slice(0, 2).join("、")}`);
+    if (move && n) parts.push("元のライブラリではゴミ箱に入っています");
+    st().notify({
+      title: n ? `${n} 件を「${dest.name}」へ${verb}しました` : `「${dest.name}」へ${verb}できませんでした`,
+      detail: parts.join(" / ") || undefined,
+      kind: n ? "success" : "error",
+      action: n ? { label: `「${dest.name}」を開く`, onClick: () => openLibraryAt(dest.root) } : undefined,
+      duration: 10000,
+    });
+    if (r.failed.length) console.warn("transfer failures", r.failed);
+  } catch (e) {
+    st().notify({ title: `${verb}できませんでした`, detail: String(e), kind: "error" });
+  } finally {
+    unlisten();
+    st().setImporting(null);
+    await st().refresh();
+  }
+}
+
+/** Opens the "別のライブラリへ" dialog for every item of the current mode. */
+export function transferAllOfMode() {
+  const { mode, counts } = st();
+  const count = counts.kinds[mode] ?? 0;
+  if (!count) {
+    st().toast(`このライブラリに${kindLabel(mode)}はありません`);
+    return;
+  }
+  st().setTransfer({ ids: null, kind: mode, count });
 }
 
 let busy = false;

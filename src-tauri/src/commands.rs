@@ -46,7 +46,43 @@ pub(crate) fn with_lib<T>(state: &AppState, f: impl FnOnce(&mut Library) -> CmdR
 #[serde(rename_all = "camelCase", default)]
 struct Settings {
     last_library: Option<PathBuf>,
+    /// Libraries opened or created before (the library switcher's list).
+    libraries: Vec<KnownLibrary>,
     web_import: WebImportSettings,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct KnownLibrary {
+    path: PathBuf,
+    favorite: bool,
+    /// ms; 0 = never opened (e.g. only copied into).
+    last_opened: i64,
+}
+
+/// Recent libraries kept besides the favourites.
+const RECENT_LIBRARIES: usize = 20;
+
+impl Settings {
+    /// Adds the library to the list, or updates it; `opened` bumps it to the top.
+    fn remember(&mut self, path: &std::path::Path, opened: bool) {
+        let now = db::now_ms();
+        match self.libraries.iter_mut().find(|l| l.path == path) {
+            Some(l) if opened => l.last_opened = now,
+            Some(_) => {}
+            None => self.libraries.push(KnownLibrary {
+                path: path.to_path_buf(),
+                favorite: false,
+                last_opened: if opened { now } else { 0 },
+            }),
+        }
+        self.libraries.sort_by(|a, b| b.last_opened.cmp(&a.last_opened));
+        let mut recent = 0;
+        self.libraries.retain(|l| {
+            recent += usize::from(!l.favorite);
+            l.favorite || recent <= RECENT_LIBRARIES
+        });
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -92,17 +128,18 @@ fn activate(app: &AppHandle, state: &AppState, lib: Library) -> CmdResult<Librar
         .map_err(err)?;
     let info = LibraryInfo {
         root: lib.root.display().to_string(),
-        name: lib
-            .root
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default(),
+        name: library_name(&lib.root),
     };
     let mut settings = load_settings(app);
     settings.last_library = Some(lib.root.clone());
+    settings.remember(&lib.root, true);
     save_settings(app, &settings)?;
     *state.lib.lock().unwrap() = Some(lib);
     Ok(info)
+}
+
+fn library_name(root: &std::path::Path) -> String {
+    root.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
 /// Re-opens the library used last time, if it still exists.
@@ -117,14 +154,120 @@ pub fn open_last_library(app: AppHandle, state: State<AppState>) -> CmdResult<Op
     }
 }
 
+/// `open: false` only creates it (a destination for "別のライブラリへ") and
+/// adds it to the list of libraries.
 #[tauri::command]
-pub fn create_library(app: AppHandle, state: State<AppState>, path: PathBuf) -> CmdResult<LibraryInfo> {
+pub fn create_library(
+    app: AppHandle,
+    state: State<AppState>,
+    path: PathBuf,
+    open: Option<bool>,
+) -> CmdResult<LibraryInfo> {
     let path = if path.extension().is_some_and(|e| e == "library") {
         path
     } else {
         path.with_extension("library")
     };
-    activate(&app, &state, Library::create(&path)?)
+    let lib = Library::create(&path)?;
+    if open.unwrap_or(true) {
+        return activate(&app, &state, lib);
+    }
+    let mut settings = load_settings(&app);
+    settings.remember(&lib.root, false);
+    save_settings(&app, &settings)?;
+    Ok(LibraryInfo { root: lib.root.display().to_string(), name: library_name(&lib.root) })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryEntry {
+    root: String,
+    name: String,
+    favorite: bool,
+    last_opened: i64,
+    /// False when the folder is gone (deleted, or on a disconnected drive).
+    exists: bool,
+    current: bool,
+}
+
+/// Known libraries: favourites first, then the most recently opened.
+#[tauri::command]
+pub fn list_libraries(app: AppHandle, state: State<AppState>) -> CmdResult<Vec<LibraryEntry>> {
+    let current = state.lib.lock().unwrap().as_ref().map(|l| l.root.clone());
+    let mut settings = load_settings(&app);
+    // Libraries from before the list existed.
+    if let Some(last) = settings.last_library.clone() {
+        if !settings.libraries.iter().any(|l| l.path == last) {
+            settings.remember(&last, true);
+        }
+    }
+    let mut out: Vec<_> = settings
+        .libraries
+        .iter()
+        .map(|l| LibraryEntry {
+            root: l.path.display().to_string(),
+            name: library_name(&l.path),
+            favorite: l.favorite,
+            last_opened: l.last_opened,
+            exists: l.path.join(crate::library::DB_FILE).is_file(),
+            current: current.as_ref() == Some(&l.path),
+        })
+        .collect();
+    out.sort_by(|a, b| b.favorite.cmp(&a.favorite).then(b.last_opened.cmp(&a.last_opened)));
+    Ok(out)
+}
+
+#[tauri::command]
+pub fn set_library_favorite(app: AppHandle, path: PathBuf, favorite: bool) -> CmdResult<()> {
+    let mut settings = load_settings(&app);
+    settings.remember(&path, false);
+    if let Some(l) = settings.libraries.iter_mut().find(|l| l.path == path) {
+        l.favorite = favorite;
+    }
+    save_settings(&app, &settings)
+}
+
+/// Takes a library off the list (the folder is left alone).
+#[tauri::command]
+pub fn forget_library(app: AppHandle, path: PathBuf) -> CmdResult<()> {
+    let mut settings = load_settings(&app);
+    settings.libraries.retain(|l| l.path != path);
+    save_settings(&app, &settings)
+}
+
+/// Copies items (with their tags, folder, rating, favourite, ...) into another
+/// library; `move_items` then puts them in this library's trash. Without
+/// `ids`, every item of `kind` not in the trash.
+#[tauri::command]
+pub async fn transfer_items(
+    app: AppHandle,
+    dest: PathBuf,
+    ids: Option<Vec<String>>,
+    kind: Option<db::Kind>,
+    move_items: bool,
+) -> CmdResult<crate::transfer::TransferSummary> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let src = with_lib(&state, |lib| {
+            let ids = match ids {
+                Some(ids) => ids,
+                None => db::live_ids(&lib.conn, kind).map_err(err)?,
+            };
+            crate::transfer::Source::read(lib, &ids)
+        })?;
+        let summary = crate::transfer::copy_into(&src, &dest, |done, total| {
+            let _ = app.emit("transfer-progress", Progress { done, total });
+        })?;
+        if move_items && !summary.done_ids.is_empty() {
+            with_lib(&state, |lib| db::trash_items(&lib.conn, &summary.done_ids).map_err(err))?;
+        }
+        let mut settings = load_settings(&app);
+        settings.remember(&dest, false);
+        let _ = save_settings(&app, &settings);
+        Ok(summary)
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]

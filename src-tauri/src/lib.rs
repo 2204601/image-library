@@ -9,6 +9,7 @@ pub mod proxy;
 pub mod search;
 pub mod sheet;
 pub mod similar;
+pub mod transfer;
 pub mod webimport;
 
 use commands::*;
@@ -50,6 +51,10 @@ pub fn run() {
             open_last_library,
             create_library,
             open_library,
+            list_libraries,
+            set_library_favorite,
+            forget_library,
+            transfer_items,
             query_items,
             get_counts,
             selection_info,
