@@ -3,15 +3,19 @@ import {
   ArrowUpNarrowWide,
   ChevronDown,
   CopyCheck,
+  Download,
   Filter as FilterIcon,
   FolderInput,
   FolderSearch,
   ImagePlus,
   LayoutGrid,
+  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  RotateCcw,
+  RotateCw,
   Search,
   Star,
   Trash2,
@@ -22,11 +26,14 @@ import { dragRegion } from "../lib/titleBar";
 import {
   clearDismissedDuplicates,
   clearTray,
+  deleteSelection,
   emptyTrash,
+  exportSelection,
   exportTray,
   importFilesDialog,
   importFolderDialog,
   keepPlan,
+  orient,
   reviewDuplicates,
   sheetFromTray,
   similarGroups,
@@ -36,7 +43,10 @@ import { modeNoun } from "../lib/modes";
 import { fontCategoryLabel, fontScriptLabel, type Folder, type SimilarLevel, type SmartFolder, type SortKey, type View } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
+import { appliesTo, command } from "../lib/commands";
+import { comboText } from "../lib/shortcuts";
 import { activeConditions, useStore, type Mode } from "../store";
+import { showItemMenu } from "./Grid";
 import { FilterBar } from "./FilterBar";
 import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
 
@@ -150,7 +160,9 @@ export function Toolbar() {
       {/* Collapses progressively by toolbar width (container queries) so nothing
           overflows into the inspector: label → slider → two rows. */}
       <div className="flex items-center gap-x-3 gap-y-2 @max-xl:flex-col @max-xl:items-stretch">
-        <div className="flex min-w-40 flex-1 items-center gap-2">
+        {/* Sized to its content; the right side takes the rest, so short of room the
+            search box gives way first, then the title (never the count or the actions). */}
+        <div className="flex items-center gap-2">
           <button
             title={`サイドバーを${sidebarOpen ? "隠す" : "表示"}（Tab / ⌘⌥1）`}
             onClick={toggleSidebar}
@@ -160,7 +172,7 @@ export function Toolbar() {
           >
             {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </button>
-          <h1 className="flex min-w-0 flex-1 items-baseline gap-2 text-base font-semibold">
+          <h1 className="flex items-baseline gap-2 text-base font-semibold">
             {smart && <FolderSearch size={15} className="shrink-0 self-center text-accent" />}
             <span className="truncate">{viewTitle(view, folders, smartFolders)}</span>
             {selectedCount > 0 ? (
@@ -179,12 +191,14 @@ export function Toolbar() {
               <span className="shrink-0 text-xs font-normal text-dim tabular-nums">{count} 件</span>
             )}
           </h1>
+          {selectedCount > 0 && !isTrash && <SelectionActions />}
+          <div className="flex-1" />
           <InspectorToggle className="hidden @max-xl:flex" />
         </div>
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex flex-1 items-center justify-end gap-2">
           <label
             title={searchHelp(mode)}
-            className="flex h-8 w-60 min-w-28 shrink items-center gap-2 rounded-md border border-line bg-bg px-2 focus-within:border-accent @max-xl:w-auto @max-xl:min-w-0 @max-xl:flex-1"
+            className="flex h-8 min-w-28 shrink basis-60 items-center gap-2 rounded-md border border-line bg-bg px-2 focus-within:border-accent @max-xl:min-w-0 @max-xl:flex-1"
           >
             <Search size={14} className="shrink-0 text-dim" />
             <input
@@ -193,7 +207,7 @@ export function Toolbar() {
               onChange={(e) => setText(e.target.value)}
               onKeyDown={(e) => e.key === "Escape" && (setText(""), e.currentTarget.blur())}
               placeholder="検索（-除外 / OR）"
-              className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-dim"
+              className="w-0 min-w-0 flex-1 bg-transparent outline-none placeholder:text-dim"
             />
             {text && (
               <button onClick={() => setText("")} className="text-dim hover:text-fg">
@@ -403,6 +417,55 @@ export function Toolbar() {
       {(filterOpen || editingSmart) && <FilterBar />}
       {conditions > 0 && !editingSmart && <ActiveFilters count={count} />}
     </header>
+  );
+}
+
+/**
+ * Operations on the selection, next to the "N 件を選択中" chip so they stay
+ * at hand with the inspector closed (docs/MENUS.md §7). "…" opens the same
+ * menu as a right-click; below @3xl there is only room for it and the trash.
+ */
+function SelectionActions() {
+  const selected = useStore((s) => s.selected);
+  const items = useStore((s) => s.items);
+  // Images only (in "すべて", when only images are selected).
+  const rotatable = useStore((s) => appliesTo(command("item.rotateCw"), s));
+  const ids = [...selected];
+  const button = (icon: React.ReactNode, title: string, onClick: (e: React.MouseEvent) => void, extra = "") => (
+    <button
+      title={title}
+      aria-label={title}
+      onClick={onClick}
+      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-white/10 ${extra}`}
+    >
+      {icon}
+    </button>
+  );
+  const narrow = "@max-3xl:hidden";
+  const more = (e: React.MouseEvent) => {
+    const index = items.findIndex((i) => i.id === ids[0]);
+    if (index < 0) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    showItemMenu({ clientX: r.left, clientY: r.bottom + 4 }, items[index], index);
+  };
+  return (
+    <div className="flex shrink-0 items-center text-fg/80">
+      {rotatable && (
+        <>
+          {button(<RotateCcw size={15} />, `左に回転（${comboText("Mod+Shift+L")}）`, () => orient(ids, "rotateCcw"), narrow)}
+          {button(<RotateCw size={15} />, `右に回転（${comboText("Mod+Shift+R")}）`, () => orient(ids, "rotateCw"), narrow)}
+        </>
+      )}
+      {button(
+        <FolderInput size={15} />,
+        `フォルダへ移動…（${comboText("Mod+Shift+J")}）`,
+        () => useStore.getState().setPicker("move"),
+        narrow,
+      )}
+      {button(<Download size={15} />, `書き出し…（${comboText("Mod+E")}）`, () => exportSelection(ids), narrow)}
+      {button(<MoreHorizontal size={15} />, "そのほかの操作", more)}
+      {button(<Trash2 size={15} />, `ゴミ箱へ移動（${comboText("Mod+Backspace")}）`, () => deleteSelection(ids), "text-danger")}
+    </div>
   );
 }
 

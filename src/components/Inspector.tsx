@@ -2,24 +2,16 @@ import { colorHex } from "../lib/colors";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
-  Download,
   Folder as FolderIcon,
-  FolderInput,
   Heart,
   Layers,
-  MoreHorizontal,
   Pin,
   Plus,
-  RotateCcw,
-  RotateCw,
-  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   deleteSelection,
-  exportSelection,
-  orient,
   setRating,
   toggleFavorite,
   togglePinned,
@@ -30,9 +22,6 @@ import { api, formatBytes, sizeLabel, type Folder, type Item, type SelectionInfo
 import { FontCategorySelect, FontDetails } from "../features/fonts/FontDetails";
 import { useStore } from "../store";
 import { RatingStars } from "./RatingStars";
-import { showItemMenu } from "./Grid";
-import { comboText } from "../lib/shortcuts";
-import { appliesTo, command } from "../lib/commands";
 
 function folderPath(folders: Folder[], id: string): string {
   const byId = new Map(folders.map((f) => [f.id, f]));
@@ -302,52 +291,6 @@ export function FlagButton({
   );
 }
 
-/**
- * Operations on the selection at the top of the panel (docs/MENUS.md §5);
- * "…" opens the same menu as a right-click.
- */
-function ActionRow({ ids, items }: { ids: string[]; items: Item[] }) {
-  // Images only (in "すべて", when only images are selected).
-  const rotatable = useStore((s) => appliesTo(command("item.rotateCw"), s));
-  const button = (icon: React.ReactNode, title: string, onClick: (e: React.MouseEvent) => void, danger = false) => (
-    <button
-      title={title}
-      aria-label={title}
-      onClick={onClick}
-      className={`flex h-7 w-7 items-center justify-center rounded-md hover:bg-white/10 ${
-        danger ? "text-danger" : "text-fg/80 hover:text-fg"
-      }`}
-    >
-      {icon}
-    </button>
-  );
-  const bar = <div className="mx-1 h-4 w-px bg-line" />;
-  const more = (e: React.MouseEvent) => {
-    const index = items.findIndex((i) => i.id === ids[0]);
-    if (index < 0) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    showItemMenu({ clientX: r.left, clientY: r.bottom + 4 }, items[index], index);
-  };
-  return (
-    <div className="-mx-1 mb-3 flex items-center">
-      {rotatable && (
-        <>
-          {button(<RotateCcw size={15} />, `左に回転（${comboText("Mod+Shift+L")}）`, () => orient(ids, "rotateCcw"))}
-          {button(<RotateCw size={15} />, `右に回転（${comboText("Mod+Shift+R")}）`, () => orient(ids, "rotateCw"))}
-          {bar}
-        </>
-      )}
-      {button(<FolderInput size={15} />, `フォルダへ移動…（${comboText("Mod+Shift+J")}）`, () =>
-        useStore.getState().setPicker("move"),
-      )}
-      {button(<Download size={15} />, `書き出し…（${comboText("Mod+E")}）`, () => exportSelection(ids))}
-      {button(<MoreHorizontal size={15} />, "そのほかの操作", more)}
-      <div className="flex-1" />
-      {button(<Trash2 size={15} />, `ゴミ箱へ移動（${comboText("Mod+Backspace")}）`, () => deleteSelection(ids), true)}
-    </div>
-  );
-}
-
 /** Favourite, pin and tray buttons for `ids` (state read from the loaded items). */
 export function FlagButtons({ ids, items }: { ids: string[]; items: Item[] }) {
   const sel = items.filter((i) => ids.includes(i.id));
@@ -461,7 +404,6 @@ export function Inspector() {
       className="flex shrink-0 flex-col overflow-y-auto border-l border-line bg-panel p-4"
       style={{ width: inspectorWidth }}
     >
-      {!isTrash && <ActionRow ids={ids} items={items} />}
       {single ? (
         <>
           <div className="flex aspect-square items-center justify-center overflow-hidden rounded-lg bg-raised">
