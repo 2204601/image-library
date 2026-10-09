@@ -28,6 +28,18 @@ pub fn run() {
         .plugin(tauri_plugin_drag::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // Size, place and maximized of the window, kept between launches
+        // (.window-state.json in the app config folder). Not fullscreen or
+        // hidden: the app should always open as a visible, ordinary window.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        )
         .manage(AppState::default())
         .setup(|app| {
             start_web_import(app.handle());

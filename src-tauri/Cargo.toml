@@ -46,6 +46,8 @@ tiny_http = "0.12"
 base64 = "0.22"
 # Files: the preview inside iWork / Office files (files/mod.rs). Reading only.
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
+# The window opens at the size and place it had when last closed.
+tauri-plugin-window-state = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
