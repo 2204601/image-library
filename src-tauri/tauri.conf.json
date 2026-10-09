@@ -10,8 +10,10 @@
     "frontendDist": "../dist"
   },
   "app": {
+    "macOSPrivateApi": true,
     "windows": [
       {
+        "create": false,
         "title": "Image Library",
         "width": 1280,
         "height": 800,

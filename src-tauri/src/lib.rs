@@ -31,6 +31,31 @@ fn log_panics() {
     }));
 }
 
+/// The window, from tauri.conf.json (where it isn't created by itself). On
+/// macOS, transparent over the "sidebar" material: the page lets it show
+/// through the sidebar (index.css, `.vibrant`) and covers it elsewhere.
+/// Windows keeps an ordinary window.
+fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    let config = app.config().app.windows.iter().find(|w| w.label == "main").expect("window in tauri.conf.json");
+    let builder = tauri::WebviewWindowBuilder::from_config(app, config)?;
+    #[cfg(target_os = "macos")]
+    let builder = {
+        use tauri::window::{Color, Effect, EffectState, EffectsBuilder};
+        builder
+            .transparent(true)
+            .background_color(Color(0, 0, 0, 0))
+            .effects(
+                EffectsBuilder::new()
+                    .effect(Effect::Sidebar)
+                    // Like Finder: a plain grey while the window is in the background.
+                    .state(EffectState::FollowsWindowActiveState)
+                    .build(),
+            )
+    };
+    builder.build()?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // The menu bar is made by the frontend from its command table
@@ -77,6 +102,7 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             log_panics();
+            main_window(app.handle())?;
             log::info!(
                 "Image Library {} ({} {})",
                 app.package_info().version,

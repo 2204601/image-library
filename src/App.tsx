@@ -188,7 +188,7 @@ export default function App() {
             <Sidebar />
             {sidebarOpen && <ResizeHandle panel="sidebar" onResizing={setResizing} />}
           </div>
-          <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+          <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
             <Toolbar />
             <Grid />
           </main>
@@ -201,7 +201,7 @@ export default function App() {
           </div>
         </>
       ) : (
-        <div className="relative flex-1">
+        <div className="relative flex-1 bg-bg">
           <div {...dragRegion()} className="absolute inset-x-0 top-0" style={{ height: "var(--titlebar)" }} />
           <Welcome />
         </div>

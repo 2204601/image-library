@@ -726,7 +726,7 @@ export function Sidebar() {
         : [];
 
   return (
-    <aside className="flex shrink-0 flex-col border-r border-line bg-panel" style={{ width: sidebarWidth }}>
+    <aside className="vibrant flex shrink-0 flex-col border-r border-line bg-panel" style={{ width: sidebarWidth }}>
       {/* macOS: the window buttons' row, which also moves the window. */}
       <div {...dragRegion()} className="shrink-0" style={{ height: "var(--titlebar)" }} />
       {/* What to show is switched often, the library seldom: the kinds on

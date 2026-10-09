@@ -164,6 +164,16 @@ body,
   --traffic-lights: 84px;
 }
 
+/* macOS: the window is transparent over a translucent material (src-tauri
+   lib.rs). The sidebar lets it show through, blurred; the rest of the page
+   is opaque (App.tsx paints the main area). */
+:root[data-titlebar="overlay"] body {
+  background: transparent;
+}
+:root[data-titlebar="overlay"] .vibrant {
+  background: color-mix(in srgb, var(--color-panel) 55%, transparent);
+}
+
 body {
   margin: 0;
   background: var(--color-bg);
