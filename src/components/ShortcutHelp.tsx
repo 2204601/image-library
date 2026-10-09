@@ -10,22 +10,22 @@ export const useShortcutHelp = create<{ open: boolean; setOpen: (open: boolean) 
   setOpen: (open) => set({ open }),
 }));
 
-export const SHORTCUT_HELP_KEY = isMac ? "⌘/" : "Ctrl+/";
+export const SHORTCUT_HELP_KEY = "?";
 
 const typing = (t: EventTarget | null) => !!(t as Element | null)?.closest?.("input, textarea, select");
 
 /**
- * ⌘/ anywhere (and ? outside text fields) opens or closes the list. While it
- * is open it takes every key first, so the grid and the viewer don't act.
+ * ? (outside text fields) opens or closes the list: the typed character, so
+ * it works whatever the keyboard layout. ⌘? is left to macOS (Help search).
+ * While the list is open it takes every key first, so the grid and the
+ * viewer don't act.
  */
 function useShortcutKeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const { open, setOpen } = useShortcutHelp.getState();
       const mod = e.metaKey || e.ctrlKey;
-      const slash = e.code === "Slash" || e.key === "/";
-      const question = e.key === "?" || (e.shiftKey && slash);
-      if ((mod && !e.altKey && slash) || (!open && !mod && question && !typing(e.target))) {
+      if (e.key === "?" && !mod && !e.altKey && !typing(e.target)) {
         e.preventDefault();
         e.stopImmediatePropagation();
         setOpen(!open);
