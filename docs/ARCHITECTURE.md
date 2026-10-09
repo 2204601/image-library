@@ -25,7 +25,7 @@
 | 層 | 場所 | 中身 |
 |---|---|---|
 | 共通基盤（core） | `src/lib/*`, `src/store.ts`, `src/components/*` | ライブラリ・DB・取り込み・フォルダ・タグ・スマートフォルダ・検索・一覧の骨組み（Grid / Sidebar / Toolbar / Inspector / Viewer）・Updater |
-| | `src-tauri/src/{db,import,library,search,webimport,proxy,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、共通コマンド |
+| | `src-tauri/src/{db,import,library,search,webimport,proxy,transfer,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、ライブラリ間のコピー・移動、共通コマンド |
 | フォント | `src/features/fonts/` | フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、サイドバーの言語・書体（`FontFilters.tsx`）、見本の文字と大きさ（`SpecimenControls.tsx`） |
 | | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`） |
 | 画像 | `src-tauri/src/{formats,orient,similar}.rs`、`components/DuplicateReview.tsx` ほか | デコード、回転・反転、似ている画像の検出（まだ `components/` に混ざっている） |

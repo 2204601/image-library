@@ -9,11 +9,15 @@
   --color-dim: #9a9ba3;
   --color-accent: #4c8dff;
   --color-danger: #ef5d5d;
+  --color-success: #3ec27f;
 
   --animate-drop-pulse: drop-pulse 0.7s ease-out;
   --animate-pop: pop 0.45s cubic-bezier(0.3, 1.6, 0.5, 1);
   --animate-toast-in: toast-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1.2);
   --animate-toast-out: toast-out 0.2s ease-in forwards;
+  --animate-toast-ring: toast-ring 1.1s ease-out;
+  --animate-countdown: countdown linear forwards;
+  --animate-indeterminate: indeterminate 1.2s ease-in-out infinite;
   --animate-fade-in: fade-in 0.18s ease-out;
   --animate-zoom-in: zoom-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
   --animate-slide-down: slide-down 0.18s ease-out;
@@ -43,7 +47,32 @@
   @keyframes toast-in {
     from {
       opacity: 0;
-      transform: translateY(12px) scale(0.96);
+      transform: translateX(48px) scale(0.96);
+    }
+  }
+  /* A glow around a new result toast, so it is noticed out of the corner of the eye. */
+  @keyframes toast-ring {
+    0% {
+      box-shadow: 0 0 0 0 var(--ring);
+    }
+    100% {
+      box-shadow: 0 0 0 14px transparent;
+    }
+  }
+  @keyframes countdown {
+    from {
+      transform: scaleX(1);
+    }
+    to {
+      transform: scaleX(0);
+    }
+  }
+  @keyframes indeterminate {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
     }
   }
   @keyframes toast-out {

@@ -10,7 +10,6 @@ import {
   Images,
   Inbox,
   Layers,
-  Library,
   Pin,
   Tag as TagIcon,
   Tags,
@@ -25,11 +24,9 @@ import {
   confirmDeleteTag,
   clearTray,
   createFolder,
-  createLibraryDialog,
   createSmartFolder,
   emptyTrash,
   exportTray,
-  openLibraryDialog,
   renameSmartFolder,
   sheetFromTray,
   shiftFolder,
@@ -37,9 +34,9 @@ import {
 } from "../lib/actions";
 import { FontFilters } from "../features/fonts/FontFilters";
 import { api, KINDS, kindLabel, type Folder, type ItemKind, type View } from "../lib/api";
-import { appVersion, checkForUpdate } from "../lib/update";
 import { activeConditions, useStore, type Mode } from "../store";
 import { useMenu } from "./ContextMenu";
+import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
 import { colorHex } from "../lib/colors";
 
@@ -544,7 +541,6 @@ function TagList() {
 }
 
 export function Sidebar() {
-  const library = useStore((s) => s.library);
   const counts = useStore((s) => s.counts);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
@@ -572,23 +568,7 @@ export function Sidebar() {
 
   return (
     <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-panel">
-      <button
-        className="m-2 flex items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-white/5"
-        title={library?.root}
-        onClick={(e) =>
-          showMenu(e, [
-            { label: "別のライブラリを開く…", onClick: openLibraryDialog },
-            { label: "新しいライブラリを作成…", onClick: createLibraryDialog },
-            { separator: true },
-            { label: "ブラウザ拡張と連携…", onClick: () => useStore.getState().setWebImportOpen(true) },
-            { label: "アップデートを確認…", hint: appVersion(), onClick: () => checkForUpdate(true) },
-          ])
-        }
-      >
-        <Library size={18} className="shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 truncate font-semibold">{library?.name}</span>
-        <ChevronDown size={14} className="text-dim" />
-      </button>
+      <LibrarySwitcher />
       <ModeSwitch />
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {smart.map((s) => (

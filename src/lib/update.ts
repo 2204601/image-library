@@ -55,16 +55,17 @@ export async function checkForUpdate(manual: boolean) {
     return;
   }
   busy = true;
+  if (manual) st().notify({ title: "アップデートを確認しています…", duration: 2500 });
   try {
     // The proxy also applies to the download (the Update keeps it).
     const update = await check({ timeout: 15_000, proxy: await systemProxy() });
     if (!update) {
-      if (manual) st().toast(`最新版です（${appVersion()}）`);
+      if (manual) st().notify({ title: "最新版です", detail: `Image Library ${appVersion()}`, kind: "success" });
       return;
     }
     await offer(update);
   } catch (e) {
-    if (manual) st().toast(`アップデートの確認に失敗しました：${String(e)}`, true);
+    if (manual) st().notify({ title: "アップデートを確認できませんでした", detail: String(e), kind: "error" });
     else console.warn("update check failed", e);
   } finally {
     busy = false;
@@ -84,12 +85,27 @@ async function offer(update: Update) {
   let done = 0;
   let total: number | null = null;
   st().setUpdating({ done, total });
+  // Chunks arrive hundreds of times a second; re-rendering on each restarts
+  // the bar's width transition every time, so it lagged and even ran backwards.
+  let shown = 0;
+  const show = (force = false) => {
+    const now = performance.now();
+    if (!force && now - shown < 120) return;
+    shown = now;
+    st().setUpdating({ done, total });
+  };
   try {
     await update.downloadAndInstall((ev) => {
-      if (ev.event === "Started") total = ev.data.contentLength ?? null;
-      else if (ev.event === "Progress") done += ev.data.chunkLength;
-      else if (ev.event === "Finished") done = total ?? done;
-      st().setUpdating({ done, total });
+      if (ev.event === "Started") {
+        total = ev.data.contentLength || null;
+        show(true);
+      } else if (ev.event === "Progress") {
+        done += ev.data.chunkLength;
+        show();
+      } else if (ev.event === "Finished") {
+        done = total ?? done;
+        st().setUpdating({ done, total, installing: true });
+      }
     });
   } catch (e) {
     st().setUpdating(null);

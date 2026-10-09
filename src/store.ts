@@ -69,12 +69,37 @@ export interface ShowInfo {
   meta: boolean;
 }
 
-interface Toast {
+export type ToastKind = "success" | "info" | "error";
+
+export interface ToastOptions {
+  title: string;
+  /** A second, quieter line (counts, reasons). */
+  detail?: string;
+  kind?: ToastKind;
+  action?: ToastAction;
+  /** ms before it goes away; paused while hovered or while the window is in the background. */
+  duration?: number;
+}
+
+export interface Toast extends Required<Pick<ToastOptions, "title" | "kind" | "duration">> {
   id: number;
-  message: string;
-  error?: boolean;
+  detail?: string;
   action?: ToastAction;
   leaving?: boolean;
+}
+
+export interface TransferRequest {
+  /** Selected items; null = every item of `kind` not in the trash. */
+  ids: string[] | null;
+  kind: Mode;
+  count: number;
+}
+
+/** A long task shown with a progress bar (bottom right). */
+export interface Progress {
+  label: string;
+  done: number;
+  total: number;
 }
 
 interface State {
@@ -134,6 +159,8 @@ interface State {
   review: DuplicateReview | null;
   /** Items the contact sheet dialog (まとめて出力) is open for, in order. */
   sheet: Item[] | null;
+  /** The "別のライブラリへ" dialog: selected items, or every item of a kind. */
+  transfer: TransferRequest | null;
 
   /** What the grid shows: the query result, regrouped by `groupBy`. */
   items: Item[];
@@ -163,9 +190,9 @@ interface State {
   dropTarget: string | null; // "folder:<id>" or "root"
   /** Sidebar row that just received a drop; `n` restarts the animation. */
   flash: { target: string; n: number } | null;
-  importing: { done: number; total: number } | null;
+  importing: Progress | null;
   /** Update download in progress (bytes; total is null when the server did not say). */
-  updating: { done: number; total: number | null } | null;
+  updating: { done: number; total: number | null; installing?: boolean } | null;
   /** Hashing older images before the similar view can be shown. */
   analyzing: boolean;
   toasts: Toast[];
@@ -213,6 +240,7 @@ interface State {
   pickKeeper: (id: string) => void;
   setReview: (r: DuplicateReview | null) => void;
   setSheet: (items: Item[] | null) => void;
+  setTransfer: (t: TransferRequest | null) => void;
   refresh: () => Promise<void>;
 
   select: (id: string, mode: "only" | "toggle" | "range") => void;
@@ -226,6 +254,8 @@ interface State {
   setImporting: (p: State["importing"]) => void;
   setUpdating: (p: State["updating"]) => void;
   toast: (message: string, error?: boolean, action?: ToastAction) => void;
+  /** A toast with a title, detail line and kind (results worth noticing). */
+  notify: (t: ToastOptions) => void;
   dismissToast: (id: number) => void;
   /** Runs a mutation, reports errors, then refreshes. */
   run: (fn: () => Promise<unknown>) => Promise<void>;
@@ -383,6 +413,7 @@ export const useStore = create<State>((set, get) => ({
   dismissedGroups: 0,
   review: null,
   sheet: null,
+  transfer: null,
 
   items: [],
   rawItems: [],
@@ -641,6 +672,7 @@ export const useStore = create<State>((set, get) => ({
   },
   setReview: (review) => set({ review }),
   setSheet: (sheet) => set({ sheet }),
+  setTransfer: (transfer) => set({ transfer }),
 
   refresh: async () => {
     if (!get().library) return;
@@ -772,10 +804,14 @@ export const useStore = create<State>((set, get) => ({
   },
   setImporting: (importing) => set({ importing }),
   setUpdating: (updating) => set({ updating }),
-  toast: (message, error, action) => {
+  toast: (message, error, action) => get().notify({ title: message, kind: error ? "error" : "info", action }),
+  notify: ({ title, detail, kind = "info", action, duration }) => {
     const id = ++toastSeq;
-    set({ toasts: [...get().toasts, { id, message, error, action }] });
-    setTimeout(() => get().dismissToast(id), error || action ? 6000 : 3500);
+    const t: Toast = { id, title, detail, kind, action, duration: duration ?? (kind === "error" || action ? 8000 : 5000) };
+    // At most a handful on screen; the oldest give way.
+    const live = get().toasts.filter((x) => !x.leaving);
+    for (const old of live.slice(0, Math.max(0, live.length - 3))) get().dismissToast(old.id);
+    set({ toasts: [...get().toasts, t] });
   },
   dismissToast: (id) => {
     if (!get().toasts.some((t) => t.id === id && !t.leaving)) return;
@@ -792,10 +828,15 @@ export const useStore = create<State>((set, get) => ({
     await get().refresh();
   },
   importDone: (s) => {
-    const parts = [`${s.imported} 件を追加`];
-    if (s.duplicates) parts.push(`${s.duplicates} 件は重複のためスキップ`);
+    const parts = [];
+    if (s.duplicates) parts.push(`${s.duplicates} 件はすでにあるためスキップ`);
     if (s.failed.length) parts.push(`${s.failed.length} 件は読み込めませんでした`);
-    get().toast(parts.join(" / "), s.failed.length > 0 && s.imported === 0);
+    get().notify({
+      // Dropped files can be of either kind, so no "画像" / "フォント" here.
+      title: s.imported ? `${s.imported} 件を追加しました` : "追加されたものはありません",
+      detail: parts.join(" / ") || undefined,
+      kind: s.failed.length && !s.imported ? "error" : s.imported ? "success" : "info",
+    });
     if (s.failed.length) console.warn("import failures", s.failed);
   },
 }));

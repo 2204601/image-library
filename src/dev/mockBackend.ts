@@ -376,6 +376,12 @@ function removeFolder(fid: string) {
   [...itemFolders.keys()].filter((k) => k.endsWith(`|${fid}`)).forEach((k) => itemFolders.delete(k));
 }
 
+const mockLibraries = [
+  { root: "/mock/Demo.library", name: "Demo (mock)", favorite: true, lastOpened: 3, exists: true, current: true },
+  { root: "/Users/me/Pictures/Fonts.library", name: "Fonts", favorite: false, lastOpened: 2, exists: true, current: false },
+  { root: "/Volumes/Archive/Old.library", name: "Old", favorite: false, lastOpened: 1, exists: false, current: false },
+];
+
 const webImport = { enabled: false, running: false, port: 41620, error: null, extensionDir: null as string | null };
 
 function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
@@ -394,6 +400,22 @@ function handle(cmd: string, a: any): unknown {
     case "create_library":
     case "open_library":
       return { root: "/mock/Demo.library", name: "Demo (mock)" };
+    case "list_libraries":
+      return mockLibraries;
+    case "set_library_favorite": {
+      const l = mockLibraries.find((x) => x.root === a.path);
+      if (l) l.favorite = a.favorite;
+      mockLibraries.sort((x, y) => Number(y.favorite) - Number(x.favorite) || y.lastOpened - x.lastOpened);
+      return null;
+    }
+    case "forget_library":
+      mockLibraries.splice(mockLibraries.findIndex((x) => x.root === a.path), 1);
+      return null;
+    case "transfer_items": {
+      const ids: string[] = a.ids ?? items.filter((i) => i.kind === a.kind && i.deletedAt === null).map((i) => i.id);
+      if (a.moveItems) for (const i of items) if (ids.includes(i.id)) i.deletedAt = Date.now();
+      return { copied: ids.length - 1, duplicates: 1, failed: [] };
+    }
     case "query_items":
       return query(a.query);
     case "get_counts": {

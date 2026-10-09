@@ -1176,6 +1176,16 @@ pub fn delete_items(conn: &Connection, ids: &[String]) -> DbResult<Vec<Item>> {
     Ok(items)
 }
 
+/// Ids of every item not in the trash (of `kind`, when given).
+pub fn live_ids(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<String>> {
+    let (of_kind, arg) = kind_where(kind, 1, "items");
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id FROM items WHERE deleted_at IS NULL AND {of_kind} ORDER BY imported_at"
+    ))?;
+    let rows = stmt.query_map([arg.as_ref()], |r| r.get(0))?;
+    rows.collect()
+}
+
 pub fn trashed_ids(conn: &Connection) -> DbResult<Vec<String>> {
     let mut stmt = conn.prepare("SELECT id FROM items WHERE deleted_at IS NOT NULL")?;
     let rows = stmt.query_map([], |r| r.get(0))?;
@@ -1655,7 +1665,7 @@ pub fn set_color(conn: &Connection, target: ColorTarget, id: &dyn ToSql, color: 
     Ok(())
 }
 
-fn ensure_tag(conn: &Connection, name: &str) -> DbResult<i64> {
+pub(crate) fn ensure_tag(conn: &Connection, name: &str) -> DbResult<i64> {
     conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [name])?;
     conn.query_row("SELECT id FROM tags WHERE name = ?1", [name], |r| r.get(0))
 }

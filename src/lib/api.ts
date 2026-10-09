@@ -6,6 +6,24 @@ export interface LibraryInfo {
   name: string;
 }
 
+/** A library opened or created before (the library switcher's list). */
+export interface LibraryEntry extends LibraryInfo {
+  favorite: boolean;
+  /** ms; 0 = never opened here (only copied into). */
+  lastOpened: number;
+  /** False when the folder is gone (deleted, or on a disconnected drive). */
+  exists: boolean;
+  current: boolean;
+}
+
+/** Result of copying / moving items into another library (src-tauri/src/transfer.rs). */
+export interface TransferSummary {
+  copied: number;
+  /** Already in the destination; their tags and folder were merged in. */
+  duplicates: number;
+  failed: string[];
+}
+
 /** What a file is. Fonts have no pixel size (0 × 0) and a rendered sample as the thumbnail. */
 export type ItemKind = "image" | "font";
 
@@ -274,8 +292,20 @@ export interface WebImportStatus {
 
 export const api = {
   openLastLibrary: () => invoke<LibraryInfo | null>("open_last_library"),
-  createLibrary: (path: string) => invoke<LibraryInfo>("create_library", { path }),
+  /** `open: false` only creates it (and adds it to the list). */
+  createLibrary: (path: string, open = true) => invoke<LibraryInfo>("create_library", { path, open }),
   openLibrary: (path: string) => invoke<LibraryInfo>("open_library", { path }),
+  listLibraries: () => invoke<LibraryEntry[]>("list_libraries"),
+  setLibraryFavorite: (path: string, favorite: boolean) => invoke<void>("set_library_favorite", { path, favorite }),
+  forgetLibrary: (path: string) => invoke<void>("forget_library", { path }),
+  /** Without `ids`, every item of `kind` not in the trash. `move` puts them in this library's trash afterwards. */
+  transferItems: (dest: string, scope: { ids: string[] } | { kind: ItemKind }, move: boolean) =>
+    invoke<TransferSummary>("transfer_items", {
+      dest,
+      ids: "ids" in scope ? scope.ids : null,
+      kind: "kind" in scope ? scope.kind : null,
+      moveItems: move,
+    }),
 
   queryItems: (query: ItemQuery) => invoke<Item[]>("query_items", { query }),
   /** Totals for the sidebar; with `kind`, of that kind only (`kinds` always has every kind). */

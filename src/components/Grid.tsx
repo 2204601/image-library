@@ -406,6 +406,10 @@ export function showItemMenu(e: React.MouseEvent, item: Item, index: number) {
         ]
       : []),
     { label: "選択から新規フォルダ", onClick: () => createFolder(null, ids) },
+    {
+      label: `別のライブラリへ…${many}`,
+      onClick: () => s.setTransfer({ ids, kind: s.mode, count: ids.length }),
+    },
     ...(folder
       ? [{ label: "未分類に戻す", onClick: () => s.run(() => api.removeFromFolder(ids, folder)) }]
       : []),
