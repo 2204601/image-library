@@ -1,7 +1,8 @@
-// The library menu (sidebar header) and the list of known libraries: the ones
-// opened or created before, favourites first. Also used on the welcome screen.
-import { Check, ChevronDown, FolderOpen, Library, Plus, Settings, Star, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+// The library menu (bottom of the sidebar) and the list of known libraries:
+// the ones opened or created before, favourites first. Also used on the
+// welcome screen.
+import { Check, ChevronUp, FolderOpen, Library, Plus, Settings, Star, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createLibraryDialog, openLibraryAt, openLibraryDialog } from "../lib/actions";
 import { api, type LibraryEntry } from "../lib/api";
 import { useStore } from "../store";
@@ -133,7 +134,8 @@ function MenuButton({ icon, label, hint, onClick }: { icon: React.ReactNode; lab
   );
 }
 
-function Panel({ close }: { close: () => void }) {
+/** The library menu, opening upwards from `bottom` px above the window's bottom edge. */
+function Panel({ close, bottom }: { close: () => void; bottom: number }) {
   const { list, reload } = useLibraries();
 
   useEffect(() => {
@@ -154,7 +156,8 @@ function Panel({ close }: { close: () => void }) {
   return (
     <div className="fixed inset-0 z-50" onPointerDown={close}>
       <div
-        className="absolute top-12 left-2 flex max-h-[75vh] w-80 animate-slide-down flex-col overflow-hidden rounded-xl border border-line bg-raised shadow-2xl"
+        className="absolute left-2 flex max-h-[75vh] w-80 animate-slide-up flex-col overflow-hidden rounded-xl border border-line bg-raised shadow-2xl"
+        style={{ bottom }}
         onPointerDown={(e) => e.stopPropagation()}
       >
         <div className="min-h-0 flex-1 overflow-y-auto p-1">
@@ -183,23 +186,34 @@ function Panel({ close }: { close: () => void }) {
   );
 }
 
-/** The sidebar header: current library name, opens the library panel. */
+/**
+ * The sidebar's footer: the open library's name, opens the library panel
+ * above it. Switched less often than the kinds, so it sits at the bottom.
+ */
 export function LibrarySwitcher() {
   const library = useStore((s) => s.library);
-  const [open, setOpen] = useState(false);
-  const close = useCallback(() => setOpen(false), []);
+  const [bottom, setBottom] = useState<number | null>(null);
+  const ref = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setBottom(null), []);
+  const toggle = () => {
+    const r = ref.current?.getBoundingClientRect();
+    setBottom(bottom === null && r ? window.innerHeight - r.top + 4 : null);
+  };
   return (
-    <>
+    <div className="shrink-0 border-t border-line p-1.5">
       <button
-        className={`m-2 flex items-center gap-2 rounded-md px-2 py-2 text-left hover:bg-white/5 ${open ? "bg-white/5" : ""}`}
-        title={library?.root}
-        onClick={() => setOpen((o) => !o)}
+        ref={ref}
+        className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-white/5 ${
+          bottom !== null ? "bg-white/5" : ""
+        }`}
+        title={`ライブラリ：${library?.root ?? ""}`}
+        onClick={toggle}
       >
-        <Library size={18} className="shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 truncate font-semibold">{library?.name}</span>
-        <ChevronDown size={14} className={`text-dim transition-transform ${open ? "rotate-180" : ""}`} />
+        <Library size={15} className="shrink-0 text-accent" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{library?.name}</span>
+        <ChevronUp size={14} className={`shrink-0 text-dim transition-transform ${bottom !== null ? "rotate-180" : ""}`} />
       </button>
-      {open && <Panel close={close} />}
-    </>
+      {bottom !== null && <Panel close={close} bottom={bottom} />}
+    </div>
   );
 }

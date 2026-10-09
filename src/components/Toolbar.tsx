@@ -31,7 +31,8 @@ import {
   similarGroups,
 } from "../lib/actions";
 import { SpecimenControls } from "../features/fonts/SpecimenControls";
-import { fontCategoryLabel, fontScriptLabel, kindLabel, type Folder, type SimilarLevel, type SmartFolder, type SortKey, type View } from "../lib/api";
+import { modeNoun } from "../lib/modes";
+import { fontCategoryLabel, fontScriptLabel, type Folder, type SimilarLevel, type SmartFolder, type SortKey, type View } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
 import { activeConditions, useStore, type Mode } from "../store";
@@ -251,7 +252,7 @@ export function Toolbar() {
             // One bordered group, like the other controls.
             <div className="flex h-8 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
               <button
-                title={`${kindLabel(mode)}を追加`}
+                title={`${modeNoun(mode)}を追加`}
                 onClick={importFilesDialog}
                 className="flex items-center gap-1.5 px-2.5 whitespace-nowrap hover:bg-white/5"
               >

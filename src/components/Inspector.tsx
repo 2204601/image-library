@@ -25,12 +25,14 @@ import {
   togglePinned,
   toggleTray,
 } from "../lib/actions";
-import { api, formatBytes, kindLabel, sizeLabel, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
+import { modeNoun } from "../lib/modes";
+import { api, formatBytes, sizeLabel, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
 import { FontCategorySelect, FontDetails } from "../features/fonts/FontDetails";
 import { useStore } from "../store";
 import { RatingStars } from "./RatingStars";
 import { showItemMenu } from "./Grid";
 import { comboText } from "../lib/shortcuts";
+import { appliesTo, command } from "../lib/commands";
 
 function folderPath(folders: Folder[], id: string): string {
   const byId = new Map(folders.map((f) => [f.id, f]));
@@ -305,7 +307,8 @@ export function FlagButton({
  * "…" opens the same menu as a right-click.
  */
 function ActionRow({ ids, items }: { ids: string[]; items: Item[] }) {
-  const mode = useStore((s) => s.mode);
+  // Images only (in "すべて", when only images are selected).
+  const rotatable = useStore((s) => appliesTo(command("item.rotateCw"), s));
   const button = (icon: React.ReactNode, title: string, onClick: (e: React.MouseEvent) => void, danger = false) => (
     <button
       title={title}
@@ -327,7 +330,7 @@ function ActionRow({ ids, items }: { ids: string[]; items: Item[] }) {
   };
   return (
     <div className="-mx-1 mb-3 flex items-center">
-      {mode === "image" && (
+      {rotatable && (
         <>
           {button(<RotateCcw size={15} />, `左に回転（${comboText("Mod+Shift+L")}）`, () => orient(ids, "rotateCcw"))}
           {button(<RotateCw size={15} />, `右に回転（${comboText("Mod+Shift+R")}）`, () => orient(ids, "rotateCw"))}
@@ -444,7 +447,7 @@ export function Inspector() {
         className="flex shrink-0 items-center justify-center border-l border-line bg-panel text-dim"
         style={{ width: inspectorWidth }}
       >
-        {kindLabel(mode)}を選択してください
+        {modeNoun(mode)}を選択してください
       </aside>
     );
   }

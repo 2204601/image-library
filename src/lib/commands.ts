@@ -46,9 +46,10 @@ import {
   transferList,
   trayList,
 } from "./actions";
-import { api, kindLabel, KINDS, type Item, type ItemKind } from "./api";
+import { api, kindLabel, type Item, type ItemKind } from "./api";
 import { checkForUpdate } from "./update";
-import { currentFolderId, MODES, usedModes, useStore } from "../store";
+import { currentFolderId, MODES, shownModes, useStore } from "../store";
+import { modeLabel } from "./modes";
 import { useShortcutHelp } from "../components/ShortcutHelp";
 
 type S = ReturnType<typeof useStore.getState>;
@@ -114,8 +115,9 @@ export const COMMANDS: Command[] = [
   {
     id: "library.transferAll",
     title: "すべてを別のライブラリへ…",
-    label: (s) => `${kindLabel(s.mode)}をすべて別のライブラリへ…`,
-    enabled: (s) => (s.counts.kinds[s.mode] ?? 0) > 0,
+    label: (s) => (s.mode === "all" ? "すべてを別のライブラリへ…" : `${kindLabel(s.mode)}をすべて別のライブラリへ…`),
+    // A kind at a time (in "すべて", switch to the kind first).
+    enabled: (s) => s.mode !== "all" && (s.counts.kinds[s.mode] ?? 0) > 0,
     run: () => transferAllOfMode(),
   },
 
@@ -123,10 +125,10 @@ export const COMMANDS: Command[] = [
   ...MODES.map(
     (m, i): Command => ({
       id: `mode.${m}`,
-      title: KINDS.find((k) => k.kind === m)?.label ?? m,
+      title: modeLabel(m),
       keys: [`Mod+${i + 1}`],
       // A kind the library isn't used for does nothing (the keys stay fixed).
-      enabled: (s) => usedModes(s).includes(m),
+      enabled: (s) => shownModes(s).includes(m),
       checked: (s) => s.mode === m,
       run: (s) => s.setMode(m),
     }),
@@ -414,8 +416,16 @@ export function command(id: string): Command {
   return c;
 }
 
-/** Whether a command applies in the current mode at all (rotate: images only). */
-export const appliesTo = (c: Command, s: S) => !c.kinds || c.kinds.includes(s.mode);
+/**
+ * Whether a command applies in the current mode at all (rotate: images only).
+ * In "すべて" it depends on the selection: rotating when only images are selected.
+ */
+export const appliesTo = (c: Command, s: S) => {
+  if (!c.kinds) return true;
+  if (s.mode !== "all") return c.kinds.includes(s.mode);
+  const xs = selItems(s);
+  return xs.length > 0 && xs.every((i) => c.kinds!.includes(i.kind));
+};
 
 export const isEnabled = (c: Command, s: S) => appliesTo(c, s) && (c.enabled?.(s) ?? true);
 

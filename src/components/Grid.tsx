@@ -16,7 +16,8 @@ import {
 import { command, isEnabled, runKey } from "../lib/commands";
 import { applicable, commandIcon, commandItem } from "../lib/menuItems";
 import { FontListCells, SpecimenRow } from "../features/fonts/FontRows";
-import { api, formatBytes, kindLabel, sizeLabel, type Item } from "../lib/api";
+import { api, formatBytes, sizeLabel, type Item } from "../lib/api";
+import { modeNoun } from "../lib/modes";
 import { colorHex } from "../lib/colors";
 import type { Section } from "../lib/grouping";
 import {
@@ -421,7 +422,7 @@ export function showItemMenu(e: React.MouseEvent | { clientX: number; clientY: n
       submenu: [
         commandItem("list.export", { onClick: () => exportSelection(ids) }),
         commandItem("list.sheet", { onClick: () => openSheet(ids) }),
-        commandItem("list.transfer", { onClick: () => s.setTransfer({ ids, kind: s.mode, count: ids.length }) }),
+        commandItem("list.transfer", { onClick: () => s.setTransfer({ ids, mode: s.mode, count: ids.length }) }),
       ],
     },
     {
@@ -799,7 +800,7 @@ function GroupHeader({ items, section, keepPick }: { items: Item[]; section: Sec
 }
 
 function Empty({ kind, mode, filtering, analyzing }: { kind: string; mode: Mode; filtering: boolean; analyzing: boolean }) {
-  const noun = kindLabel(mode);
+  const noun = modeNoun(mode);
   if (kind === "trash") return <p className="mt-24 text-center text-dim">ゴミ箱は空です</p>;
   if (kind === "similar")
     return (

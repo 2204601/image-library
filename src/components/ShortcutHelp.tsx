@@ -119,7 +119,7 @@ function Panel() {
                   <ul>
                     {s.rows.map(({ row, label }) => {
                       // Shown but faded where it doesn't apply (e.g. rotating fonts).
-                      const off = row.kinds && !row.kinds.includes(mode);
+                      const off = row.kinds && mode !== "all" && !row.kinds.includes(mode);
                       return (
                         <li
                           key={label}
