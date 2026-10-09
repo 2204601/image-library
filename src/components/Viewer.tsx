@@ -18,6 +18,7 @@ import { openSelection, orient, setRating, toggleFavorite, togglePinned, toggleT
 import { formatBytes, sizeLabel, orientTransform, type Item } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { folderPaths } from "../lib/grouping";
+import { dragRegion } from "../lib/titleBar";
 import { useStore } from "../store";
 import { FontView } from "../features/fonts/FontView";
 import { FileView } from "../features/files/FileView";
@@ -215,7 +216,13 @@ export function Viewer() {
 
   return (
     <div className="fixed inset-0 z-40 flex animate-fade-in flex-col bg-black/95">
-      <div className="flex items-center gap-3 px-4 py-2 text-sm text-white/80">
+      <div
+        {...dragRegion(true)}
+        className="flex items-center gap-3 px-4 py-2 text-sm text-white/80"
+        // The macOS window buttons are over the top left, centred on this bar
+        // as on the toolbar (48px tall).
+        style={{ paddingLeft: "max(1rem, var(--traffic-lights))", minHeight: "calc(var(--titlebar) + 8px)" }}
+      >
         <span className="min-w-0 flex-1 truncate">{item.name}</span>
         <span className="text-xs text-white/40 tabular-nums">
           {sizeLabel(item)}

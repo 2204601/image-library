@@ -22,6 +22,7 @@ import { ExportDialog } from "./components/ExportDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths, undoChanges } from "./lib/actions";
 import { api, type Change, type ImportSummary } from "./lib/api";
+import { dragRegion } from "./lib/titleBar";
 import { loadAppVersion, scheduleUpdateCheck } from "./lib/update";
 import { installMenuBar } from "./lib/menuBar";
 import { openGuarded } from "./lib/libraryLock";
@@ -200,7 +201,8 @@ export default function App() {
           </div>
         </>
       ) : (
-        <div className="flex-1">
+        <div className="relative flex-1">
+          <div {...dragRegion()} className="absolute inset-x-0 top-0" style={{ height: "var(--titlebar)" }} />
           <Welcome />
         </div>
       )}

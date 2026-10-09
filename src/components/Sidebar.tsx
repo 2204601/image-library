@@ -51,6 +51,7 @@ import { startPointerDrag } from "./DragLayer";
 import { SHORTCUT_HELP_KEY, useShortcutHelp } from "./ShortcutHelp";
 import { colorHex } from "../lib/colors";
 import { comboText } from "../lib/shortcuts";
+import { dragRegion } from "../lib/titleBar";
 
 const collapsedKey = (root: string) => `collapsed:${root}`;
 function loadCollapsed(root: string): Set<string> {
@@ -726,6 +727,8 @@ export function Sidebar() {
 
   return (
     <aside className="flex shrink-0 flex-col border-r border-line bg-panel" style={{ width: sidebarWidth }}>
+      {/* macOS: the window buttons' row, which also moves the window. */}
+      <div {...dragRegion()} className="shrink-0" style={{ height: "var(--titlebar)" }} />
       {/* What to show is switched often, the library seldom: the kinds on
           top, the library at the bottom. */}
       <ModeSwitch />
