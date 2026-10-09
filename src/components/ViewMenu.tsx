@@ -18,6 +18,7 @@ import { MODE_GROUPS, MODE_LAYOUTS, useStore, type Layout, type Mode, type ShowI
 /** Every grouping; each mode offers its own subset (MODE_GROUPS). */
 export const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
   { key: "none", label: "なし", hint: "区切らずに並べる" },
+  { key: "kind", label: "種類", hint: "画像・フォント・ファイルに分ける" },
   { key: "rating", label: "評価", hint: "★5 から未評価まで" },
   { key: "tag", label: "タグ", hint: "複数のタグがあるものは各タグに出る" },
   { key: "folder", label: "フォルダ", hint: "「すべて」やサブフォルダ表示で便利" },
@@ -40,6 +41,7 @@ export const LAYOUTS: { key: Layout; label: string; icon: React.ReactNode; hint:
 
 /** Layouts always on the toolbar; the others are in the display menu. */
 const PRIMARY: Record<Mode, Layout[]> = {
+  all: ["grid", "justified"],
   image: ["justified", "waterfall"],
   font: ["specimen", "list"],
   file: ["grid", "list"],

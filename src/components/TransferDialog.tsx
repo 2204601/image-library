@@ -5,6 +5,7 @@ import { ArrowRight, Copy, FolderInput, FolderOpen, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { createLibraryOnly, pickLibraryFolder, transferTo } from "../lib/actions";
 import { kindLabel, type LibraryEntry } from "../lib/api";
+import { modeNoun } from "../lib/modes";
 import { useStore, type TransferRequest } from "../store";
 import { LibraryRow, useLibraries } from "./LibrarySwitcher";
 
@@ -74,7 +75,7 @@ function Dialog({ req }: { req: TransferRequest }) {
     transferTo(target, req.ids ? { ids: req.ids } : { kind: req.kind }, move);
   };
 
-  const what = `${req.ids === null ? "すべての" : ""}${kindLabel(req.kind)} ${req.count} 件`;
+  const what = req.ids === null ? `すべての${kindLabel(req.kind)} ${req.count} 件` : `${modeNoun(req.mode)} ${req.count} 件`;
   const option = (on: boolean, icon: React.ReactNode, title: string, sub: string, value: boolean) => (
     <button
       onClick={() => setMove(value)}

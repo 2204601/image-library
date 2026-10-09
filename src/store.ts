@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   api,
   EMPTY_FILTER,
+  KINDS,
   kindLabel,
   type Counts,
   type DuplicateEffect,
@@ -19,6 +20,7 @@ import {
   type View,
 } from "./lib/api";
 import { fontApi } from "./features/fonts/api";
+import { modeKind, modeKinds, modesFor, type Mode } from "./lib/modes";
 import {
   DEFAULT_LIBRARY_SETTINGS,
   openingMode,
@@ -28,13 +30,11 @@ import {
 import { groupItems, similarSections, type GroupBy, type Section } from "./lib/grouping";
 
 /**
- * What the app shows: one kind at a time. Everything (the list, counts,
- * folders, tags, smart folders) is of the current mode; each mode remembers
- * its own layout and grouping.
+ * What the app shows: every kind ("all") or one kind. Everything (the list,
+ * counts, folders, tags, smart folders) is of the current mode; each mode
+ * remembers its own layout and grouping.
  */
-export type Mode = ItemKind;
-
-export const MODES: Mode[] = ["image", "font", "file"];
+export { MODES, type Mode } from "./lib/modes";
 
 /** x/y = current pointer, sx/sy = where the drag started (for snap-back). */
 type DragPos = { x: number; y: number; sx: number; sy: number };
@@ -57,6 +57,8 @@ export type Layout = "justified" | "grid" | "waterfall" | "list" | "specimen";
 
 /** Layouts of each mode, the first being its default. */
 export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
+  // Mixed kinds: every item as a thumbnail of the same box.
+  all: ["grid", "justified", "list"],
   image: ["justified", "waterfall", "grid", "list"],
   font: ["specimen", "list", "grid"],
   file: ["grid", "list"],
@@ -64,6 +66,7 @@ export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
 
 /** Groupings of each mode. */
 export const MODE_GROUPS: Record<Mode, GroupBy[]> = {
+  all: ["none", "kind", "rating", "tag", "folder"],
   image: ["none", "rating", "tag", "folder"],
   font: ["none", "rating", "tag", "folder", "family"],
   file: ["none", "rating", "tag", "folder"],
@@ -97,12 +100,11 @@ export interface Toast extends Required<Pick<ToastOptions, "title" | "kind" | "d
   leaving?: boolean;
 }
 
-export interface TransferRequest {
-  /** Selected items; null = every item of `kind` not in the trash. */
-  ids: string[] | null;
-  kind: Mode;
-  count: number;
-}
+export type TransferRequest =
+  /** Selected items (`mode` names them: "画像 3 件"). */
+  | { ids: string[]; mode: Mode; count: number }
+  /** Every item of `kind` not in the trash. */
+  | { ids: null; kind: ItemKind; count: number };
 
 /**
  * What a "the contents of this list" action works on: given items, the list
@@ -241,7 +243,7 @@ interface State {
   /** Switches kind; starts in "all" with no conditions, on the mode's own layout and grouping. */
   setMode: (mode: Mode) => void;
   /** Kinds the library is used for / switches to drop or bring back a kind. */
-  setUsedModes: (modes: Mode[]) => void;
+  setUsedModes: (modes: ItemKind[]) => void;
   /** Hides (or shows again) sidebar entries of a mode. */
   setSidebarHidden: (mode: Mode, ids: string[]) => void;
   setView: (view: View) => void;
@@ -359,7 +361,7 @@ const loadGroupBy = (mode: Mode): GroupBy => {
 
 /** Smart folders of a mode: saved in it, or before there were modes. */
 export const smartFolderInMode = (sf: SmartFolder, mode: Mode) =>
-  !sf.rule.filter.kinds?.length || sf.rule.filter.kinds.includes(mode);
+  mode === "all" || !sf.rule.filter.kinds?.length || sf.rule.filter.kinds.includes(mode);
 
 /** Number of active ad-hoc conditions (for badges / "clear" buttons). */
 export function activeConditions(s: {
@@ -438,9 +440,12 @@ function saveLibrarySetting(key: string, value: unknown) {
   api.setLibrarySetting(key, value).catch((e) => useStore.getState().toast(String(e), true));
 }
 
-/** Kinds the open library is used for, in `MODES` order. */
-export const usedModes = (s: { librarySettings: LibrarySettings }): Mode[] =>
-  MODES.filter((m) => s.librarySettings.modes.includes(m));
+/** Kinds the open library is used for, in `KINDS` order. */
+export const usedModes = (s: { librarySettings: LibrarySettings }): ItemKind[] =>
+  KINDS.map((k) => k.kind).filter((k) => s.librarySettings.modes.includes(k));
+
+/** Modes the switch offers: "すべて" and the kinds in use (see `modesFor`). */
+export const shownModes = (s: { librarySettings: LibrarySettings }): Mode[] => modesFor(usedModes(s));
 
 /** Whether a sidebar entry (SIDEBAR_ENTRIES id) is hidden in the current mode. */
 export const isHidden = (s: { librarySettings: LibrarySettings; mode: Mode }, id: string) =>
@@ -623,12 +628,12 @@ export const useStore = create<State>((set, get) => ({
     get().refresh();
   },
   setUsedModes: (modes) => {
-    const used = MODES.filter((m) => modes.includes(m));
+    const used = KINDS.map((k) => k.kind).filter((k) => modes.includes(k));
     if (!used.length) return;
     set({ librarySettings: { ...get().librarySettings, modes: used } });
     // Every kind = nothing to remember (a kind added later is used too).
-    saveLibrarySetting("modes", used.length === MODES.length ? null : used);
-    if (!used.includes(get().mode)) get().setMode(used[0]);
+    saveLibrarySetting("modes", used.length === KINDS.length ? null : used);
+    if (!modesFor(used).includes(get().mode)) get().setMode(used[0]);
   },
   setSidebarHidden: (mode, ids) => {
     const hidden = { ...get().librarySettings.hidden, [mode]: ids };
@@ -739,7 +744,7 @@ export const useStore = create<State>((set, get) => ({
   currentRule: () => {
     const { search, tagFilter, tagMatchAll, minRating, filter, mode } = get();
     // The rule remembers the mode it was made in (see `smartFolderInMode`).
-    return { search, tagIds: tagFilter, tagMatchAll, minRating, filter: { ...filter, kinds: [mode] } };
+    return { search, tagIds: tagFilter, tagMatchAll, minRating, filter: { ...filter, kinds: modeKinds(mode) } };
   },
   startEditSmart: (sf) => {
     // Edit in the "all" view so the user sees exactly what the rule matches.
@@ -843,16 +848,16 @@ export const useStore = create<State>((set, get) => ({
           includeSubfolders: showSubfolders,
           minRating,
           // The list is of the mode's kind only.
-          filter: { ...filter, kinds: [mode] },
+          filter: { ...filter, kinds: modeKinds(mode) },
           similarLevel,
           sort,
           desc,
         }),
-        api.listFolders(mode),
-        api.listTags(mode),
-        api.getCounts(mode),
-        api.listSmartFolders(mode),
-        api.listExts(mode),
+        api.listFolders(modeKind(mode)),
+        api.listTags(modeKind(mode)),
+        api.getCounts(modeKind(mode)),
+        api.listSmartFolders(modeKind(mode)),
+        api.listExts(modeKind(mode)),
       ]);
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
       const smartFolders = allSmart.filter((sf) => smartFolderInMode(sf, mode));
@@ -991,10 +996,10 @@ export const useStore = create<State>((set, get) => ({
  * (they are imported all the same; the kind comes from the file), with a
  * button to start using the kind.
  */
-export function notifyUnusedKinds(kinds: Partial<Record<Mode, number>>) {
+export function notifyUnusedKinds(kinds: Partial<Record<ItemKind, number>>) {
   const s = useStore.getState();
   const used = usedModes(s);
-  for (const m of MODES) {
+  for (const { kind: m } of KINDS) {
     const n = kinds[m] ?? 0;
     if (!n || used.includes(m)) continue;
     s.notify({

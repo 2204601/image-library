@@ -1,14 +1,14 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, kindLabel, kindOfExt, type Item, type LibraryInfo, type OrientOp, type View } from "./api";
+import { api, EMPTY_FILTER, kindLabel, kindOfExt, type Item, type ItemKind, type LibraryInfo, type OrientOp, type View } from "./api";
+import { modeKinds, modeNoun } from "./modes";
 import {
   activeConditions,
   currentFolderId,
   isHidden,
   useStore,
   type ListSource,
-  type Mode,
   type ToastAction,
 } from "../store";
 
@@ -76,7 +76,7 @@ export async function pickLibraryFolder(): Promise<string | null> {
  */
 export async function transferTo(
   dest: LibraryInfo,
-  scope: { ids: string[] } | { kind: Mode },
+  scope: { ids: string[] } | { kind: ItemKind },
   move: boolean,
 ) {
   const verb = move ? "移動" : "コピー";
@@ -90,7 +90,7 @@ export async function transferTo(
     const n = r.copied + r.duplicates;
     const parts = [];
     if (r.duplicates) parts.push(`${r.duplicates} 件はすでにあったため、タグとフォルダだけ統合`);
-    const unused = Object.keys(r.unusedKinds ?? {}) as Mode[];
+    const unused = Object.keys(r.unusedKinds ?? {}) as ItemKind[];
     if (unused.length)
       parts.push(`「${dest.name}」は${unused.map(kindLabel).join("・")}を使わない設定です（開いて設定から使う種類に追加できます）`);
     if (r.failed.length) parts.push(`${r.failed.length} 件は失敗：${r.failed.slice(0, 2).join("、")}`);
@@ -112,9 +112,10 @@ export async function transferTo(
   }
 }
 
-/** Opens the "別のライブラリへ" dialog for every item of the current mode. */
+/** Opens the "別のライブラリへ" dialog for every item of the current mode (one kind). */
 export function transferAllOfMode() {
   const { mode, counts } = st();
+  if (mode === "all") return;
   const count = counts.kinds[mode] ?? 0;
   if (!count) {
     st().toast(`このライブラリに${kindLabel(mode)}はありません`);
@@ -152,11 +153,13 @@ export function importPaths(paths: string[], folderId?: string) {
 /** Picks files of the current mode's kind (any supported file can still be dropped). */
 export async function importFilesDialog() {
   const mode = st().mode;
-  const exts = (await api.supportedExts()).filter((e) => kindOfExt(e) === mode);
+  const exts = (await api.supportedExts()).filter((e) => mode === "all" || kindOfExt(e) === mode);
   const picked = await open({
-    title: `${kindLabel(mode)}を追加`,
+    title: `${modeNoun(mode)}を追加`,
     multiple: true,
-    filters: [{ name: kindLabel(mode), extensions: [...exts, ...exts.map((e) => e.toUpperCase())] }],
+    filters: [
+      { name: mode === "all" ? "対応しているファイル" : kindLabel(mode), extensions: [...exts, ...exts.map((e) => e.toUpperCase())] },
+    ],
   });
   if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
 }
@@ -492,7 +495,7 @@ function queryView(view: View, opts: { tagIds?: number[]; includeSubfolders?: bo
     tagMatchAll: false,
     includeSubfolders: opts.includeSubfolders ?? false,
     minRating: 0,
-    filter: { ...EMPTY_FILTER, kinds: [s.mode] },
+    filter: { ...EMPTY_FILTER, kinds: modeKinds(s.mode) },
     similarLevel: "standard",
     sort: manual ? "manual" : s.sort === "manual" ? "importedAt" : s.sort,
     desc: manual ? false : s.desc,
@@ -568,7 +571,7 @@ async function withTargets(source: ListSource, fn: (items: Item[]) => unknown) {
   try {
     const items = await listTargets(source);
     if (!items.length) {
-      st().toast(`${sourceName(source)}に${kindLabel(st().mode)}はありません`);
+      st().toast(`${sourceName(source)}に${modeNoun(st().mode)}はありません`);
       return;
     }
     await fn(items);
@@ -595,7 +598,7 @@ export function trayList(source: ListSource) {
 /** 別のライブラリへ… for a list. */
 export function transferList(source: ListSource) {
   return withTargets(source, (items) =>
-    st().setTransfer({ ids: items.map((i) => i.id), kind: st().mode, count: items.length }),
+    st().setTransfer({ ids: items.map((i) => i.id), mode: st().mode, count: items.length }),
   );
 }
 

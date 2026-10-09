@@ -14,6 +14,7 @@ import {
   Layers,
   MoreHorizontal,
   Pin,
+  Shapes,
   Tag as TagIcon,
   Tags,
   Trash2,
@@ -41,8 +42,9 @@ import {
   trayList,
 } from "../lib/actions";
 import { FontFilters } from "../features/fonts/FontFilters";
-import { api, KINDS, kindLabel, type Folder, type ItemKind, type View } from "../lib/api";
-import { activeConditions, isHidden, MODES, usedModes, useStore, type ListSource } from "../store";
+import { api, type Folder, type View } from "../lib/api";
+import { modeLabel, modeNoun, type Mode } from "../lib/modes";
+import { activeConditions, isHidden, MODES, shownModes, useStore, type ListSource } from "../store";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
@@ -460,7 +462,7 @@ function SmartFolderList() {
     >
       {smartFolders.length === 0 && (
         <p className="px-2 py-1 text-xs leading-relaxed text-dim">
-          絞り込み（⌘⇧F）の条件を保存すると、当てはまる{kindLabel(mode)}が自動で集まります
+          絞り込み（⌘⇧F）の条件を保存すると、当てはまる{modeNoun(mode)}が自動で集まります
         </p>
       )}
       {smartFolders.map((sf) => (
@@ -502,22 +504,26 @@ function SmartFolderList() {
   );
 }
 
-const KIND_ICON: Record<ItemKind, React.ReactNode> = {
+const MODE_ICON: Record<Mode, React.ReactNode> = {
+  all: <Shapes size={14} />,
   image: <ImageIcon size={14} />,
   font: <Type size={14} />,
   file: <FileText size={14} />,
 };
 
 /**
- * Which kind the app shows (one at a time): a menu rather than tabs, so it
- * stays one line however many kinds there are (videos, audio later). Lists
- * the kinds the library is used for, with counts and ⌘1〜⌘3 (MODES order).
+ * Which kinds the app shows ("すべて" or one kind): the sidebar's header, a
+ * menu rather than tabs, so it stays one line however many kinds there are
+ * (videos, audio later). Lists "すべて" and the kinds the library is used
+ * for, with counts and ⌘1〜⌘4 (MODES order).
  */
 function ModeSwitch() {
   const mode = useStore((s) => s.mode);
   const setMode = useStore((s) => s.setMode);
   const kinds = useStore((s) => s.counts.kinds);
-  const used = useStore(useShallow(usedModes));
+  const shown = useStore(useShallow(shownModes));
+  const countOf = (m: Mode) =>
+    m === "all" ? Object.values(kinds).reduce((a, n) => a + (n ?? 0), 0) : (kinds[m] ?? 0);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -534,22 +540,21 @@ function ModeSwitch() {
   }, [open]);
 
   // A library used for one kind only has nothing to switch to.
-  if (used.length < 2) return null;
-  const label = kindLabel(mode);
+  if (shown.length < 2) return <div className="h-2 shrink-0" />;
   return (
-    <div ref={ref} className="relative mx-2 mb-1">
+    <div ref={ref} className="relative m-2">
       <button
         onClick={() => setOpen((o) => !o)}
-        title={`表示する種類（${used.map((m) => comboText(`Mod+${MODES.indexOf(m) + 1}`)).join(" / ")}）`}
+        title={`表示する種類（${shown.map((m) => comboText(`Mod+${MODES.indexOf(m) + 1}`)).join(" / ")}）`}
         aria-haspopup="menu"
         aria-expanded={open}
-        className={`flex h-8 w-full items-center gap-2 rounded-md border border-line px-2.5 text-left hover:bg-white/5 ${
+        className={`flex h-9 w-full items-center gap-2 rounded-md border border-line px-2.5 text-left hover:bg-white/5 ${
           open ? "bg-white/5" : ""
         }`}
       >
-        <span className="text-accent">{KIND_ICON[mode]}</span>
-        <span className="font-medium">{label}</span>
-        <span className="text-xs text-dim tabular-nums">{kinds[mode] ?? 0}</span>
+        <span className="text-accent">{MODE_ICON[mode]}</span>
+        <span className="font-semibold">{modeLabel(mode)}</span>
+        <span className="text-xs text-dim tabular-nums">{countOf(mode)}</span>
         <ChevronDown size={14} className={`ml-auto text-dim transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
@@ -557,24 +562,24 @@ function ModeSwitch() {
           role="menu"
           className="absolute top-full right-0 left-0 z-40 mt-1 animate-slide-down rounded-lg border border-line bg-raised p-1 shadow-xl"
         >
-          {KINDS.filter((k) => used.includes(k.kind)).map(({ kind, label }) => (
+          {shown.map((m) => (
             <button
-              key={kind}
+              key={m}
               role="menuitemradio"
-              aria-checked={mode === kind}
+              aria-checked={mode === m}
               onClick={() => {
                 setOpen(false);
-                setMode(kind);
+                setMode(m);
               }}
               className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-accent hover:text-white ${
-                mode === kind ? "text-accent" : ""
+                mode === m ? "text-accent" : ""
               }`}
             >
-              {KIND_ICON[kind]}
-              <span className="flex-1">{label}</span>
-              <span className="text-xs tabular-nums opacity-60">{kinds[kind] ?? 0}</span>
-              {/* ⌘1〜⌘3 follow MODES whichever kinds are shown. */}
-              <span className="w-8 text-right text-xs opacity-50">{comboText(`Mod+${MODES.indexOf(kind) + 1}`)}</span>
+              {MODE_ICON[m]}
+              <span className="flex-1">{modeLabel(m)}</span>
+              <span className="text-xs tabular-nums opacity-60">{countOf(m)}</span>
+              {/* ⌘1〜⌘4 follow MODES whichever kinds are shown. */}
+              <span className="w-8 text-right text-xs opacity-50">{comboText(`Mod+${MODES.indexOf(m) + 1}`)}</span>
             </button>
           ))}
           <div className="mx-1.5 my-1 border-t border-line" />
@@ -721,7 +726,8 @@ export function Sidebar() {
 
   return (
     <aside className="flex shrink-0 flex-col border-r border-line bg-panel" style={{ width: sidebarWidth }}>
-      <LibrarySwitcher />
+      {/* What to show is switched often, the library seldom: the kinds on
+          top, the library at the bottom. */}
       <ModeSwitch />
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
         {smart.filter((s) => !hidden.includes(s.view.kind)).map((s) => (
@@ -769,6 +775,7 @@ export function Sidebar() {
         ショートカット一覧
         <span className="ml-auto tabular-nums">{SHORTCUT_HELP_KEY}</span>
       </button>
+      <LibrarySwitcher />
     </aside>
   );
 }
