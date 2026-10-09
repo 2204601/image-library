@@ -1,3 +1,4 @@
+pub mod changes;
 pub mod commands;
 pub mod db;
 pub mod files;
@@ -5,6 +6,8 @@ pub mod fonts;
 pub mod formats;
 pub mod import;
 pub mod library;
+pub mod loopback;
+pub mod mcp;
 pub mod orient;
 pub mod proxy;
 pub mod search;
@@ -28,6 +31,7 @@ pub fn run() {
         .manage(AppState::default())
         .setup(|app| {
             start_web_import(app.handle());
+            start_mcp(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -99,6 +103,11 @@ pub fn run() {
             reset_web_import_token,
             install_extension,
             answer_web_pair,
+            mcp_status,
+            set_mcp,
+            reset_mcp_token,
+            list_changes,
+            undo_change,
             list_folders,
             create_folder,
             rename_folder,

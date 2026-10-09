@@ -10,7 +10,9 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 15;
+const SCHEMA_VERSION: i32 = 16;
+
+const SETTINGS_TABLE: &str = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
 pub fn now_ms() -> i64 {
     SystemTime::now()
@@ -242,11 +244,21 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     })?;
     // Settings of this library (docs/SETTINGS.md): the kinds it is used
     // for, the mode it was left in, sidebar entries hidden. Values are JSON.
-    step(15, &|c| {
+    step(15, &|c| c.execute_batch(SETTINGS_TABLE))?;
+    // Changes made from outside the UI (Claude through MCP, see changes.rs),
+    // with what is needed to undo them. Both were step 15 on their own
+    // branches, so a library opened by a build of either has 15 already:
+    // the settings table is made here too when missing.
+    step(16, &|c| {
+        c.execute_batch(SETTINGS_TABLE)?;
         c.execute_batch(
-            "CREATE TABLE IF NOT EXISTS settings (
-               key   TEXT PRIMARY KEY,
-               value TEXT NOT NULL
+            "CREATE TABLE IF NOT EXISTS changes (
+               id        INTEGER PRIMARY KEY,
+               at        INTEGER NOT NULL,
+               source    TEXT NOT NULL,
+               summary   TEXT NOT NULL,
+               undo      TEXT NOT NULL,
+               undone_at INTEGER
              )",
         )
     })?;

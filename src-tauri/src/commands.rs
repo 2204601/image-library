@@ -2,9 +2,11 @@
 //! errors surface as rejected promises in JS. Font-only commands are in
 //! fonts/commands.rs.
 
+use crate::changes;
 use crate::db::{self, Counts, Folder, Item, ItemQuery, SelectionInfo, Tag};
 use crate::import::{self, ImportSummary, Source};
 use crate::library::Library;
+use crate::mcp;
 use crate::webimport;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -19,6 +21,8 @@ pub struct AppState {
     pub lib: Mutex<Option<Library>>,
     /// Saving from the browser extension (webimport.rs).
     pub web: Mutex<WebServer>,
+    /// Organizing from Claude (mcp/).
+    pub mcp: Mutex<McpServer>,
     /// Extensions waiting for the user to allow them to connect: id -> answer.
     pairing: Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<bool>>>,
 }
@@ -26,6 +30,13 @@ pub struct AppState {
 #[derive(Default)]
 pub struct WebServer {
     server: Option<webimport::Server>,
+    /// Why the server couldn't start.
+    error: Option<String>,
+}
+
+#[derive(Default)]
+pub struct McpServer {
+    server: Option<mcp::Server>,
     /// Why the server couldn't start.
     error: Option<String>,
 }
@@ -48,7 +59,8 @@ struct Settings {
     last_library: Option<PathBuf>,
     /// Libraries opened or created before (the library switcher's list).
     libraries: Vec<KnownLibrary>,
-    web_import: WebImportSettings,
+    web_import: ServerSettings,
+    mcp: ServerSettings,
     #[serde(flatten)]
     app: AppSettings,
 }
@@ -110,11 +122,12 @@ impl Settings {
     }
 }
 
+/// One of the local servers (the browser extension's, Claude's).
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-struct WebImportSettings {
+struct ServerSettings {
     enabled: bool,
-    /// Shared secret the extension sends with every request.
+    /// Shared secret the client sends with every request.
     token: String,
 }
 
@@ -624,22 +637,11 @@ pub async fn sheet_image(app: AppHandle, id: String, max_side: u32) -> CmdResult
                 .map_err(err)?
                 .pop()
                 .ok_or("画像が見つかりません")?;
-            let src = if item.kind == db::Kind::Image { lib.display_path(&item) } else { lib.thumb_path(&item) };
+            let src = crate::sheet::source_path(lib, &item);
             Ok((item, src))
         })?;
         let bytes = fs::read(&src).map_err(err)?;
-        let img = if item.kind != db::Kind::Image {
-            image::load_from_memory(&bytes).map_err(err)?
-        } else {
-            let decoded = match (item.preview.is_some(), item.ext.as_str()) {
-                // Drawn at the size it is shown, not the usual 1024 px.
-                (false, "svg") => crate::formats::rasterize_svg(&bytes, max_side.min(crate::sheet::MAX_SIDE) as f32)?,
-                (false, ext) => crate::formats::decode(&bytes, ext)?,
-                (true, _) => crate::formats::decode(&bytes, "jpg")?,
-            };
-            crate::orient::Orientation::new(item.rotation, item.flipped).apply(&decoded.image)
-        };
-        Ok(tauri::ipc::Response::new(crate::sheet::fit(&img, max_side)?))
+        Ok(tauri::ipc::Response::new(crate::sheet::render(&item, &bytes, max_side)?))
     })
     .await
     .map_err(err)?
@@ -958,6 +960,128 @@ pub async fn install_extension(app: AppHandle) -> CmdResult<String> {
     })
     .await
     .map_err(err)?
+}
+
+// --------------------------------------------------------------- Claude
+
+struct McpHost(AppHandle);
+
+impl mcp::Host for McpHost {
+    fn library(&self) -> &Mutex<Option<Library>> {
+        &self.0.state::<AppState>().inner().lib
+    }
+
+    fn changed(&self, change: &changes::Change) {
+        let _ = self.0.emit("library-changed", change);
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct McpStatus {
+    enabled: bool,
+    running: bool,
+    port: u16,
+    /// Why the server isn't running although it's turned on.
+    error: Option<String>,
+    /// What to paste to connect: a command for Claude Code, the config for Claude Desktop.
+    claude_code_command: Option<String>,
+    desktop_config: Option<String>,
+}
+
+/// Starts or stops the server to match the settings (restarting it picks up a new token).
+fn apply_mcp(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let mut srv = state.mcp.lock().unwrap();
+    *srv = McpServer::default(); // stops a running server first, freeing the port
+    let s = load_settings(app).mcp;
+    if s.enabled && !s.token.is_empty() {
+        match mcp::Server::start(mcp::PORT, s.token, std::sync::Arc::new(McpHost(app.clone()))) {
+            Ok(server) => srv.server = Some(server),
+            Err(e) => srv.error = Some(e),
+        }
+    }
+}
+
+/// At startup: runs the server if the user turned it on earlier.
+pub fn start_mcp(app: &AppHandle) {
+    if load_settings(app).mcp.enabled {
+        apply_mcp(app);
+    }
+}
+
+fn mcp_state(app: &AppHandle) -> McpStatus {
+    let s = load_settings(app).mcp;
+    let state = app.state::<AppState>();
+    let srv = state.mcp.lock().unwrap();
+    let ready = s.enabled && !s.token.is_empty();
+    let url = format!("http://127.0.0.1:{}/mcp", mcp::PORT);
+    let exe = std::env::current_exe().ok().map(|p| p.display().to_string());
+    McpStatus {
+        enabled: s.enabled,
+        running: srv.server.is_some(),
+        port: mcp::PORT,
+        error: srv.error.clone(),
+        claude_code_command: ready.then(|| {
+            format!(
+                "claude mcp add --scope user --transport http image-library {url} --header \"Authorization: Bearer {}\"",
+                s.token
+            )
+        }),
+        desktop_config: exe.filter(|_| ready).map(|exe| {
+            let config = serde_json::json!({
+                "mcpServers": { "image-library": { "command": exe, "args": ["--mcp"] } }
+            });
+            serde_json::to_string_pretty(&config).unwrap_or_default()
+        }),
+    }
+}
+
+#[tauri::command]
+pub fn mcp_status(app: AppHandle) -> McpStatus {
+    mcp_state(&app)
+}
+
+#[tauri::command]
+pub async fn set_mcp(app: AppHandle, enabled: bool) -> CmdResult<McpStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut settings = load_settings(&app);
+        settings.mcp.enabled = enabled;
+        if settings.mcp.token.is_empty() {
+            settings.mcp.token = new_token();
+        }
+        save_settings(&app, &settings)?;
+        apply_mcp(&app);
+        Ok(mcp_state(&app))
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Makes a new token: Claude Code / Desktop set up before stop working until
+/// they are set up again (Claude Desktop reads it from the settings by itself).
+#[tauri::command]
+pub async fn reset_mcp_token(app: AppHandle) -> CmdResult<McpStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut settings = load_settings(&app);
+        settings.mcp.token = new_token();
+        save_settings(&app, &settings)?;
+        apply_mcp(&app);
+        Ok(mcp_state(&app))
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Changes made from Claude (changes.rs), newest first.
+#[tauri::command]
+pub fn list_changes(state: State<AppState>) -> CmdResult<Vec<changes::Change>> {
+    with_lib(&state, |lib| changes::list(&lib.conn, 30).map_err(err))
+}
+
+#[tauri::command]
+pub fn undo_change(state: State<AppState>, id: i64) -> CmdResult<changes::Undone> {
+    with_lib(&state, |lib| changes::undo(&mut lib.conn, id))
 }
 
 /// The proxy the OS uses for `url` (PAC included), for the updater: its

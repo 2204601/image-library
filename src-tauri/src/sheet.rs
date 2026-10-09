@@ -6,9 +6,40 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::PngEncoder;
 use image::imageops::FilterType;
 use image::{DynamicImage, ExtendedColorType, ImageEncoder};
+use std::path::PathBuf;
+
+use crate::db::{Item, Kind};
+use crate::library::Library;
 
 /// Largest side handed out (a cell is never wider than the sheet).
 pub const MAX_SIDE: u32 = 4096;
+
+/// The file `render` reads for `item`: an image itself (or its display
+/// copy), the thumbnail of a font or another file.
+pub fn source_path(lib: &Library, item: &Item) -> PathBuf {
+    if item.kind == Kind::Image {
+        lib.display_path(item)
+    } else {
+        lib.thumb_path(item)
+    }
+}
+
+/// `item`'s picture (`bytes` read from `source_path`) turned as the user
+/// turned it and fitted inside `max_side` × `max_side`, see `fit`.
+pub fn render(item: &Item, bytes: &[u8], max_side: u32) -> Result<Vec<u8>, String> {
+    let img = if item.kind != Kind::Image {
+        image::load_from_memory(bytes).map_err(|e| e.to_string())?
+    } else {
+        let decoded = match (item.preview.is_some(), item.ext.as_str()) {
+            // Drawn at the size it is shown, not the usual 1024 px.
+            (false, "svg") => crate::formats::rasterize_svg(bytes, max_side.min(MAX_SIDE) as f32)?,
+            (false, ext) => crate::formats::decode(bytes, ext)?,
+            (true, _) => crate::formats::decode(bytes, "jpg")?,
+        };
+        crate::orient::Orientation::new(item.rotation, item.flipped).apply(&decoded.image)
+    };
+    fit(&img, max_side)
+}
 
 /// `img` fitted inside `max_side` × `max_side` (never enlarged), encoded as
 /// PNG when it has transparent pixels and as JPEG otherwise (much smaller).

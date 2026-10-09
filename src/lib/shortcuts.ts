@@ -1,5 +1,5 @@
 /**
- * The keyboard shortcuts and mouse gestures, for the shortcut list (⌘/).
+ * The keyboard shortcuts and mouse gestures, for the shortcut list (?).
  * Rows of operations come from the command table (commands.ts), which the
  * menus and the list's key handler use too; the rest (moving around, the
  * viewer, the mouse) are described here.

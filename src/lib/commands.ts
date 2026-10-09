@@ -1,7 +1,7 @@
 /**
  * Every operation of the app, defined once (docs/MENUS.md §1). The menu bar,
  * the right-click menus, the list's keyboard handling and the shortcut list
- * (⌘/) are all made from this table, so a name and its key read the same
+ * (?) are all made from this table, so a name and its key read the same
  * everywhere.
  *
  * Keys are written like "Mod+Shift+R": Mod is ⌘ on macOS and Ctrl elsewhere.
@@ -68,7 +68,7 @@ export interface Command {
   run: (s: S) => void;
   /**
    * Who handles the key: "grid" (the list's key handler, the default),
-   * "global" (its own handler, e.g. ⌘, and ⌘/, which work everywhere) or
+   * "global" (its own handler, e.g. ⌘, and ?) or
    * "menu" (only the menu bar's accelerator).
    */
   keyBy?: "grid" | "global" | "menu";
@@ -101,11 +101,12 @@ export const COMMANDS: Command[] = [
   {
     id: "help.shortcuts",
     title: "キーボードショートカット",
-    keys: ["Mod+/", "?"],
+    keys: ["?"],
     keyBy: "global",
     run: () => useShortcutHelp.getState().setOpen(true),
   },
   { id: "help.webImport", title: "ブラウザ拡張と連携…", run: (s) => s.openSettings("integration") },
+  { id: "help.claude", title: "Claude と連携…", run: (s) => s.openSettings("integration", "settings-claude") },
 
   // ------------------------------------------------------------ library
   { id: "library.new", title: "新しいライブラリ…", run: () => void createLibraryDialog() },

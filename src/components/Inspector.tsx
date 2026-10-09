@@ -15,7 +15,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   deleteSelection,
   exportSelection,
@@ -182,11 +182,17 @@ function Chip({
 }
 
 /** Text field that saves on blur, and resets when the selected item changes. */
+/**
+ * A field saved on blur. `multiline`: a note (newlines allowed). `wrap`: one
+ * line of text shown wrapped over as many lines as it needs (a long file
+ * name stays readable), Enter saves.
+ */
 function SavedText({
   id,
   value,
   onSave,
   multiline,
+  wrap,
   className,
   placeholder,
 }: {
@@ -194,9 +200,11 @@ function SavedText({
   value: string;
   onSave: (v: string) => void;
   multiline?: boolean;
+  wrap?: boolean;
   className?: string;
   placeholder?: string;
 }) {
+  const area = useRef<HTMLTextAreaElement>(null);
   const [v, setV] = useState(value);
   const latest = useRef({ v, value, onSave });
   latest.current = { v, value, onSave };
@@ -217,6 +225,38 @@ function SavedText({
     onChange: (e: React.ChangeEvent<HTMLInputElement & HTMLTextAreaElement>) => setV(e.target.value),
     onBlur: () => v !== value && onSave(v),
   };
+  // Grow to fit the text (also when the panel is made narrower or wider).
+  useLayoutEffect(() => {
+    const el = area.current;
+    if (!wrap || !el) return;
+    const fit = () => {
+      el.style.height = "auto";
+      // scrollHeight leaves out the border; the height (border-box) includes it.
+      el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+    };
+    fit();
+    const ro = new ResizeObserver(fit);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [wrap, v]);
+  if (wrap)
+    return (
+      <textarea
+        {...props}
+        ref={area}
+        rows={1}
+        spellCheck={false}
+        // A name has no line breaks (pasted ones become spaces).
+        onChange={(e) => setV(e.target.value.replace(/\s*\n\s*/g, " "))}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            e.currentTarget.blur();
+          }
+        }}
+        className={`${className ?? ""} shrink-0 resize-none overflow-hidden [overflow-wrap:anywhere]`}
+      />
+    );
   return multiline ? (
     <textarea {...props} rows={4} />
   ) : (
@@ -357,6 +397,7 @@ export function Inspector() {
   const run = useStore((s) => s.run);
   const isTrash = useStore((s) => s.view.kind === "trash");
   const mode = useStore((s) => s.mode);
+  const inspectorWidth = useStore((s) => s.inspectorWidth);
   const [info, setInfo] = useState<SelectionInfo>({ tags: [], folders: [] });
   const [adding, setAdding] = useState(false);
 
@@ -399,7 +440,10 @@ export function Inspector() {
 
   if (!ids.length) {
     return (
-      <aside className="flex w-72 shrink-0 items-center justify-center border-l border-line bg-panel text-dim">
+      <aside
+        className="flex shrink-0 items-center justify-center border-l border-line bg-panel text-dim"
+        style={{ width: inspectorWidth }}
+      >
         {kindLabel(mode)}を選択してください
       </aside>
     );
@@ -410,7 +454,10 @@ export function Inspector() {
   const unusedFolders = folders.filter((f) => !info.folders.some((x) => x.id === f.id && x.count === n));
 
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-y-auto border-l border-line bg-panel p-4">
+    <aside
+      className="flex shrink-0 flex-col overflow-y-auto border-l border-line bg-panel p-4"
+      style={{ width: inspectorWidth }}
+    >
       {!isTrash && <ActionRow ids={ids} items={items} />}
       {single ? (
         <>
@@ -428,6 +475,7 @@ export function Inspector() {
           <SavedText
             key={single.id + ":name"}
             id="inspector-name"
+            wrap
             value={single.name}
             onSave={(v) => run(() => api.renameItem(single.id, v))}
             className="mt-3 w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-sm font-semibold outline-none hover:border-line focus:border-accent"

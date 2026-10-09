@@ -25,12 +25,12 @@ use crate::db;
 use crate::formats;
 use crate::import::{self, ImportSummary, Source};
 use crate::library::Library;
+use crate::loopback::{self, Listener};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
 
 pub const PORT: u16 = 41620;
 const MAX_BODY: u64 = 300 * 1024 * 1024;
@@ -53,85 +53,29 @@ struct Shared {
 }
 
 pub struct Server {
-    http: Option<Arc<tiny_http::Server>>,
-    thread: Option<JoinHandle<()>>,
-    port: u16,
+    listener: Listener,
 }
-
-/// tiny_http closes the listening socket on its own thread after the server is
-/// dropped, without waiting for it: the port can stay open for a moment.
-const CLOSE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Server {
     /// Starts listening on `127.0.0.1:port` (0 = any free port, for tests).
     pub fn start(port: u16, token: String, host: Arc<dyn Host>) -> Result<Self, String> {
-        // Restarting (a new key) can come right after the old server let go of the port.
-        let started = std::time::Instant::now();
-        let http = loop {
-            match tiny_http::Server::http(("127.0.0.1", port)) {
-                Ok(h) => break h,
-                Err(e)
-                    if started.elapsed() < CLOSE_WAIT
-                        && e.downcast_ref::<std::io::Error>().map(|e| e.kind()) == Some(std::io::ErrorKind::AddrInUse) =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                }
-                Err(e) => {
-                    return Err(format!(
-                        "127.0.0.1:{port} で待ち受けできませんでした（ほかのアプリが使用中の可能性があります）: {e}"
-                    ))
-                }
-            }
-        };
-        let http = Arc::new(http);
-        let port = http.server_addr().to_ip().map(|a| a.port()).unwrap_or(port);
         let shared = Arc::new(Shared { token, pairing: AtomicBool::new(false) });
-        let server = http.clone();
-        let thread = std::thread::spawn(move || {
-            for req in server.incoming_requests() {
-                let (shared, host) = (shared.clone(), host.clone());
-                // Imports and pairing can take a while; don't hold up other requests.
-                std::thread::spawn(move || serve(req, port, &shared, &*host));
-            }
-        });
-        Ok(Self { http: Some(http), thread: Some(thread), port })
+        let listener = Listener::start(port, move |req, port| serve(req, port, &shared, &*host))?;
+        Ok(Self { listener })
     }
 
     pub fn port(&self) -> u16 {
-        self.port
-    }
-}
-
-impl Drop for Server {
-    /// Returns once the port is closed, so it can be listened on again at once.
-    fn drop(&mut self) {
-        if let Some(http) = self.http.take() {
-            http.unblock();
-            if let Some(t) = self.thread.take() {
-                let _ = t.join();
-            }
-            drop(http); // the last reference: tiny_http starts closing the socket
-        }
-        let started = std::time::Instant::now();
-        while started.elapsed() < CLOSE_WAIT && std::net::TcpStream::connect(("127.0.0.1", self.port)).is_ok() {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+        self.listener.port()
     }
 }
 
 fn serve(mut req: tiny_http::Request, port: u16, shared: &Shared, host: &dyn Host) {
-    let header = |name: &'static str| {
-        req.headers()
-            .iter()
-            .find(|h| h.field.equiv(name))
-            .map(|h| h.value.as_str().to_string())
-    };
     let head = Head {
         method: req.method().as_str().to_ascii_uppercase(),
         url: req.url().to_string(),
-        host: header("Host"),
-        origin: header("Origin"),
-        auth: header("Authorization"),
+        host: loopback::header(&req, "Host"),
+        origin: loopback::header(&req, "Origin"),
+        auth: loopback::header(&req, "Authorization"),
         length: req.body_length().map(|n| n as u64),
     };
     let (status, body) = handle(&head, req.as_reader(), port, shared, host);
@@ -155,17 +99,11 @@ fn error(status: u16, message: &str) -> (u16, Value) {
     (status, json!({ "error": message }))
 }
 
-/// Compares without stopping at the first difference.
-fn same_secret(a: &str, b: &str) -> bool {
-    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
 const NOT_CONNECTED: &str =
     "この拡張機能はアプリと接続されていません。拡張機能のアイコン →「アプリと接続」を押してください";
 
 fn handle(head: &Head, body: &mut dyn Read, port: u16, shared: &Shared, host: &dyn Host) -> (u16, Value) {
-    let allowed_hosts = [format!("127.0.0.1:{port}"), format!("localhost:{port}")];
-    if !head.host.as_ref().is_some_and(|h| allowed_hosts.iter().any(|a| a.eq_ignore_ascii_case(h))) {
+    if !loopback::is_own_host(head.host.as_deref(), port) {
         return error(403, "許可されていない接続です");
     }
     if head.origin.as_ref().is_some_and(|o| !o.starts_with("chrome-extension://")) {
@@ -199,8 +137,7 @@ fn handle(head: &Head, body: &mut dyn Read, port: u16, shared: &Shared, host: &d
         };
     }
 
-    let given = head.auth.as_deref().and_then(|a| a.strip_prefix("Bearer ")).unwrap_or("");
-    if token.is_empty() || !same_secret(given.trim(), token) {
+    if !loopback::has_token(head.auth.as_deref(), token) {
         return error(401, NOT_CONNECTED);
     }
     let param = |k: &str| params.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str()).filter(|v| !v.is_empty());
