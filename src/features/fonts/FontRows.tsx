@@ -5,7 +5,7 @@ import { Heart, Layers, Pin } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 // Grid supplies the cell plumbing and uses these rows: the import cycle is
 // fine because everything is used at render time, not at load.
-import { onItemPointerDown, showItemMenu, Stars, type CellProps } from "../../components/Grid";
+import { onItemPointerDown, rowSelection, showItemMenu, Stars, type CellProps } from "../../components/Grid";
 import { fontCategoryLabel, fontCategoryOf, fontScriptLabel, type Item } from "../../lib/api";
 import { useStore } from "../../store";
 import { type FontListPreview } from "./api";
@@ -69,7 +69,7 @@ export function FontListCells({ item }: { item: Item }) {
  * Characters the font lacks are marked.
  */
 export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
-  const { item, index, selected, dimmed, width, height, reorderable, insert, flags } = props;
+  const { item, index, selected, focused, dimmed, width, height, reorderable, insert, flags } = props;
   const text = useStore((s) => s.specimenText);
   const size = useStore((s) => s.specimenSize);
   const { family, preview, failed, style } = useFontRow(item.id);
@@ -92,9 +92,10 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
   const category = fontCategoryOf(item);
   return (
     <div
-      className={`relative flex flex-col justify-center gap-1 overflow-hidden rounded-md border-b border-line/60 px-3 transition-opacity duration-200 ${
-        selected ? "bg-accent/25 text-white" : "hover:bg-white/5"
-      } ${dimmed ? "opacity-35" : ""}`}
+      className={`relative flex flex-col justify-center gap-1 overflow-hidden rounded-md border-b border-line/60 px-3 transition-opacity duration-200 ${rowSelection(
+        selected,
+        focused,
+      )} ${dimmed ? "opacity-35" : ""}`}
       style={{ width, height }}
       onPointerDown={(e) => onItemPointerDown(e, item, index)}
       onDoubleClick={() => useStore.getState().openViewer(index)}

@@ -99,6 +99,7 @@ export function Toolbar() {
   // Number of images (with tag grouping an image can be listed more than once).
   const count = useStore((s) => s.rawItems.length);
   const selectedCount = useStore((s) => s.selected.size);
+  const setSelection = useStore((s) => s.setSelection);
   const view = useStore((s) => s.view);
   const folders = useStore((s) => s.folders);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
@@ -155,15 +156,21 @@ export function Toolbar() {
           <h1 className="flex min-w-0 flex-1 items-baseline gap-2 text-base font-semibold">
             {smart && <FolderSearch size={15} className="shrink-0 self-center text-accent" />}
             <span className="truncate">{viewTitle(view, folders, smartFolders)}</span>
-            <span className="shrink-0 text-xs font-normal text-dim tabular-nums">
-              {selectedCount > 0 ? (
-                <span className="text-fg">
-                  {selectedCount} / {count} 件選択
-                </span>
-              ) : (
-                `${count} 件`
-              )}
-            </span>
+            {selectedCount > 0 ? (
+              <span className="flex shrink-0 items-center gap-1 self-center rounded-full bg-accent/20 py-0.5 pr-0.5 pl-2.5 text-xs font-normal text-accent tabular-nums">
+                {selectedCount} 件を選択中
+                <span className="text-accent/60">/ {count}</span>
+                <button
+                  title="選択を解除（Esc）"
+                  onClick={() => setSelection([])}
+                  className="rounded-full p-0.5 hover:bg-accent/25"
+                >
+                  <X size={12} />
+                </button>
+              </span>
+            ) : (
+              <span className="shrink-0 text-xs font-normal text-dim tabular-nums">{count} 件</span>
+            )}
           </h1>
           <InspectorToggle className="hidden @max-xl:flex" />
         </div>

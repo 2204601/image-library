@@ -13,6 +13,7 @@ import { Toasts } from "./components/Toasts";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
 import { SheetDialog } from "./components/SheetDialog";
+import { ShortcutHelp } from "./components/ShortcutHelp";
 import { TransferDialog } from "./components/TransferDialog";
 import { PairDialog, WebImportDialog } from "./components/WebImportDialog";
 import { Welcome } from "./components/Welcome";
@@ -189,6 +190,7 @@ export default function App() {
       <TransferDialog />
       <WebImportDialog />
       <PairDialog />
+      <ShortcutHelp />
       <DragLayer />
       <ContextMenu />
       <Toasts />
