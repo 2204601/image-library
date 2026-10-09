@@ -1,6 +1,6 @@
 [package]
 name = "image-library"
-version = "0.16.1"
+version = "0.16.2"
 description = "Local image library manager"
 authors = ["you"]
 edition = "2021"
