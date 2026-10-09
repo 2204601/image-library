@@ -101,6 +101,8 @@ export type CellProps = {
   item: Item;
   index: number;
   selected: boolean;
+  /** The keyboard position, marked when it isn't the only selected item. */
+  focused: boolean;
   dimmed: boolean;
   width: number;
   height: number;
@@ -154,6 +156,29 @@ function FlagOverlay({ item }: { item: Item }) {
   );
 }
 
+/**
+ * Selection check at the bottom right of a thumbnail (like Photos). Unselected
+ * ones show an empty circle on hover that adds to the selection, as ⌘-click does.
+ */
+function SelectMark({ item, index, selected }: { item: Item; index: number; selected: boolean }) {
+  return (
+    <button
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        focusAt = index;
+        useStore.getState().select(item.id, e.shiftKey ? "range" : "toggle");
+      }}
+      title={selected ? "選択から外す（⌘+クリック）" : "選択に追加（⌘+クリック）"}
+      className={`absolute right-1.5 bottom-1.5 h-5 w-5 items-center justify-center rounded-full border-2 border-white transition-colors ${
+        selected ? "flex bg-accent text-white shadow" : "hidden bg-black/35 group-hover:flex hover:bg-black/60"
+      }`}
+    >
+      {selected && <Check size={12} strokeWidth={3.5} />}
+    </button>
+  );
+}
+
 type SimilarMark = {
   /** This copy would be kept (otherwise trashed). */
   keep: boolean;
@@ -196,6 +221,7 @@ const Cell = memo(function Cell({
   item,
   index,
   selected,
+  focused,
   dimmed,
   width,
   height,
@@ -221,13 +247,14 @@ const Cell = memo(function Cell({
     >
       <div
         className={`relative flex items-center justify-center overflow-hidden rounded-lg bg-raised transition-shadow duration-150 ${
-          selected ? "ring-3 ring-accent" : "hover:ring-2 hover:ring-white/15"
-        }`}
+          selected ? "sel-ring" : focused ? "" : "hover:ring-2 hover:ring-white/15"
+        } ${focused ? "focus-ring" : ""}`}
         style={{ width, height }}
       >
         <Thumb item={item} fit={fit} />
         {similar && <SimilarOverlay item={item} mark={similar} />}
         {flags && <FlagOverlay item={item} />}
+        <SelectMark item={item} index={index} selected={selected} />
       </div>
       {insert && (
         <span
@@ -259,11 +286,24 @@ const Cell = memo(function Cell({
   );
 });
 
+/**
+ * Selection of a row (list, specimen): a tint plus an accent bar on the left,
+ * so it shows even where the row's own content is blue; the keyboard position
+ * gets a light outline.
+ */
+export const rowSelection = (selected: boolean, focused: boolean) =>
+  `${
+    selected
+      ? "bg-accent/25 text-white before:absolute before:inset-y-1 before:left-0 before:w-[3px] before:rounded-full before:bg-accent"
+      : "hover:bg-white/5"
+  } ${focused ? "outline-1 -outline-offset-1 outline-fg/60" : ""}`;
+
 /** List layout row: thumbnail plus the details as columns. */
 const ListRow = memo(function ListRow({
   item,
   index,
   selected,
+  focused,
   dimmed,
   width,
   height,
@@ -274,9 +314,10 @@ const ListRow = memo(function ListRow({
 }: CellProps) {
   return (
     <div
-      className={`relative flex items-center gap-3 rounded-md px-2 text-xs transition-opacity duration-200 ${
-        selected ? "bg-accent/25 text-white" : "hover:bg-white/5"
-      } ${dimmed ? "opacity-35" : ""}`}
+      className={`relative flex items-center gap-3 rounded-md px-2 text-xs transition-opacity duration-200 ${rowSelection(
+        selected,
+        focused,
+      )} ${dimmed ? "opacity-35" : ""}`}
       style={{ width, height }}
       onPointerDown={(e) => onItemPointerDown(e, item, index)}
       onDoubleClick={() => useStore.getState().openViewer(index)}
@@ -424,6 +465,8 @@ export function Grid() {
   const items = useStore((s) => s.items);
   const sections = useStore((s) => s.sections);
   const selected = useStore((s) => s.selected);
+  // Marked only where it tells something: beside other selected items, or unselected.
+  const focus = useStore((s) => (s.focus && (s.selected.size > 1 || !s.selected.has(s.focus)) ? s.focus : null));
   const thumbSize = useStore((s) => s.thumbSize);
   const specimenSize = useStore((s) => s.specimenSize);
   const kind = useStore((s) => s.layout);
@@ -746,6 +789,7 @@ export function Grid() {
                   item={item}
                   index={i}
                   selected={selected.has(item.id)}
+                  focused={item.id === focus}
                   dimmed={dragging.has(item.id)}
                   width={b.w}
                   height={b.h}
