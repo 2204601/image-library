@@ -108,6 +108,7 @@ export const COMMANDS: Command[] = [
   },
   { id: "help.webImport", title: "ブラウザ拡張と連携…", run: (s) => s.openSettings("integration") },
   { id: "help.claude", title: "Claude と連携…", run: (s) => s.openSettings("integration", "settings-claude") },
+  { id: "help.log", title: "ログを表示", run: (s) => s.run(() => api.revealLog()) },
 
   // ------------------------------------------------------------ library
   { id: "library.new", title: "新しいライブラリ…", run: () => void createLibraryDialog() },

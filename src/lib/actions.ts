@@ -12,6 +12,8 @@ import {
   type ToastAction,
 } from "../store";
 import { openGuarded } from "./libraryLock";
+import { warn } from "./log";
+import { notifyIfAway } from "./osNotify";
 
 const st = () => useStore.getState();
 
@@ -86,6 +88,7 @@ export async function transferTo(
 ) {
   const verb = move ? "移動" : "コピー";
   const label = `「${dest.name}」へ${verb}中…`;
+  const since = Date.now();
   st().setImporting({ label, done: 0, total: 0 });
   const unlisten = await listen<{ done: number; total: number }>("transfer-progress", (e) =>
     st().setImporting({ label, ...e.payload }),
@@ -100,14 +103,17 @@ export async function transferTo(
       parts.push(`「${dest.name}」は${unused.map(kindLabel).join("・")}を使わない設定です（開いて設定から使う種類に追加できます）`);
     if (r.failed.length) parts.push(`${r.failed.length} 件は失敗：${r.failed.slice(0, 2).join("、")}`);
     if (move && n) parts.push("元のライブラリではゴミ箱に入っています");
+    const title = n ? `${n} 件を「${dest.name}」へ${verb}しました` : `「${dest.name}」へ${verb}できませんでした`;
+    const detail = parts.join(" / ") || undefined;
     st().notify({
-      title: n ? `${n} 件を「${dest.name}」へ${verb}しました` : `「${dest.name}」へ${verb}できませんでした`,
-      detail: parts.join(" / ") || undefined,
+      title,
+      detail,
       kind: n ? "success" : "error",
       action: n ? { label: `「${dest.name}」を開く`, onClick: () => openLibraryAt(dest.root) } : undefined,
       duration: 10000,
     });
-    if (r.failed.length) console.warn("transfer failures", r.failed);
+    notifyIfAway(since, title, detail);
+    if (r.failed.length) warn("transfer failures", r.failed);
   } catch (e) {
     st().notify({ title: `${verb}できませんでした`, detail: String(e), kind: "error" });
   } finally {
@@ -152,7 +158,8 @@ async function guarded(fn: () => Promise<void>) {
 export function importPaths(paths: string[], folderId?: string) {
   if (!paths.length || !st().library) return;
   const folder = folderId ?? currentFolderId();
-  return guarded(async () => st().importDone(await api.importPaths(paths, folder)));
+  const since = Date.now();
+  return guarded(async () => st().importDone(await api.importPaths(paths, folder), since));
 }
 
 /** Picks files of the current mode's kind (any supported file can still be dropped). */

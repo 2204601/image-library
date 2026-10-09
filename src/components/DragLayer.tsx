@@ -6,6 +6,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
 import { addToTray, moveToFolder, reorder } from "../lib/actions";
 import { api, type Folder } from "../lib/api";
+import { warn } from "../lib/log";
 import { useStore, type Drag } from "../store";
 
 const THRESHOLD = 5;
@@ -124,7 +125,7 @@ function dragOut(drag: Drag & { kind: "items" }) {
   const items = useStore.getState().items.filter((i) => drag.ids.includes(i.id));
   if (!items.length) return;
   startDrag({ item: items.map((i) => i.filePath), icon: items[0].thumbPath }).catch((e) =>
-    console.warn("drag out failed", e),
+    warn("drag out failed", e),
   );
 }
 

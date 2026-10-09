@@ -18,6 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { dragRegion } from "../lib/titleBar";
 import {
   clearDismissedDuplicates,
   clearTray,
@@ -140,7 +141,12 @@ export function Toolbar() {
   }, [text, search, setSearch]);
 
   return (
-    <header className="@container flex flex-col gap-2 border-b border-line bg-panel px-4 py-2">
+    <header
+      {...dragRegion(true)}
+      className="@container flex flex-col gap-2 border-b border-line bg-panel px-4 py-2 transition-[padding] duration-200 ease-out"
+      // With the sidebar closed, the macOS window buttons are over this bar.
+      style={sidebarOpen ? undefined : { paddingLeft: "max(1rem, var(--traffic-lights))" }}
+    >
       {/* Collapses progressively by toolbar width (container queries) so nothing
           overflows into the inspector: label → slider → two rows. */}
       <div className="flex items-center gap-x-3 gap-y-2 @max-xl:flex-col @max-xl:items-stretch">

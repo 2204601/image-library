@@ -706,6 +706,7 @@ function handle(cmd: string, a: any): unknown {
       (window as unknown as { __MOCK_LAST_FILE__: unknown }).__MOCK_LAST_FILE__ = a;
       return;
     case "reveal_path":
+    case "reveal_log":
       return;
     case "copy_items":
     case "export_items":

@@ -152,6 +152,28 @@ body,
   height: 100%;
 }
 
+/* macOS: the page runs under the title bar, with the window buttons over its
+   top left (src/lib/titleBar.ts). Room left for them; none in full screen,
+   where they are hidden, and none on Windows, which keeps its title bar. */
+:root {
+  --titlebar: 0px;
+  --traffic-lights: 0px;
+}
+:root[data-titlebar="overlay"]:not([data-fullscreen]) {
+  --titlebar: 40px;
+  --traffic-lights: 84px;
+}
+
+/* macOS: the window is transparent over a translucent material (src-tauri
+   lib.rs). The sidebar lets it show through, blurred; the rest of the page
+   is opaque (App.tsx paints the main area). */
+:root[data-titlebar="overlay"] body {
+  background: transparent;
+}
+:root[data-titlebar="overlay"] .vibrant {
+  background: color-mix(in srgb, var(--color-panel) 55%, transparent);
+}
+
 body {
   margin: 0;
   background: var(--color-bg);

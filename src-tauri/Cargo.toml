@@ -18,7 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# macos-private-api: a transparent window on macOS, for the sidebar's
+# translucent material (lib.rs, `main_window`).
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -48,6 +50,13 @@ base64 = "0.22"
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 # The window opens at the size and place it had when last closed.
 tauri-plugin-window-state = "2"
+# A second launch brings up the running app's window instead (lib.rs).
+tauri-plugin-single-instance = "2"
+# Warnings and errors into a file in the app's log folder (lib.rs, src/lib/log.ts).
+tauri-plugin-log = "2"
+log = "0.4"
+# OS notifications for long tasks that end while the user is away (src/lib/osNotify.ts).
+tauri-plugin-notification = "2"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

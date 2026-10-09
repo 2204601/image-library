@@ -411,6 +411,7 @@ export const api = {
   /** Puts PNG / JPEG data on the clipboard as an image. */
   copyImage: (data: Uint8Array) => invoke<void>("copy_image", data),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
+  revealLog: () => invoke<void>("reveal_log"),
 
   importPaths: (paths: string[], folderId: string | null) =>
     invoke<ImportSummary>("import_paths", { paths, folderId }),

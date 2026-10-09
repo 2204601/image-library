@@ -767,6 +767,28 @@ pub fn copy_image(request: tauri::ipc::Request<'_>) -> CmdResult<()> {
     ClipboardContext::new().map_err(err)?.set_image(img).map_err(err)
 }
 
+/// Brings the window up: minimized, hidden or behind other apps.
+pub fn show_main_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+/// Shows the log file (tauri-plugin-log, see lib.rs) in Finder / Explorer.
+#[tauri::command]
+pub fn reveal_log(app: AppHandle) -> CmdResult<()> {
+    let dir = app.path().app_log_dir().map_err(err)?;
+    let file = dir.join(format!("{}.log", crate::LOG_FILE));
+    if file.is_file() {
+        tauri_plugin_opener::reveal_item_in_dir(file).map_err(err)
+    } else {
+        std::fs::create_dir_all(&dir).map_err(err)?;
+        tauri_plugin_opener::open_path(dir, None::<&str>).map_err(err)
+    }
+}
+
 /// Shows a file the app wrote (e.g. a saved contact sheet) in Finder / Explorer.
 #[tauri::command]
 pub fn reveal_path(path: PathBuf) -> CmdResult<()> {
@@ -887,11 +909,7 @@ impl webimport::Host for TauriHost {
         let id = uuid::Uuid::new_v4().simple().to_string();
         let (tx, rx) = std::sync::mpsc::channel();
         state.pairing.lock().unwrap().insert(id.clone(), tx);
-        if let Some(w) = self.0.get_webview_window("main") {
-            let _ = w.unminimize();
-            let _ = w.show();
-            let _ = w.set_focus();
-        }
+        show_main_window(&self.0);
         let _ = self.0.emit("web-pair", Ask { id: &id, code });
         let approved = rx.recv_timeout(std::time::Duration::from_secs(120)).unwrap_or(false);
         state.pairing.lock().unwrap().remove(&id);
@@ -943,7 +961,10 @@ fn apply_web_import(app: &AppHandle) {
     if s.enabled && !s.token.is_empty() {
         match webimport::Server::start(webimport::PORT, s.token, std::sync::Arc::new(TauriHost(app.clone()))) {
             Ok(server) => web.server = Some(server),
-            Err(e) => web.error = Some(e),
+            Err(e) => {
+                log::warn!("browser extension server: {e}");
+                web.error = Some(e);
+            }
         }
     }
 }
@@ -1086,7 +1107,10 @@ fn apply_mcp(app: &AppHandle) {
     if s.enabled && !s.token.is_empty() {
         match mcp::Server::start(mcp::PORT, s.token, std::sync::Arc::new(McpHost(app.clone()))) {
             Ok(server) => srv.server = Some(server),
-            Err(e) => srv.error = Some(e),
+            Err(e) => {
+                log::warn!("MCP server: {e}");
+                srv.error = Some(e);
+            }
         }
     }
 }

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listTargets } from "../lib/actions";
 import { api, type Folder, type Item } from "../lib/api";
 import { modeNoun } from "../lib/modes";
+import { notifyIfAway } from "../lib/osNotify";
 import { useStore, type ExportRequest } from "../store";
 
 const LAST_DEST = "exportDest";
@@ -99,6 +100,7 @@ function Dialog({ req }: { req: ExportRequest }) {
       /* not essential */
     }
     setBusy(true);
+    const since = Date.now();
     try {
       const n = await api.exportItems(
         items.map((i) => i.id),
@@ -112,6 +114,7 @@ function Dialog({ req }: { req: ExportRequest }) {
         kind: "success",
         action: { label: "書き出し先を表示", onClick: () => useStore.getState().run(() => api.revealPath(dest)) },
       });
+      notifyIfAway(since, `${n} 件を書き出しました`, dest);
     } catch (e) {
       useStore.getState().toast(String(e), true);
     } finally {

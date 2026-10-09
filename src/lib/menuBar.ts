@@ -18,6 +18,7 @@ import { CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu } from "@tau
 import { copySelection, openLibraryAt } from "./actions";
 import { api, type LibraryEntry } from "./api";
 import { command, isEnabled, labelOf, runCommand, type Command } from "./commands";
+import { warn } from "./log";
 import { comboText, isMac } from "./shortcuts";
 import { GROUPS, LAYOUTS } from "../components/ViewMenu";
 import { SORTS } from "../components/Toolbar";
@@ -78,6 +79,7 @@ const APP_WIDE = new Set([
   "help.shortcuts",
   "help.webImport",
   "help.claude",
+  "help.log",
 ]);
 
 async function live(
@@ -303,6 +305,8 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
     cmd("help.shortcuts"),
     cmd("help.webImport"),
     cmd("help.claude"),
+    sep(),
+    cmd("help.log"),
     ...(isMac ? [] : [sep(), cmd("app.checkUpdate"), PredefinedMenuItem.new({ item: { About: null }, text: "バージョン情報" })]),
   ]);
 
@@ -347,7 +351,7 @@ function rebuild() {
       await old?.close().catch(() => {});
       sync();
     } catch (e) {
-      console.warn("menu bar", e);
+      warn("menu bar", e);
     }
   });
 }
