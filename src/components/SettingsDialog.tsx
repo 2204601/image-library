@@ -1,9 +1,10 @@
 // The settings screen (⌘,), see docs/SETTINGS.md: the whole app (一般), the
 // open library's own settings (このライブラリ, stored in its library.db) and
 // the browser extension (連携). Changes are saved as they are made.
-import { FileText, FolderOpen, Image as ImageIcon, Library, Puzzle, Settings, Type, X } from "lucide-react";
+import { FileText, FolderInput, FolderOpen, Image as ImageIcon, Library, Puzzle, Settings, Type, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { transferAllOfMode } from "../lib/actions";
 import { api, formatBytes, KINDS, kindLabel, type AppSettings, type ItemKind } from "../lib/api";
 import { sidebarEntriesOf } from "../lib/librarySettings";
 import { isMac } from "../lib/shortcuts";
@@ -213,6 +214,7 @@ function LibraryTab() {
   const hidden = useStore((s) => s.librarySettings.hidden);
   const setUsedModes = useStore((s) => s.setUsedModes);
   const setSidebarHidden = useStore((s) => s.setSidebarHidden);
+  const mode = useStore((s) => s.mode);
   const [size, setSize] = useState<number | null>(null);
   useEffect(() => {
     if (library) api.librarySize().then(setSize, () => setSize(null));
@@ -244,6 +246,18 @@ function LibraryTab() {
           {isMac ? "Finder で表示" : "エクスプローラで表示"}
         </button>
       </div>
+      <button
+        onClick={() => {
+          useStore.getState().openSettings(null);
+          transferAllOfMode();
+        }}
+        disabled={!(kinds[mode] ?? 0)}
+        className="mt-2 flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs enabled:hover:bg-white/5 disabled:opacity-40"
+      >
+        <FolderInput size={14} />
+        {kindLabel(mode)}をすべて別のライブラリへ移す…
+        {(kinds[mode] ?? 0) > 0 && <span className="text-dim tabular-nums">（{kinds[mode]} 件）</span>}
+      </button>
 
       <Heading
         title="使う種類"
