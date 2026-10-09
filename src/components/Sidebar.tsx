@@ -9,6 +9,7 @@ import {
   Image as ImageIcon,
   Images,
   Inbox,
+  Keyboard,
   Layers,
   Pin,
   Tag as TagIcon,
@@ -38,6 +39,7 @@ import { activeConditions, useStore, type Mode } from "../store";
 import { useMenu } from "./ContextMenu";
 import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
+import { SHORTCUT_HELP_KEY, useShortcutHelp } from "./ShortcutHelp";
 import { colorHex } from "../lib/colors";
 
 const collapsedKey = (root: string) => `collapsed:${root}`;
@@ -601,6 +603,14 @@ export function Sidebar() {
         <SmartFolderList />
         <TagList />
       </nav>
+      <button
+        onClick={() => useShortcutHelp.getState().setOpen(true)}
+        className="flex shrink-0 items-center gap-2 border-t border-line px-4 py-2 text-xs text-dim hover:bg-white/5 hover:text-fg"
+      >
+        <Keyboard size={14} />
+        ショートカット一覧
+        <span className="ml-auto tabular-nums">{SHORTCUT_HELP_KEY}</span>
+      </button>
     </aside>
   );
 }
