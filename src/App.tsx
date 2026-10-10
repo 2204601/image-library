@@ -125,7 +125,9 @@ export default function App() {
 
   // An extension asks to connect; the question closes itself if it times out.
   useEffect(() => {
-    const ask = listen<{ id: string; code: string }>("web-pair", (e) => useStore.getState().setPairRequest(e.payload));
+    const ask = listen<{ id: string; code: string; extension: string }>("web-pair", (e) =>
+      useStore.getState().setPairRequest(e.payload),
+    );
     const end = listen<string>("web-pair-end", (e) => {
       if (useStore.getState().pairRequest?.id === e.payload) useStore.getState().setPairRequest(null);
     });

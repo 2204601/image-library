@@ -192,6 +192,12 @@ export function PairDialog() {
           拡張機能の画面に出ている番号と同じなら「許可する」を押してください。許可すると、その拡張機能からこのライブラリに画像を保存できるようになります。
         </p>
         <div className="my-4 font-mono text-4xl font-semibold tracking-[0.3em] tabular-nums">{req.code}</div>
+        {/* Which one asks: chrome://extensions shows the same id under the extension. */}
+        <p className="-mt-2 mb-4 text-[11px] text-dim">
+          拡張機能の ID：<span className="font-mono select-all">{req.extension}</span>
+          <br />
+          心当たりがなければ「許可しない」を押してください（ID は chrome://extensions で確かめられます）
+        </p>
         <div className="flex justify-center gap-2">
           <button onClick={() => answer(false)} className="h-9 rounded-md border border-line px-4 hover:bg-white/5">
             許可しない

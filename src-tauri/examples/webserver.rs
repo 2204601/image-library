@@ -25,8 +25,8 @@ impl Host for Print {
         println!("imported {} / duplicates {} / failed {:?}", s.imported, s.duplicates, s.failed);
     }
     /// No one to ask here: connects every extension that asks.
-    fn approve_pairing(&self, code: &str) -> bool {
-        println!("pairing approved (code {code})");
+    fn approve_pairing(&self, code: &str, extension: &str) -> bool {
+        println!("pairing approved (code {code}, extension {extension})");
         true
     }
 }

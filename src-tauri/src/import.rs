@@ -214,8 +214,10 @@ pub fn orient(lib: &mut Library, ids: &[String], op: OrientOp) -> Result<usize, 
     }
 }
 
+/// Takes the source: data from the extension can be up to 300 MB, and a
+/// copy of it would double that.
 fn process(
-    src: &Source,
+    src: Source,
     root: &Path,
     known: &HashMap<String, String>,
     seen: &Mutex<HashSet<String>>,
@@ -225,7 +227,7 @@ fn process(
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             (name, fs::read(path).map_err(|e| e.to_string())?)
         }
-        Source::Bytes { name, data } => (name.clone(), data.clone()),
+        Source::Bytes { name, data } => (name, data),
     };
     let ext = ext_of(&name).ok_or("unsupported file type")?;
     let hash = hex::encode(Sha256::digest(&data));
@@ -385,12 +387,12 @@ pub fn run(
     let seen = Mutex::new(HashSet::new());
     on_progress(0, total);
     let outcomes: Vec<(Outcome, Vec<String>)> = sources
-        .par_iter()
+        .into_par_iter()
         .map(|src| {
-            let o = process(src, &root, &known, &seen)
-                .unwrap_or_else(|e| Outcome::Failed(format!("{}: {e}", src.label())));
+            let (label, dirs) = (src.label(), src.dirs().to_vec());
+            let o = process(src, &root, &known, &seen).unwrap_or_else(|e| Outcome::Failed(format!("{label}: {e}")));
             on_progress(done.fetch_add(1, Ordering::Relaxed) + 1, total);
-            (o, src.dirs().to_vec())
+            (o, dirs)
         })
         .collect();
 
