@@ -1,7 +1,7 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, kindLabel, kindOfExt, type Item, type ItemKind, type LibraryInfo, type OrientOp, type View } from "./api";
+import { api, EMPTY_FILTER, kindLabel, kindOfExt, type DuplicateEffect, type Item, type ItemKind, type LibraryInfo, type OrientOp, type View } from "./api";
 import { modeKinds, modeNoun } from "./modes";
 import {
   activeConditions,
@@ -298,7 +298,7 @@ export async function confirmDuplicates() {
       false,
       {
         label: "元に戻す",
-        onClick: () => st().run(() => api.restoreItems(removed)),
+        onClick: () => st().run(() => undoDuplicates(removed, effects, review.groups)),
       },
     );
   } catch (e) {
@@ -306,6 +306,24 @@ export async function confirmDuplicates() {
   }
   useStore.setState({ keepPick: new Set() });
   await st().refresh();
+}
+
+/**
+ * Undoes a tidy-up: the trashed copies come back, and the kept ones lose
+ * what they were given (tags, the higher rating, the folder).
+ */
+async function undoDuplicates(removed: string[], effects: DuplicateEffect[], groups: { keep: Item }[]) {
+  await api.restoreItems(removed);
+  const ratingBefore = new Map(groups.map((g) => [g.keep.id, g.keep.rating]));
+  const tagId = new Map(st().tags.map((t) => [t.name, t.id]));
+  for (const e of effects) {
+    for (const name of e.addedTags) {
+      const id = tagId.get(name);
+      if (id !== undefined) await api.removeTag([e.keep], id);
+    }
+    if (e.rating != null) await api.setRating([e.keep], ratingBefore.get(e.keep) ?? 0);
+    if (e.folderId) await api.removeFromFolder([e.keep], e.folderId);
+  }
 }
 
 /** Marks a group as "not duplicates" so it stops being proposed. */
@@ -792,8 +810,16 @@ export async function pasteTags(ids: string[]) {
   st().toast(`${ids.length} 件にタグ ${names.length} 件を貼り付けました`);
 }
 
-/** Undoes changes made from Claude (newest first) and says how it went. */
-export async function undoChanges(ids: number[]) {
+/**
+ * Undoes changes made from Claude (newest first) and says how it went.
+ * Change ids are numbered per library: `root` is the library they belong to,
+ * and nothing is undone once another one is open.
+ */
+export async function undoChanges(ids: number[], root: string | undefined) {
+  if (st().library?.root !== root) {
+    st().toast("別のライブラリを開いているため元に戻せません。元のライブラリで、設定の「連携」から戻せます", true);
+    return;
+  }
   let skipped = 0;
   let done = 0;
   await st().run(async () => {

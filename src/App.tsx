@@ -105,12 +105,14 @@ export default function App() {
       timer = setTimeout(() => {
         const s = useStore.getState();
         const ids = changes.map((c) => c.id);
+        // The library the changes were made in (change ids are per library).
+        const root = s.library?.root;
         s.refresh();
         s.notify({
           title: changes.length > 1 ? `Claude が ${changes.length} 件の変更をしました` : `Claude：${changes[0].summary}`,
           detail: changes.length > 1 ? changes.map((c) => c.summary).join(" / ") : undefined,
           kind: "info",
-          action: { label: "元に戻す", onClick: () => undoChanges(ids) },
+          action: { label: "元に戻す", onClick: () => undoChanges(ids, root) },
         });
         changes = [];
       }, 1500);

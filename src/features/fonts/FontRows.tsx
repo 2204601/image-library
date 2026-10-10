@@ -10,7 +10,7 @@ import { ChangePulse } from "../../components/ActionHud";
 import { fontCategoryLabel, fontCategoryOf, fontScriptLabel, type Item } from "../../lib/api";
 import { useStore } from "../../store";
 import { type FontListPreview } from "./api";
-import { fontChars, fontPreview, loadFont } from "./loader";
+import { fontChars, fontPreview, holdFont, loadFont } from "./loader";
 import { Sample } from "./Sample";
 
 /** Loads the font and its sample line for a row; `failed` when either can't be had. */
@@ -26,11 +26,13 @@ function useFontRow(id: string) {
     fontPreview(id)
       .then((p) => live && setPreview(p))
       .catch(() => live && setFailed(true));
+    const release = holdFont(id);
     loadFont(id)
       .then((f) => live && setFamily(f))
       .catch(() => live && setFailed(true));
     return () => {
       live = false;
+      release();
     };
   }, [id]);
   const style = [preview?.style, preview && preview.faces > 1 ? `ほか ${preview.faces - 1} 個` : ""]
