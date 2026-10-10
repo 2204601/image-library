@@ -2203,6 +2203,7 @@ name = "image-library"
 version = "0.16.2"
 dependencies = [
  "base64 0.22.1",
+ "brotli 7.0.0",
  "clipboard-rs",
  "core-foundation-sys",
  "flate2",

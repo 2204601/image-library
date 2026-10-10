@@ -29,10 +29,23 @@ fn be32(d: &[u8], at: usize) -> Result<u32, String> {
 pub fn to_sfnt(data: &[u8], ext: &str) -> Result<Vec<u8>, String> {
     match ext {
         "woff" => decode_woff(data),
-        "woff2" => woff2_patched::convert_woff2_to_ttf(&mut &data[..]).map_err(|e| format!("WOFF2: {e}")),
+        "woff2" => {
+            check_woff2(data)?;
+            woff2_patched::convert_woff2_to_ttf(&mut &data[..]).map_err(|e| format!("WOFF2: {e}"))
+        }
         _ => Ok(data.to_vec()),
     }
 }
+
+/// Upper bound for a font unpacked from WOFF / WOFF2. The sizes in their
+/// headers come from the file: without a limit, a small crafted file makes
+/// the app reserve gigabytes (or inflate a compression bomb) and abort. The
+/// largest real fonts (CJK collections) are around 100 MB.
+const MAX_SFNT: u64 = 256 << 20;
+/// Real fonts have a few dozen tables; `build_sfnt`'s header fields overflow
+/// past 4095.
+const MAX_TABLES: usize = 1024;
+const TOO_BIG: &str = "フォントが大きすぎます";
 
 /// WOFF 1.0: each table is zlib-compressed unless that wouldn't make it smaller.
 fn decode_woff(d: &[u8]) -> Result<Vec<u8>, String> {
@@ -41,15 +54,26 @@ fn decode_woff(d: &[u8]) -> Result<Vec<u8>, String> {
     }
     let flavor = be32(d, 4)?;
     let n = be16(d, 12)? as usize;
+    if n > MAX_TABLES {
+        return Err("WOFF が壊れています".into());
+    }
     let mut tables = Vec::with_capacity(n);
+    let mut total = 0u64;
     for i in 0..n {
         let e = 44 + i * 20;
         let tag: [u8; 4] = d.get(e..e + 4).ok_or("WOFF が壊れています")?.try_into().unwrap();
         let (off, comp, orig) = (be32(d, e + 4)? as usize, be32(d, e + 8)? as usize, be32(d, e + 12)? as usize);
-        let raw = d.get(off..off + comp).ok_or("WOFF が壊れています")?;
+        let raw = d.get(off..off.saturating_add(comp)).ok_or("WOFF が壊れています")?;
+        total += orig as u64;
+        if total > MAX_SFNT {
+            return Err(TOO_BIG.into());
+        }
         let table = if comp < orig {
             let mut out = Vec::with_capacity(orig);
-            flate2::read::ZlibDecoder::new(raw).read_to_end(&mut out).map_err(|e| format!("WOFF: {e}"))?;
+            flate2::read::ZlibDecoder::new(raw)
+                .take(orig as u64)
+                .read_to_end(&mut out)
+                .map_err(|e| format!("WOFF: {e}"))?;
             out
         } else {
             raw.to_vec()
@@ -57,6 +81,97 @@ fn decode_woff(d: &[u8]) -> Result<Vec<u8>, String> {
         tables.push((tag, table));
     }
     Ok(build_sfnt(flavor, tables))
+}
+
+/// woff2-patched reserves the sizes the WOFF2 header declares and inflates
+/// the Brotli stream without a limit, then slices it by the table lengths
+/// (a panic, so an abort, when it is shorter). Checks those sizes, and what
+/// the stream really inflates to, before handing the file over.
+fn check_woff2(d: &[u8]) -> Result<(), String> {
+    let bad = || "WOFF2 が壊れています".to_string();
+    if d.get(..4) != Some(b"wOF2") {
+        return Err("WOFF2 ではありません".into());
+    }
+    if be32(d, 16)? as u64 > MAX_SFNT {
+        return Err(TOO_BIG.into());
+    }
+    let n = be16(d, 12)? as usize;
+    if n > MAX_TABLES {
+        return Err(bad());
+    }
+    // Table directory (https://www.w3.org/TR/WOFF2/#table_dir_format).
+    let mut at = 48;
+    let mut total = 0u64;
+    for _ in 0..n {
+        let flags = *d.get(at).ok_or_else(bad)?;
+        at += 1;
+        let tag = flags & 0x3f;
+        if tag == 63 {
+            at += 4;
+        }
+        let orig = base128(d, &mut at).ok_or_else(bad)?;
+        // glyf (10) and loca (11) are transformed at version 0, the others at any other.
+        let version = flags >> 6;
+        let transformed = if matches!(tag, 10 | 11) { version == 0 } else { version != 0 };
+        total += if transformed { base128(d, &mut at).ok_or_else(bad)? } else { orig } as u64;
+    }
+    if total > MAX_SFNT {
+        return Err(TOO_BIG.into());
+    }
+    // Collection directory.
+    if be32(d, 4)? == u32::from_be_bytes(*b"ttcf") {
+        at += 4;
+        for _ in 0..u255(d, &mut at).ok_or_else(bad)? {
+            let tables = u255(d, &mut at).ok_or_else(bad)?;
+            at += 4;
+            for _ in 0..tables {
+                u255(d, &mut at).ok_or_else(bad)?;
+            }
+        }
+    }
+    let stream = d.get(at..).ok_or_else(bad)?;
+    let inflated = std::io::copy(&mut brotli::Decompressor::new(stream, 4096).take(total + 1), &mut std::io::sink())
+        .map_err(|e| format!("WOFF2: {e}"))?;
+    if inflated != total {
+        return Err(bad());
+    }
+    Ok(())
+}
+
+/// WOFF2's UIntBase128: up to 5 bytes, 7 bits each, no leading zeros.
+fn base128(d: &[u8], at: &mut usize) -> Option<u32> {
+    let mut v = 0u32;
+    for i in 0..5 {
+        let b = *d.get(*at)?;
+        *at += 1;
+        if (i == 0 && b == 0x80) || v & 0xfe00_0000 != 0 {
+            return None;
+        }
+        v = (v << 7) | (b & 0x7f) as u32;
+        if b & 0x80 == 0 {
+            return Some(v);
+        }
+    }
+    None
+}
+
+/// WOFF2's 255UInt16.
+fn u255(d: &[u8], at: &mut usize) -> Option<u16> {
+    let b = *d.get(*at)?;
+    *at += 1;
+    Some(match b {
+        253 => {
+            let v = u16::from_be_bytes([*d.get(*at)?, *d.get(*at + 1)?]);
+            *at += 2;
+            v
+        }
+        254 | 255 => {
+            let v = *d.get(*at)? as u16;
+            *at += 1;
+            v + if b == 255 { 253 } else { 506 }
+        }
+        b => b as u16,
+    })
 }
 
 fn checksum(data: &[u8]) -> u32 {
@@ -710,5 +825,91 @@ pub mod tests {
         assert!(to_sfnt(b"nope", "woff2").is_err());
         assert!(render_thumb(b"not a font at all").is_err());
         assert!(extract_face(b"ttcf\0\0\0\0\0\0\0\x05", 0).is_err());
+    }
+
+    fn zlib(data: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        z.write_all(data).unwrap();
+        z.finish().unwrap()
+    }
+
+    /// A WOFF with one table whose header claims `orig` bytes.
+    fn woff_claiming(orig: u32, compressed: &[u8]) -> Vec<u8> {
+        let mut d = vec![0u8; 64];
+        d[..4].copy_from_slice(b"wOFF");
+        d[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        d[12..14].copy_from_slice(&1u16.to_be_bytes());
+        d[44..48].copy_from_slice(b"cmap");
+        d[48..52].copy_from_slice(&64u32.to_be_bytes());
+        d[52..56].copy_from_slice(&(compressed.len() as u32).to_be_bytes());
+        d[56..60].copy_from_slice(&orig.to_be_bytes());
+        d.extend(compressed);
+        d
+    }
+
+    #[test]
+    fn woff_sizes_are_limited() {
+        // A 4 GB claim is refused before anything is reserved.
+        let err = to_sfnt(&woff_claiming(u32::MAX, &zlib(b"")), "woff").unwrap_err();
+        assert_eq!(err, TOO_BIG);
+        // A table inflating past its claim (a bomb) stops at the claim.
+        let sfnt = to_sfnt(&woff_claiming(1 << 20, &zlib(&vec![0u8; 64 << 20])), "woff").unwrap();
+        assert!(sfnt.len() <= (1 << 20) + 64, "{}", sfnt.len());
+    }
+
+    /// A WOFF2 with one untransformed table of `declared` bytes, followed by
+    /// `content` compressed with Brotli.
+    fn woff2_declaring(declared: u32, content: &[u8]) -> Vec<u8> {
+        let mut d = vec![0u8; 48];
+        d[..4].copy_from_slice(b"wOF2");
+        d[4..8].copy_from_slice(&0x0001_0000u32.to_be_bytes());
+        d[12..14].copy_from_slice(&1u16.to_be_bytes());
+        d[16..20].copy_from_slice(&(declared + 28).to_be_bytes());
+        d.push(0); // cmap, version 0: not transformed
+        let mut v = declared;
+        let mut bytes = vec![(v & 0x7f) as u8];
+        v >>= 7;
+        while v > 0 {
+            bytes.push((v & 0x7f) as u8 | 0x80);
+            v >>= 7;
+        }
+        d.extend(bytes.iter().rev());
+        let mut compressed = Vec::new();
+        {
+            use std::io::Write;
+            let mut w = brotli::CompressorWriter::new(&mut compressed, 4096, 11, 22);
+            w.write_all(content).unwrap();
+        }
+        d.extend(compressed);
+        d
+    }
+
+    #[test]
+    fn woff2_sizes_are_checked() {
+        assert!(check_woff2(&woff2_declaring(16, &[7; 16])).is_ok());
+        // Inflating past the declared size (a bomb) or short of it (the
+        // unpacker would slice past its end).
+        assert!(check_woff2(&woff2_declaring(16, &vec![0; 8 << 20])).is_err());
+        assert!(check_woff2(&woff2_declaring(16, &[7; 8])).is_err());
+        assert_eq!(check_woff2(&woff2_declaring(0x0fff_ffff, b"")).unwrap_err(), TOO_BIG);
+    }
+
+    #[test]
+    fn woff2_numbers() {
+        let mut at = 0;
+        assert_eq!(base128(&[0x3f], &mut at), Some(63));
+        at = 0;
+        assert_eq!(base128(&[0x81, 0x00], &mut at), Some(128));
+        assert_eq!(at, 2);
+        at = 0;
+        assert_eq!(base128(&[0x80, 0x01], &mut at), None, "leading zero");
+        at = 0;
+        assert_eq!(base128(&[0xff; 6], &mut at), None, "overflow");
+        for (bytes, v) in [(&[17][..], 17), (&[253, 1, 2][..], 258), (&[255, 0][..], 253), (&[254, 3][..], 509)] {
+            at = 0;
+            assert_eq!(u255(bytes, &mut at), Some(v));
+            assert_eq!(at, bytes.len());
+        }
     }
 }

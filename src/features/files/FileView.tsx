@@ -9,31 +9,35 @@ import { filesApi, previewSrc, type FilePreview } from "./api";
  * The viewer's body for files. PDF opens in the web view's own PDF viewer;
  * other documents show their full preview (src-tauri/src/files/preview.rs:
  * Quick Look on macOS, a PDF made by Office on Windows) once it is ready,
- * else their thumbnail. Editing is left to the default app.
+ * else their thumbnail. Editing is left to the default app. A PDF, too,
+ * comes from `file_preview`, which checks that it really is one.
  */
 export function FileView({ item }: { item: Item }) {
   const pdf = item.ext.toLowerCase() === "pdf";
+  // Kept with its item, so the previous item's PDF never shows for this one.
+  const [got, setGot] = useState<{ id: string; preview: FilePreview | null }>();
   // undefined = being made.
-  const [preview, setPreview] = useState<FilePreview | null | undefined>(undefined);
+  const preview = got?.id === item.id ? got.preview : undefined;
 
   useEffect(() => {
-    if (pdf) return;
     let live = true;
-    setPreview(undefined);
-    filesApi.preview(item.id).then(
-      (p) => live && setPreview(p),
-      () => live && setPreview(null),
+    const id = item.id;
+    filesApi.preview(id).then(
+      (p) => live && setGot({ id, preview: p }),
+      () => live && setGot({ id, preview: null }),
     );
     return () => {
       live = false;
     };
-  }, [item.id, pdf]);
+  }, [item.id]);
 
-  if (pdf || preview?.kind === "pdf") {
+  // The check is instant: no thumbnail flashing up before the PDF.
+  if (pdf && preview === undefined) return null;
+  if (preview?.kind === "pdf") {
     return (
       <iframe
         key={item.id}
-        src={pdf ? convertFileSrc(item.filePath) : previewSrc(preview!)}
+        src={previewSrc(preview)}
         title={item.name}
         className="absolute inset-0 h-full w-full border-0 bg-white"
       />
@@ -62,7 +66,7 @@ export function FileView({ item }: { item: Item }) {
         className="min-h-0 max-w-full animate-zoom-in rounded-md object-contain shadow-2xl"
       />
       <div className="flex shrink-0 items-center gap-4">
-        {preview === undefined && (
+        {preview === undefined && !pdf && (
           <span className="flex items-center gap-2 text-sm text-white/60">
             <Loader2 size={15} className="animate-spin" />
             プレビューを作成中…

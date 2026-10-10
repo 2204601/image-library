@@ -310,7 +310,7 @@ export function FlagButtons({ ids, items }: { ids: string[]; items: Item[] }) {
           label={fav ? "お気に入り" : "お気に入りに追加"}
           hint="お気に入り（キー F）"
           activeClass="border-pink-500/60 bg-pink-500/15 text-pink-400"
-          onClick={() => toggleFavorite(ids)}
+          onClick={() => toggleFavorite(ids, { quiet: true })}
         />
         <FlagButton
           state={pin}
@@ -318,7 +318,7 @@ export function FlagButtons({ ids, items }: { ids: string[]; items: Item[] }) {
           label={pin ? "ピン留め中" : "ピン留め"}
           hint="一覧の先頭に固定（キー P）"
           activeClass="border-accent/60 bg-accent/15 text-accent"
-          onClick={() => togglePinned(ids)}
+          onClick={() => togglePinned(ids, { quiet: true })}
         />
       </div>
       <div className="flex">
@@ -468,7 +468,7 @@ export function Inspector() {
 
       {!isTrash && (
         <Field label="評価">
-          <RatingStars value={rating} onChange={(n) => setRating(ids, n)} />
+          <RatingStars value={rating} onChange={(n) => setRating(ids, n, { quiet: true })} />
           <div className="mt-2.5">
             <FlagButtons ids={ids} items={items} />
           </div>

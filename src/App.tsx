@@ -11,6 +11,7 @@ import { Grid } from "./components/Grid";
 import { Inspector } from "./components/Inspector";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
+import { ActionHud } from "./components/ActionHud";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
 import { SheetDialog } from "./components/SheetDialog";
@@ -232,6 +233,7 @@ export default function App() {
       <DragLayer />
       <ContextMenu />
       <Toasts />
+      <ActionHud />
     </div>
   );
 }

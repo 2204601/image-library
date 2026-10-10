@@ -38,6 +38,8 @@ resvg = "0.48"
 # Fonts: metadata / character map (already used by resvg), WOFF / WOFF2 unpacking.
 skrifa = "0.44"
 woff2-patched = "0.4"
+# Checking a WOFF2 file's sizes before woff2-patched unpacks it (fonts/mod.rs).
+brotli = { version = "7", default-features = false, features = ["std"] }
 flate2 = "1"
 tempfile = "3.27.0"
 tauri-plugin-updater = "2"

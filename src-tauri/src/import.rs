@@ -329,6 +329,9 @@ fn process_font(name: String, ext: String, data: Vec<u8>, hash: String, root: &P
 /// Files (PDF, office documents): stored as is, with a thumbnail from the OS
 /// or the file itself (files/mod.rs). Like fonts, 0 × 0 and no look-alikes.
 fn process_file(name: String, ext: String, data: Vec<u8>, hash: String, root: &Path) -> Result<Outcome, String> {
+    if ext == "pdf" && !files::looks_like_pdf(&data) {
+        return Err("PDF ではありません".into());
+    }
     let id = uuid::Uuid::new_v4().simple().to_string();
     let file_name = sanitize(&name);
     let item_dir = root.join("images").join(&id);
@@ -796,6 +799,18 @@ mod tests {
         let c = get(l);
         l.delete_items(&ids).unwrap();
         assert!(!l.thumb_path(&c).exists() && !l.thumb_path(&z).exists());
+    }
+
+    #[test]
+    fn a_pdf_must_be_one() {
+        let (_tmp, lib) = setup();
+        let sources = vec![
+            Source::Bytes { name: "real.pdf".into(), data: crate::files::tests::sample_pdf() },
+            Source::Bytes { name: "page.pdf".into(), data: b"<html><script>fetch('x')</script></html>".to_vec() },
+        ];
+        let sum = run(&lib, sources, None, |_, _| {}).unwrap();
+        assert_eq!(sum.imported, 1);
+        assert_eq!(sum.failed.len(), 1, "{:?}", sum.failed);
     }
 
     #[test]

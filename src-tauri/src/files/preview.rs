@@ -27,10 +27,12 @@ pub enum Preview {
 /// the viewer and the Windows thumbnail pass may ask for the same one.
 static MAKING: Mutex<()> = Mutex::new(());
 
-/// The kept preview of item `id`, if one was made.
+/// The kept preview of item `id`, if one was made. A PDF only when it is
+/// one (`super::is_pdf`): Quick Look may hand over a preview stored inside
+/// the document.
 pub fn stored(previews: &Path, id: &str) -> Option<Preview> {
     let pdf = previews.join(format!("{id}.pdf"));
-    if pdf.is_file() {
+    if super::is_pdf(&pdf) {
         return Some(Preview::Pdf { path: pdf });
     }
     let dir = previews.join(format!("{id}.qlpreview"));
@@ -38,7 +40,7 @@ pub fn stored(previews: &Path, id: &str) -> Option<Preview> {
         return Some(Preview::Html { dir, file: "Preview.html".into() });
     }
     let pdf = dir.join("Preview.pdf");
-    pdf.is_file().then_some(Preview::Pdf { path: pdf })
+    super::is_pdf(&pdf).then_some(Preview::Pdf { path: pdf })
 }
 
 /// The preview of item `id` (stored at `path`), made now if there is none
@@ -128,7 +130,7 @@ mod tests {
         fs::write(p.join("a.qlpreview/Preview.html"), "<p>x</p>").unwrap();
         assert_eq!(stored(p, "a"), Some(Preview::Html { dir: p.join("a.qlpreview"), file: "Preview.html".into() }));
         // A PDF (made on Windows) is preferred.
-        fs::write(p.join("a.pdf"), b"%PDF").unwrap();
+        fs::write(p.join("a.pdf"), b"%PDF-1.4").unwrap();
         assert_eq!(stored(p, "a"), Some(Preview::Pdf { path: p.join("a.pdf") }));
 
         remove(p, "a");
@@ -141,7 +143,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let p = dir.path();
         fs::create_dir(p.join("b.qlpreview")).unwrap();
-        fs::write(p.join("b.qlpreview/Preview.pdf"), b"%PDF").unwrap();
+        fs::write(p.join("b.qlpreview/Preview.pdf"), b"%PDF-1.4").unwrap();
         assert_eq!(stored(p, "b"), Some(Preview::Pdf { path: p.join("b.qlpreview/Preview.pdf") }));
     }
 

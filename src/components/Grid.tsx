@@ -32,6 +32,7 @@ import {
   type Placement,
 } from "../lib/layouts";
 import { activeConditions, currentFolderId, useStore, type Mode, type ShowInfo } from "../store";
+import { ChangePulse } from "./ActionHud";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
 
@@ -118,7 +119,7 @@ function FlagOverlay({ item }: { item: Item }) {
       <button
         onPointerDown={(e) => e.stopPropagation()}
         onDoubleClick={(e) => e.stopPropagation()}
-        onClick={() => toggleFavorite([item.id])}
+        onClick={() => toggleFavorite([item.id], { quiet: true })}
         title={item.favorite ? "お気に入りから外す（F）" : "お気に入りに追加（F）"}
         className={`absolute top-1.5 right-1.5 rounded-full p-1 transition-colors ${
           item.favorite
@@ -244,6 +245,7 @@ const Cell = memo(function Cell({
         <Thumb item={item} fit={fit} />
         {similar && <SimilarOverlay item={item} mark={similar} />}
         {flags && <FlagOverlay item={item} />}
+        <ChangePulse id={item.id} />
         <SelectMark item={item} index={index} selected={selected} />
       </div>
       {insert && (
@@ -315,6 +317,7 @@ const ListRow = memo(function ListRow({
       data-drop={reorderable ? `item:${item.id}` : undefined}
       data-axis="y"
     >
+      <ChangePulse id={item.id} className="rounded-md" />
       {item.kind === "font" ? (
         <FontListCells item={item} />
       ) : (

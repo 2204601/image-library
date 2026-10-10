@@ -123,10 +123,19 @@ fn decode_svg(bytes: &[u8]) -> Result<Decoded, String> {
     rasterize_svg(bytes, SVG_RASTER_MAX)
 }
 
+/// SVGs come from anywhere (the browser extension included), so an
+/// `<image href>` may only embed a `data:` URL. usvg's default reads any
+/// path it is given: a local picture would end up in the thumbnail, and a
+/// UNC path (`\\host\share`) would make Windows authenticate to that host.
+pub fn svg_options() -> resvg::usvg::Options<'static> {
+    let mut opt = resvg::usvg::Options::default();
+    opt.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    opt
+}
+
 /// Renders an SVG with its longer side at `max_side` px.
 pub fn rasterize_svg(bytes: &[u8], max_side: f32) -> Result<Decoded, String> {
-    let tree = resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default())
-        .map_err(|e| format!("SVG: {e}"))?;
+    let tree = resvg::usvg::Tree::from_data(bytes, &svg_options()).map_err(|e| format!("SVG: {e}"))?;
     let size = tree.size();
     let (w, h) = (size.width().max(1.0), size.height().max(1.0));
     let scale = max_side / w.max(h);
@@ -210,6 +219,11 @@ mod wic {
             )?;
             let (mut w, mut h) = (0u32, 0u32);
             converter.GetSize(&mut w, &mut h)?;
+            // The size is the file's claim: keep to the image crate's default
+            // allocation limit (512 MB) rather than abort on a crafted header.
+            if w as u64 * h as u64 * 4 > 512 << 20 {
+                return Err(windows::core::Error::new(windows::Win32::Foundation::E_OUTOFMEMORY, "画像が大きすぎます"));
+            }
             let mut buf = vec![0u8; (w as usize) * (h as usize) * 4];
             converter.CopyPixels(std::ptr::null(), w * 4, &mut buf)?;
             RgbaImage::from_raw(w, h, buf)
@@ -232,6 +246,26 @@ mod tests {
         assert_eq!((d.image.width(), d.image.height()), (1024, 512));
         assert_eq!(d.image.to_rgba8().get_pixel(10, 10).0, [255, 0, 0, 255]);
         assert!(decode(b"not svg", "svg").is_err());
+    }
+
+    #[test]
+    fn svg_images_embed_only_data_urls() {
+        use base64::Engine;
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("local.png");
+        image::RgbImage::from_pixel(4, 4, image::Rgb([0, 0, 255])).save(&png).unwrap();
+        let mut bytes = Cursor::new(Vec::new());
+        image::RgbImage::from_pixel(4, 4, image::Rgb([0, 255, 0])).write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes.get_ref());
+        let svg = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10">
+            <image href="{}" x="0" width="10" height="10"/>
+            <image href="data:image/png;base64,{data}" x="10" width="10" height="10"/></svg>"#,
+            png.display()
+        );
+        let img = decode(svg.as_bytes(), "svg").unwrap().image.to_rgba8();
+        assert_eq!(img.get_pixel(200, 256).0[3], 0, "the local file isn't read");
+        assert_eq!(img.get_pixel(800, 256).0, [0, 255, 0, 255]);
     }
 
     #[test]
