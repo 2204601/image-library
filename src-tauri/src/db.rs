@@ -1063,10 +1063,13 @@ pub fn set_thumb(conn: &Connection, id: &str, thumb: &str) -> DbResult<()> {
 }
 
 /// Files of these types not in the trash: (id, ext, file name, thumbnail), newest first.
+/// Live files of these types that the user brought in themselves: not ones
+/// saved from the web (`source_url`), which the background thumbnail pass
+/// shouldn't hand to Office unasked (files/thumbs.rs).
 pub fn files_of_types(conn: &Connection, exts: &[&str]) -> DbResult<Vec<(String, String, String, String)>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT id, ext, file_name, thumb FROM items
-         WHERE kind = 'file' AND deleted_at IS NULL AND ext IN ({})
+         WHERE kind = 'file' AND deleted_at IS NULL AND source_url IS NULL AND ext IN ({})
          ORDER BY imported_at DESC",
         placeholders(exts.len())
     ))?;
@@ -2295,6 +2298,19 @@ mod tests {
         let items = query_items(&conn, &query).unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].rating, 0);
+    }
+
+    #[test]
+    fn files_saved_from_the_web_are_not_handed_to_office() {
+        let conn = mem();
+        conn.execute_batch(
+            "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, kind, source_url)
+             VALUES ('own', 'a.docx', 'a.docx', 'docx', 0, 0, 1, 'h1', 't.jpg', 1, 'file', NULL),
+                    ('web', 'b.docx', 'b.docx', 'docx', 0, 0, 1, 'h2', 't.jpg', 2, 'file', 'https://example.com/')",
+        )
+        .unwrap();
+        let ids: Vec<String> = files_of_types(&conn, &["docx"]).unwrap().into_iter().map(|f| f.0).collect();
+        assert_eq!(ids, ["own"]);
     }
 
     #[test]

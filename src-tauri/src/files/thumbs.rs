@@ -7,6 +7,10 @@
 //!
 //! Started when a library opens and after imports (`prepare_file_thumbs`);
 //! one pass at a time, documents that failed aren't tried again this session.
+//! Documents saved from the web are left out: Office opens files through
+//! automation without Protected View, and these come from anywhere. They
+//! keep the picture inside the file or the type card; opening one in the
+//! viewer still makes its preview, as the user asked for it then.
 //! A thumbnail made from the PDF is named `<id>_p.*`, which marks the
 //! document as done (its PDF may also have been made earlier by the viewer).
 
