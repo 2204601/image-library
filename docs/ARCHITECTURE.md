@@ -65,6 +65,17 @@
 features 側が core の部品（`Row` / `Section`、`CellProps` / `showItemMenu`）を使うので import が循環する。
 いずれも描画時にしか参照しないので問題ないが、core 側の部品を独立したファイルに出せばほどける。
 
+## 外から来るファイルとセキュリティ
+
+取り込むファイルはどこから来たか分からない（ブラウザ拡張で Web から保存したものも入る）ものとして扱う。
+
+- 大きさはファイルに書かれた値をそのまま信じず、上限を設けて読む（WOFF / WOFF2・zip の中のプレビュー・WIC のデコード）。
+  リリースビルドは `panic = "abort"` なので、確保の失敗やパニックはアプリごと落ちる
+- SVG の `<image href>` は `data:` URL だけを読む（`formats::svg_options`）。PDF は中身を確かめてから iframe に出す（`files::is_pdf`）
+- Windows のバックグラウンドの Office 変換は、Web から保存したもの（`source_url` あり）を対象にしない
+- Web ビューの CSP は `tauri.conf.json` の `security.csp`。外のリソースを読み込む機能を足すときは、ここにも足す
+  （開発時は `devCsp`）
+
 ## 今後
 
 - 画像だけの機能（重複の候補・回転）も `features/images/` に寄せる
