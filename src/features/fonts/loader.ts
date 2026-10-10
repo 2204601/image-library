@@ -4,8 +4,15 @@
 // (often large, Japanese) fonts doesn't pile them all up in memory.
 import { fontApi, type FontListPreview } from "./api";
 
-/** Fonts kept loaded at once (a screenful of rows, with room to scroll back). */
+/**
+ * Fonts kept loaded once off screen (room to scroll back). Rows on screen
+ * hold theirs (`holdFont`) on top of this: a tall window or small samples
+ * show more rows than this, and a row whose font was dropped would quietly
+ * draw its sample in the system font.
+ */
 const MAX_LOADED = 40;
+/** Item id -> rows showing it now. */
+const held = new Map<string, number>();
 
 /** Item id -> the CSS family name it is loaded under. Map order = least recently used first. */
 const loaded = new Map<string, Promise<string>>();
@@ -35,14 +42,31 @@ export function loadFont(id: string): Promise<string> {
     });
   p.catch(() => loaded.get(id) === p && loaded.delete(id));
   loaded.set(id, p);
-  while (loaded.size > MAX_LOADED) {
-    const oldest = loaded.keys().next().value!;
-    loaded.delete(oldest);
-    const f = faces.get(oldest);
-    if (f) document.fonts.delete(f);
-    faces.delete(oldest);
-  }
+  trim();
   return p;
+}
+
+/** Drops the least recently used fonts no row shows, down to MAX_LOADED. */
+function trim() {
+  for (const id of [...loaded.keys()]) {
+    if (loaded.size <= MAX_LOADED) return;
+    if (held.has(id)) continue;
+    loaded.delete(id);
+    const f = faces.get(id);
+    if (f) document.fonts.delete(f);
+    faces.delete(id);
+  }
+}
+
+/** A row shows item `id`'s font until the returned function is called. */
+export function holdFont(id: string): () => void {
+  held.set(id, (held.get(id) ?? 0) + 1);
+  return () => {
+    const n = (held.get(id) ?? 1) - 1;
+    if (n > 0) held.set(id, n);
+    else held.delete(id);
+    trim();
+  };
 }
 
 /** Sample line and style of item `id` (kept: they are small). */

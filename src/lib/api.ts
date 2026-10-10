@@ -308,6 +308,8 @@ export interface DuplicateEffect {
   addedTags: string[];
   /** The kept copy's new rating, if it goes up. */
   rating: number | null;
+  /** Its rating before (for undoing). */
+  ratingBefore: number;
   /** Folder the kept copy moves into (only if it had none). */
   folderId: string | null;
 }

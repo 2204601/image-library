@@ -146,7 +146,7 @@ export function ClaudeSettings() {
                     <span className="text-xs text-dim">戻し済み</span>
                   ) : (
                     <button
-                      onClick={() => undoChanges([c.id])}
+                      onClick={() => undoChanges([c.id], useStore.getState().library?.root)}
                       className="flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-xs text-dim hover:bg-white/5 hover:text-fg"
                     >
                       <Undo2 size={12} /> 元に戻す

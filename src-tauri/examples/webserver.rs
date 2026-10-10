@@ -3,11 +3,15 @@
 //! extension folder so the extension loaded from there connects; any other
 //! copy that asks to connect ("アプリと接続") is let in without asking.
 //!   cargo run --example webserver -- <path/to/X.library> [extension dir] [port]
-//! (another port leaves a running app alone; the extension then needs the
-//! config.json written here, which names the port)
+//! It listens on DEV_PORT by default, not the app's: with every pairing let
+//! in, it must not stand in for a running app (or answer while the app is
+//! closed). The extension finds the port in the config.json written here.
 use image_library_lib::import::ImportSummary;
 use image_library_lib::library::Library;
 use image_library_lib::webimport::{Host, Server, PORT};
+
+/// Next to the app's ports (PORT for the extension, PORT + 1 for Claude).
+const DEV_PORT: u16 = PORT + 10;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -21,8 +25,8 @@ impl Host for Print {
         println!("imported {} / duplicates {} / failed {:?}", s.imported, s.duplicates, s.failed);
     }
     /// No one to ask here: connects every extension that asks.
-    fn approve_pairing(&self, code: &str) -> bool {
-        println!("pairing approved (code {code})");
+    fn approve_pairing(&self, code: &str, extension: &str) -> bool {
+        println!("pairing approved (code {code}, extension {extension})");
         true
     }
 }
@@ -31,8 +35,8 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let root = PathBuf::from(args.next().expect("usage: webserver <library> [extension dir] [port]"));
     let ext = args.next().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("../extension"));
-    let port: u16 = args.next().map(|p| p.parse().expect("port")).unwrap_or(PORT);
-    let token = format!("dev-{}", std::process::id());
+    let port: u16 = args.next().map(|p| p.parse().expect("port")).unwrap_or(DEV_PORT);
+    let token = uuid::Uuid::new_v4().simple().to_string();
     let config = format!("{{ \"port\": {port}, \"token\": \"{token}\" }}\n");
     std::fs::write(ext.join("config.json"), config).expect("write config.json");
 

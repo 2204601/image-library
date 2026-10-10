@@ -29,8 +29,10 @@ use crate::loopback::{self, Listener};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::io::Read;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 pub const PORT: u16 = 41620;
 const MAX_BODY: u64 = 300 * 1024 * 1024;
@@ -40,9 +42,9 @@ pub trait Host: Send + Sync + 'static {
     fn library(&self) -> &Mutex<Option<Library>>;
     /// Called after every import that went through, to refresh the UI.
     fn imported(&self, summary: &ImportSummary);
-    /// Asks the user whether to connect an extension showing `code`. Blocks
-    /// until they answer (false if they don't in time).
-    fn approve_pairing(&self, code: &str) -> bool;
+    /// Asks the user whether to connect the extension `extension` (its id)
+    /// showing `code`. Blocks until they answer (false if they don't in time).
+    fn approve_pairing(&self, code: &str, extension: &str) -> bool;
 }
 
 /// What the request threads share.
@@ -50,7 +52,16 @@ struct Shared {
     token: String,
     /// A pairing question is open in the app (one at a time).
     pairing: AtomicBool,
+    /// Extension id -> when it may ask again after being refused: asking
+    /// brings the app to the front, so it mustn't be repeated at will.
+    refused: Mutex<HashMap<String, Instant>>,
+    /// One import body read at a time: each can be 300 MB, and imports run
+    /// one after another anyway (import.rs `RUN_LOCK`).
+    importing: Mutex<()>,
 }
+
+/// How long a refused extension waits before it may ask again.
+const REFUSED_WAIT: Duration = Duration::from_secs(30);
 
 pub struct Server {
     listener: Listener,
@@ -59,7 +70,12 @@ pub struct Server {
 impl Server {
     /// Starts listening on `127.0.0.1:port` (0 = any free port, for tests).
     pub fn start(port: u16, token: String, host: Arc<dyn Host>) -> Result<Self, String> {
-        let shared = Arc::new(Shared { token, pairing: AtomicBool::new(false) });
+        let shared = Arc::new(Shared {
+            token,
+            pairing: AtomicBool::new(false),
+            refused: Mutex::new(HashMap::new()),
+            importing: Mutex::new(()),
+        });
         let listener = Listener::start(port, move |req, port| serve(req, port, &shared, &*host))?;
         Ok(Self { listener })
     }
@@ -118,18 +134,26 @@ fn handle(head: &Head, body: &mut dyn Read, port: u16, shared: &Shared, host: &d
             return error(405, "このメソッドは使えません");
         }
         // Only an extension may ask (a page or another program sends no extension Origin).
-        if !head.origin.as_ref().is_some_and(|o| o.starts_with("chrome-extension://")) {
+        let Some(extension) = head.origin.as_deref().and_then(|o| o.strip_prefix("chrome-extension://")) else {
             return error(403, "ブラウザ拡張以外からの接続は受け付けません");
-        }
+        };
         let code = params.iter().find(|(k, _)| k == "code").map(|(_, v)| v.as_str()).unwrap_or("");
         if code.len() != 4 || !code.bytes().all(|b| b.is_ascii_digit()) {
             return error(400, "確認用の番号がありません");
         }
+        if shared.refused.lock().unwrap().get(extension).is_some_and(|until| Instant::now() < *until) {
+            return error(429, "アプリで接続が許可されませんでした。しばらく待ってから、もう一度試してください");
+        }
         if shared.pairing.swap(true, Ordering::SeqCst) {
             return error(409, "アプリで別の接続を確認中です。そちらに答えてから、もう一度試してください");
         }
-        let approved = host.approve_pairing(code);
+        let approved = host.approve_pairing(code, extension);
         shared.pairing.store(false, Ordering::SeqCst);
+        if !approved {
+            let mut refused = shared.refused.lock().unwrap();
+            refused.retain(|_, until| Instant::now() < *until);
+            refused.insert(extension.to_string(), Instant::now() + REFUSED_WAIT);
+        }
         return if approved {
             (200, json!({ "token": token }))
         } else {
@@ -184,6 +208,7 @@ fn handle(head: &Head, body: &mut dyn Read, port: u16, shared: &Shared, host: &d
             if head.length.is_some_and(|n| n > MAX_BODY) {
                 return error(413, "ファイルが大きすぎます");
             }
+            let _one = shared.importing.lock().unwrap_or_else(|e| e.into_inner());
             let mut data = Vec::new();
             if let Err(e) = body.take(MAX_BODY + 1).read_to_end(&mut data) {
                 return error(400, &e.to_string());
@@ -289,7 +314,7 @@ mod tests {
         fn imported(&self, _: &ImportSummary) {
             self.imports.fetch_add(1, Ordering::Relaxed);
         }
-        fn approve_pairing(&self, code: &str) -> bool {
+        fn approve_pairing(&self, code: &str, _extension: &str) -> bool {
             self.asked.lock().unwrap().push(code.to_string());
             std::thread::sleep(std::time::Duration::from_millis(200)); // the user thinking
             code != "0000"
@@ -438,9 +463,10 @@ mod tests {
         let auth = format!("Bearer {}", res["token"].as_str().unwrap());
         assert_eq!(call(p, "GET", "/info", &[ext[0], ("Authorization", &auth)], b"").0, 200);
 
-        // Refused in the app.
+        // Refused in the app; asking again right away doesn't bother the user.
         let (status, res) = call(p, "POST", "/pair?code=0000", &ext, b"");
         assert_eq!((status, res.get("token")), (403, None));
+        assert_eq!(call(p, "POST", "/pair?code=4821", &ext, b"").0, 429);
         // Only extensions may ask, with a 4-digit code, by POST; nobody is bothered otherwise.
         assert_eq!(call(p, "POST", "/pair?code=1234", &[ext[0]], b"").0, 403, "no Origin (another program)");
         assert_eq!(call(p, "POST", "/pair?code=1234", &[ext[0], ("Origin", "https://evil.example")], b"").0, 403);
@@ -454,7 +480,8 @@ mod tests {
             let h = format!("127.0.0.1:{p}");
             call(p, "POST", "/pair?code=2222", &[("Host", &h), ("Origin", "chrome-extension://x")], b"").0
         });
-        assert_eq!(call(p, "POST", "/pair?code=1111", &ext, b"").0, 200);
+        let other = [ext[0], ("Origin", "chrome-extension://qrstuvwxyzabcdef")];
+        assert_eq!(call(p, "POST", "/pair?code=1111", &other, b"").0, 200);
         assert_eq!(second.join().unwrap(), 409);
     }
 

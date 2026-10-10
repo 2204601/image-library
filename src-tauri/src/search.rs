@@ -69,7 +69,14 @@ fn tokenize(input: &str) -> Vec<Tok> {
 struct Parser {
     toks: Vec<Tok>,
     pos: usize,
+    /// Parentheses open around the current position.
+    depth: usize,
 }
+
+/// Parentheses nested deeper than this are ignored like stray ones. Parsing,
+/// rendering and dropping the tree all recurse, and thousands of "(" (typed,
+/// in a smart folder or from Claude) would overflow the stack and abort.
+const MAX_DEPTH: usize = 32;
 
 impl Parser {
     fn peek(&self) -> Option<&Tok> {
@@ -106,11 +113,14 @@ impl Parser {
     }
 
     fn unary(&mut self) -> Option<Expr> {
-        if self.peek() == Some(&Tok::Minus) {
+        // A run of "-" folds (`--a` is `a`) instead of nesting once per sign.
+        let mut negate = false;
+        while self.peek() == Some(&Tok::Minus) {
             self.pos += 1;
-            return self.unary().map(|e| Expr::Not(Box::new(e)));
+            negate = !negate;
         }
-        self.primary()
+        let e = self.primary()?;
+        Some(if negate { Expr::Not(Box::new(e)) } else { e })
     }
 
     fn primary(&mut self) -> Option<Expr> {
@@ -119,9 +129,15 @@ impl Parser {
                 self.pos += 1;
                 Some(Expr::Term(w))
             }
+            Tok::LParen if self.depth >= MAX_DEPTH => {
+                self.pos += 1;
+                None
+            }
             Tok::LParen => {
                 self.pos += 1;
+                self.depth += 1;
                 let e = self.or();
+                self.depth -= 1;
                 if self.peek() == Some(&Tok::RParen) {
                     self.pos += 1;
                 }
@@ -137,7 +153,7 @@ impl Parser {
 }
 
 pub fn parse(input: &str) -> Option<Expr> {
-    let mut p = Parser { toks: tokenize(input), pos: 0 };
+    let mut p = Parser { toks: tokenize(input), pos: 0, depth: 0 };
     let mut parts = Vec::new();
     while p.pos < p.toks.len() {
         let before = p.pos;
@@ -215,6 +231,14 @@ mod tests {
         assert_eq!(parse("- cat"), Some(Expr::And(vec![t("-"), t("cat")])));
         assert_eq!(parse(r#""unterminated"#), Some(t("unterminated")));
         assert_eq!(parse("()"), None);
+    }
+
+    #[test]
+    fn deep_input_does_not_overflow() {
+        let minus = format!("{}cat", "-".repeat(100_001));
+        assert_eq!(parse(&minus), Some(not(t("cat"))));
+        let parens = format!("{}cat{}", "(".repeat(100_000), ")".repeat(100_000));
+        assert_eq!(parse(&parens), Some(t("cat")));
     }
 
     #[test]
