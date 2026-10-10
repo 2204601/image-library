@@ -103,8 +103,15 @@ export async function transferTo(
     if (unused.length)
       parts.push(`「${dest.name}」は${unused.map(kindLabel).join("・")}を使わない設定です（開いて設定から使う種類に追加できます）`);
     if (r.failed.length) parts.push(`${r.failed.length} 件は失敗：${r.failed.slice(0, 2).join("、")}`);
-    if (move && n) parts.push("元のライブラリではゴミ箱に入っています");
-    const title = n ? `${n} 件を「${dest.name}」へ${verb}しました` : `「${dest.name}」へ${verb}できませんでした`;
+    if (move && n)
+      parts.push(
+        r.trashed === null
+          ? "途中で別のライブラリを開いたため、元のライブラリには残したままです"
+          : "元のライブラリではゴミ箱に入っています",
+      );
+    // Left in this library: it was a copy after all.
+    const done = move && r.trashed === null ? "コピー" : verb;
+    const title = n ? `${n} 件を「${dest.name}」へ${done}しました` : `「${dest.name}」へ${verb}できませんでした`;
     const detail = parts.join(" / ") || undefined;
     st().notify({
       title,
@@ -216,7 +223,7 @@ export async function deleteSelection(ids: string[]) {
     });
     if (ok) await st().run(() => api.deleteItems(ids));
   } else {
-    await st().run(() => api.trashItems(ids));
+    if (!(await st().run(() => api.trashItems(ids)))) return;
     st().toast(`${ids.length} 件をゴミ箱へ移動しました`, false, {
       label: "元に戻す",
       onClick: () => st().run(() => api.restoreItems(ids)),
@@ -365,7 +372,7 @@ const folderName = (id: string) => st().folders.find((f) => f.id === id)?.name ?
 /** Moves items into a folder (an item is in one folder at most). */
 export async function moveToFolder(ids: string[], folderId: string) {
   if (!ids.length) return;
-  await st().run(() => api.moveToFolder(ids, folderId));
+  if (!(await st().run(() => api.moveToFolder(ids, folderId)))) return;
   st().rememberFolders([folderId]);
   st().flashTarget(`folder:${folderId}`);
   const name = folderName(folderId);
@@ -431,10 +438,11 @@ function allHave(ids: string[], flag: (i: Item) => boolean): boolean {
 export async function toggleFavorite(ids: string[], { quiet }: Feedback = {}) {
   if (!ids.length) return;
   const on = !allHave(ids, (i) => i.favorite);
-  await st().run(async () => {
+  const ok = await st().run(async () => {
     await api.setFavorite(ids, on);
     if (!quiet) showHud({ kind: "favorite", on }, ids);
   });
+  if (!ok) return;
   const open = on ? hiddenViewAction("favorites", "お気に入りを開く", { kind: "favorites" }) : undefined;
   if (open) st().toast(`${ids.length} 件をお気に入りに追加しました`, false, open);
 }
@@ -443,10 +451,11 @@ export async function toggleFavorite(ids: string[], { quiet }: Feedback = {}) {
 export async function togglePinned(ids: string[], { quiet }: Feedback = {}) {
   if (!ids.length) return;
   const on = !allHave(ids, (i) => i.pinnedAt !== null);
-  await st().run(async () => {
+  const ok = await st().run(async () => {
     await api.setPinned(ids, on);
     if (!quiet) showHud({ kind: "pin", on }, ids);
   });
+  if (!ok) return;
   // Like favourites: a toast only to reach the list when the sidebar hides it.
   const open = on ? hiddenViewAction("pinned", "ピン留めを開く", { kind: "pinned" }) : undefined;
   if (open) st().toast(`${ids.length} 件をピン留めしました（一覧の先頭に表示）`, false, open);
@@ -475,9 +484,10 @@ export async function reorder(ids: string[], before: string | null) {
 export async function addToTray(ids: string[]) {
   if (!ids.length) return;
   let added = 0;
-  await st().run(async () => {
+  const ok = await st().run(async () => {
     added = await api.addToTray(ids);
   });
+  if (!ok) return;
   st().flashTarget("tray");
   st().toast(
     added ? `${added} 件を作業台に追加しました` : "すでに作業台にあります",
@@ -490,7 +500,7 @@ export async function addToTray(ids: string[]) {
 export async function toggleTray(ids: string[]) {
   if (!ids.length) return;
   if (!allHave(ids, (i) => i.inTray)) return addToTray(ids);
-  await st().run(() => api.removeFromTray(ids));
+  if (!(await st().run(() => api.removeFromTray(ids)))) return;
   st().toast(`${ids.length} 件を作業台から外しました`, false, {
     label: "元に戻す",
     onClick: () => st().run(() => api.addToTray(ids)),
@@ -747,8 +757,7 @@ export async function confirmDeleteSmartFolder(id: string, name: string) {
 
 /** ⌘[ / ⌘] (one step) and ⌘⇧[ / ⌘⇧] (to the top / bottom). */
 export async function shiftFolder(id: string, by: -1 | 1, toEnd = false) {
-  await st().run(() => api.shiftFolder(id, toEnd ? by * 1_000_000 : by));
-  st().flashTarget(`folder:${id}`);
+  if (await st().run(() => api.shiftFolder(id, toEnd ? by * 1_000_000 : by))) st().flashTarget(`folder:${id}`);
 }
 
 export async function sortFoldersByName(parentId: string | null) {
@@ -778,7 +787,7 @@ export async function pasteTags(ids: string[]) {
     st().toast("コピーしたタグがありません（⌘⇧C でコピー）");
     return;
   }
-  await st().run(() => api.addTags(ids, names));
+  if (!(await st().run(() => api.addTags(ids, names)))) return;
   st().rememberTags(names);
   st().toast(`${ids.length} 件にタグ ${names.length} 件を貼り付けました`);
 }

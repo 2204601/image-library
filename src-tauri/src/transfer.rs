@@ -14,6 +14,7 @@ use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -32,6 +33,10 @@ pub struct TransferSummary {
     /// The ones to take out of the source when moving.
     #[serde(skip)]
     pub done_ids: Vec<String>,
+    /// Moving: how many of them went to the source's trash. None when the
+    /// source was no longer the open library at the end (switched or closed
+    /// during the copy), so they stay where they were.
+    pub trashed: Option<usize>,
 }
 
 /// What the source library contributes besides the item rows.
@@ -278,6 +283,24 @@ fn copy_attached(
     Ok(summary)
 }
 
+/// Moving: puts the copied items in the source's trash, if the source
+/// (`root`) is still the open library. The library isn't held during the
+/// copy and can be switched meanwhile (the progress is only a toast); item
+/// ids are kept by the copy, so trashing in the destination would trash the
+/// copies. None when it wasn't trashed.
+pub fn trash_in_source(open: &Mutex<Option<Library>>, root: &Path, ids: &[String]) -> Result<Option<usize>, String> {
+    let guard = open.lock().unwrap();
+    match guard.as_ref() {
+        Some(lib) if lib.root == root => {
+            if !ids.is_empty() {
+                db::trash_items(&lib.conn, ids).map_err(|e| e.to_string())?;
+            }
+            Ok(Some(ids.len()))
+        }
+        _ => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +334,28 @@ mod tests {
 
     fn all(lib: &Library) -> Vec<Item> {
         db::query_items(&lib.conn, &ItemQuery::default()).unwrap()
+    }
+
+    #[test]
+    fn moving_trashes_only_in_the_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let a_root = tmp.path().join("A.library");
+        let a = Library::create(&a_root).unwrap();
+        add(&a, "i1", "h1");
+        let b = Library::create(&tmp.path().join("B.library")).unwrap();
+        add(&b, "i1", "h1"); // the copy keeps the id
+        let ids = vec!["i1".to_string()];
+
+        // Another library was opened during the copy: nothing is trashed there.
+        let open = Mutex::new(Some(b));
+        assert_eq!(trash_in_source(&open, &a_root, &ids).unwrap(), None);
+        assert_eq!(all(open.lock().unwrap().as_ref().unwrap()).len(), 1);
+        *open.lock().unwrap() = None;
+        assert_eq!(trash_in_source(&open, &a_root, &ids).unwrap(), None);
+
+        *open.lock().unwrap() = Some(a);
+        assert_eq!(trash_in_source(&open, &a_root, &ids).unwrap(), Some(1));
+        assert!(all(open.lock().unwrap().as_ref().unwrap()).is_empty());
     }
 
     #[test]

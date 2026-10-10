@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 16;
+const SCHEMA_VERSION: i32 = 17;
 
 const SETTINGS_TABLE: &str = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
@@ -260,6 +260,38 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
                undo      TEXT NOT NULL,
                undone_at INTEGER
              )",
+        )
+    })?;
+    // Tag ids are never reused (AUTOINCREMENT): undo records (changes.rs) and
+    // smart-folder rules keep bare tag ids, and a new tag taking a deleted
+    // one's id would be stripped by an old undo or match an old rule. SQLite
+    // can't add AUTOINCREMENT to a table, so tags and item_tags are made
+    // again. The old ones are renamed away first: dropping `tags` while
+    // item_tags points at it would cascade-delete every tagging.
+    step(17, &|c| {
+        let sql: String = c.query_row("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'tags'", [], |r| r.get(0))?;
+        if sql.to_ascii_uppercase().contains("AUTOINCREMENT") {
+            return Ok(());
+        }
+        c.execute_batch(
+            "ALTER TABLE item_tags RENAME TO item_tags_old;
+             ALTER TABLE tags RENAME TO tags_old;
+             DROP INDEX IF EXISTS idx_item_tags_tag;
+             CREATE TABLE tags (
+               id    INTEGER PRIMARY KEY AUTOINCREMENT,
+               name  TEXT NOT NULL UNIQUE COLLATE NOCASE,
+               color TEXT
+             );
+             CREATE TABLE item_tags (
+               item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+               PRIMARY KEY (item_id, tag_id)
+             );
+             INSERT INTO tags (id, name, color) SELECT id, name, color FROM tags_old;
+             INSERT INTO item_tags (item_id, tag_id) SELECT item_id, tag_id FROM item_tags_old;
+             DROP TABLE item_tags_old;
+             DROP TABLE tags_old;
+             CREATE INDEX idx_item_tags_tag ON item_tags(tag_id);",
         )
     })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
@@ -549,6 +581,15 @@ fn escape_like(s: &str) -> String {
 
 fn placeholders(n: usize) -> String {
     vec!["?"; n].join(",")
+}
+
+/// `IN` over a list of item ids of any length, bound as one JSON array
+/// parameter (`ids_param`): SQLite takes at most 32766 parameters, and "select
+/// all" on a large library or emptying a large trash goes past that.
+const IN_IDS: &str = "IN (SELECT value FROM json_each(?))";
+
+fn ids_param(ids: &[String]) -> String {
+    serde_json::to_string(ids).unwrap_or_default()
 }
 
 /// Spellings that count as the same file type.
@@ -864,12 +905,8 @@ pub fn get_items(conn: &Connection, ids: &[String]) -> DbResult<Vec<Item>> {
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    let sql = format!(
-        "SELECT {ITEM_COLS} FROM items WHERE id IN ({})",
-        placeholders(ids.len())
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params_from_iter(ids), row_to_item)?;
+    let mut stmt = conn.prepare(&format!("SELECT {ITEM_COLS} FROM items WHERE id {IN_IDS}"))?;
+    let rows = stmt.query_map([ids_param(ids)], row_to_item)?;
     rows.collect()
 }
 
@@ -1053,13 +1090,10 @@ pub fn rename_item(conn: &Connection, id: &str, name: &str) -> DbResult<()> {
 }
 
 pub fn trash_items(conn: &Connection, ids: &[String]) -> DbResult<()> {
-    let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(now_ms())];
-    args.extend(ids.iter().map(|s| Box::new(s.clone()) as Box<dyn ToSql>));
-    let sql = format!(
-        "UPDATE items SET deleted_at = ? WHERE deleted_at IS NULL AND id IN ({})",
-        placeholders(ids.len())
-    );
-    conn.execute(&sql, params_from_iter(args.iter().map(|b| b.as_ref())))?;
+    conn.execute(
+        &format!("UPDATE items SET deleted_at = ? WHERE deleted_at IS NULL AND id {IN_IDS}"),
+        params![now_ms(), ids_param(ids)],
+    )?;
     Ok(())
 }
 
@@ -1207,19 +1241,14 @@ pub fn resolve_duplicates(conn: &mut Connection, groups: &[DuplicateGroup]) -> D
 }
 
 pub fn restore_items(conn: &Connection, ids: &[String]) -> DbResult<()> {
-    let sql = format!(
-        "UPDATE items SET deleted_at = NULL WHERE id IN ({})",
-        placeholders(ids.len())
-    );
-    conn.execute(&sql, params_from_iter(ids))?;
+    conn.execute(&format!("UPDATE items SET deleted_at = NULL WHERE id {IN_IDS}"), [ids_param(ids)])?;
     Ok(())
 }
 
 /// Deletes rows and returns them so the caller can remove the files.
 pub fn delete_items(conn: &Connection, ids: &[String]) -> DbResult<Vec<Item>> {
     let items = get_items(conn, ids)?;
-    let sql = format!("DELETE FROM items WHERE id IN ({})", placeholders(ids.len()));
-    conn.execute(&sql, params_from_iter(ids))?;
+    conn.execute(&format!("DELETE FROM items WHERE id {IN_IDS}"), [ids_param(ids)])?;
     Ok(items)
 }
 
@@ -1809,12 +1838,36 @@ pub fn rename_tag(conn: &mut Connection, id: i64, name: &str) -> DbResult<()> {
                 params![id, target],
             )?;
             tx.execute("DELETE FROM tags WHERE id = ?1", [id])?;
+            merge_rule_tag(&tx, id, target)?;
         }
         None => {
             tx.execute("UPDATE tags SET name = ?2 WHERE id = ?1", params![id, name])?;
         }
     }
     tx.commit()
+}
+
+/// Smart-folder rules on tag `from` now use `to` (merged into it). The JSON
+/// is edited in place, so fields this build doesn't know are kept.
+fn merge_rule_tag(conn: &Connection, from: i64, to: i64) -> DbResult<()> {
+    let rows: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT id, rule FROM smart_folders")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    for (id, json) in rows {
+        let Ok(mut rule) = serde_json::from_str::<serde_json::Value>(&json) else { continue };
+        let Some(tags) = rule.get_mut("tagIds").and_then(|t| t.as_array_mut()) else { continue };
+        if !tags.iter().any(|t| t.as_i64() == Some(from)) {
+            continue;
+        }
+        tags.retain(|t| t.as_i64() != Some(from));
+        if !tags.iter().any(|t| t.as_i64() == Some(to)) {
+            tags.push(to.into());
+        }
+        conn.execute("UPDATE smart_folders SET rule = ?2 WHERE id = ?1", params![id, rule.to_string()])?;
+    }
+    Ok(())
 }
 
 pub fn delete_tag(conn: &Connection, id: i64) -> DbResult<()> {
@@ -1843,13 +1896,13 @@ pub fn selection_info(conn: &Connection, ids: &[String]) -> DbResult<SelectionIn
     if ids.is_empty() {
         return Ok(SelectionInfo { tags: vec![], folders: vec![] });
     }
-    let ph = placeholders(ids.len());
+    let ids = ids_param(ids);
     let mut stmt = conn.prepare(&format!(
         "SELECT t.id, t.name, COUNT(*), t.color FROM item_tags x JOIN tags t ON t.id = x.tag_id
-         WHERE x.item_id IN ({ph}) GROUP BY t.id ORDER BY t.name COLLATE NOCASE"
+         WHERE x.item_id {IN_IDS} GROUP BY t.id ORDER BY t.name COLLATE NOCASE"
     ))?;
     let tags = stmt
-        .query_map(params_from_iter(ids), |r| {
+        .query_map([&ids], |r| {
             Ok(Tag {
                 id: r.get(0)?,
                 name: r.get(1)?,
@@ -1859,10 +1912,10 @@ pub fn selection_info(conn: &Connection, ids: &[String]) -> DbResult<SelectionIn
         })?
         .collect::<DbResult<Vec<_>>>()?;
     let mut stmt = conn.prepare(&format!(
-        "SELECT folder_id, COUNT(*) FROM item_folders WHERE item_id IN ({ph}) GROUP BY folder_id"
+        "SELECT folder_id, COUNT(*) FROM item_folders WHERE item_id {IN_IDS} GROUP BY folder_id"
     ))?;
     let folders = stmt
-        .query_map(params_from_iter(ids), |r| {
+        .query_map([&ids], |r| {
             Ok(FolderRef {
                 id: r.get(0)?,
                 count: r.get(1)?,
@@ -2245,6 +2298,81 @@ mod tests {
     }
 
     #[test]
+    fn id_lists_past_the_parameter_limit() {
+        let mut conn = mem();
+        // More than SQLite's 32766 parameters.
+        let ids: Vec<String> = (0..40_000).map(|i| format!("i{i}")).collect();
+        let tx = conn.transaction().unwrap();
+        {
+            let mut stmt = tx
+                .prepare("INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at)
+                          VALUES (?1, 'n', 'n.png', 'png', 1, 1, 1, ?1, 't.jpg', 1)")
+                .unwrap();
+            for id in &ids {
+                stmt.execute([id]).unwrap();
+            }
+        }
+        tx.commit().unwrap();
+        add_tags(&mut conn, &ids[..2], &s(&["x"])).unwrap();
+
+        assert_eq!(get_items(&conn, &ids).unwrap().len(), ids.len());
+        assert_eq!(selection_info(&conn, &ids).unwrap().tags[0].count, 2);
+        trash_items(&conn, &ids).unwrap();
+        assert_eq!(trashed_ids(&conn).unwrap().len(), ids.len());
+        restore_items(&conn, &ids).unwrap();
+        assert!(trashed_ids(&conn).unwrap().is_empty());
+        assert_eq!(delete_items(&conn, &ids).unwrap().len(), ids.len());
+        assert!(query_items(&conn, &q(View::All)).unwrap().is_empty());
+    }
+
+    #[test]
+    fn tag_ids_are_never_reused() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        // Tags as schema 1 made them (no AUTOINCREMENT), with taggings.
+        conn.execute_batch(
+            "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL, file_name TEXT NOT NULL,
+               ext TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, size INTEGER NOT NULL,
+               hash TEXT NOT NULL, thumb TEXT NOT NULL, note TEXT NOT NULL DEFAULT '',
+               imported_at INTEGER NOT NULL, deleted_at INTEGER);
+             CREATE TABLE folders (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES folders(id) ON DELETE CASCADE, name TEXT NOT NULL);
+             CREATE TABLE item_folders (item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               folder_id TEXT NOT NULL REFERENCES folders(id) ON DELETE CASCADE, PRIMARY KEY (item_id, folder_id));
+             CREATE TABLE tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE COLLATE NOCASE);
+             CREATE TABLE item_tags (
+               item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+               PRIMARY KEY (item_id, tag_id));
+             INSERT INTO items VALUES ('a','a.png','a.png','png',1,1,1,'h','a.jpg','',1,NULL);
+             INSERT INTO tags VALUES (1,'x'), (2,'y');
+             INSERT INTO item_tags VALUES ('a',1), ('a',2);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        // The taggings survived making the tables again.
+        let links: Vec<(String, i64)> = conn
+            .prepare("SELECT item_id, tag_id FROM item_tags ORDER BY tag_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<DbResult<_>>()
+            .unwrap();
+        assert_eq!(links, [("a".to_string(), 1), ("a".to_string(), 2)]);
+        // Still cascading, and the highest id isn't handed out again.
+        delete_tag(&conn, 2).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM item_tags", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(ensure_tag(&conn, "z").unwrap(), 3);
+        delete_tag(&conn, 3).unwrap();
+        assert_eq!(ensure_tag(&conn, "w").unwrap(), 4);
+        // Running the step again (an older build lowered the version) keeps everything.
+        conn.pragma_update(None, "user_version", 16).unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(ensure_tag(&conn, "x").unwrap(), 1);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM item_tags", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    }
+
+    #[test]
     fn ratings_sort_and_filter() {
         let mut conn = mem();
         add(&mut conn, "a", "a.png", 1);
@@ -2562,6 +2690,14 @@ mod tests {
         // Trashed items don't count.
         trash_items(&conn, &s(&["c"])).unwrap();
         assert_eq!(list_smart_folders(&conn, None).unwrap()[0].count, 1);
+        // Merged into another tag: the rule follows it.
+        add_tags(&mut conn, &s(&["b"]), &s(&["animal"])).unwrap();
+        rename_tag(&mut conn, pet, "animal").unwrap();
+        let animal = list_tags(&conn, None).unwrap()[0].id;
+        assert_ne!(animal, pet);
+        let sf = &list_smart_folders(&conn, None).unwrap()[0];
+        assert_eq!((sf.rule.tag_ids.as_slice(), sf.count), (&[animal][..], 1));
+        let pet = animal;
         // A deleted tag drops out of the rule instead of matching nothing.
         delete_tag(&conn, pet).unwrap();
         let sf = &list_smart_folders(&conn, None).unwrap()[0];

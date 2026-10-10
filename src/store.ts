@@ -309,8 +309,11 @@ interface State {
   /** A toast with a title, detail line and kind (results worth noticing). */
   notify: (t: ToastOptions) => void;
   dismissToast: (id: number) => void;
-  /** Runs a mutation, reports errors, then refreshes. */
-  run: (fn: () => Promise<unknown>) => Promise<void>;
+  /**
+   * Runs a mutation, reports errors, then refreshes. Resolves to whether it
+   * worked: a result message must not follow the error toast.
+   */
+  run: (fn: () => Promise<unknown>) => Promise<boolean>;
   /** Reports an import; `since` (when it started) also tells the OS if it was long. */
   importDone: (s: ImportSummary, since?: number) => void;
 }
@@ -976,12 +979,15 @@ export const useStore = create<State>((set, get) => ({
     setTimeout(() => set({ toasts: get().toasts.filter((t) => t.id !== id) }), 200);
   },
   run: async (fn) => {
+    let ok = true;
     try {
       await fn();
     } catch (e) {
+      ok = false;
       get().toast(String(e), true);
     }
     await get().refresh();
+    return ok;
   },
   importDone: (s, since) => {
     const parts = [];
