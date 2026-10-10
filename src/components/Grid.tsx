@@ -56,14 +56,14 @@ export function onItemPointerDown(e: React.PointerEvent, item: Item, index: numb
   focusAt = index;
   const s = useStore.getState();
   const mod = e.metaKey || e.ctrlKey;
-  if (e.shiftKey) s.select(item.id, "range");
-  else if (mod) s.select(item.id, "toggle");
-  else if (!s.selected.has(item.id)) s.select(item.id, "only");
+  if (e.shiftKey) s.select(item.id, "range", index);
+  else if (mod) s.select(item.id, "toggle", index);
+  else if (!s.selected.has(item.id)) s.select(item.id, "only", index);
   startPointerDrag(
     e,
     () => ({ kind: "items", ids: [...useStore.getState().selected] }),
     // Plain click on an already-selected item narrows the selection to it.
-    () => !e.shiftKey && !mod && useStore.getState().select(item.id, "only"),
+    () => !e.shiftKey && !mod && useStore.getState().select(item.id, "only", index),
   );
 }
 
@@ -158,7 +158,7 @@ function SelectMark({ item, index, selected }: { item: Item; index: number; sele
       onDoubleClick={(e) => e.stopPropagation()}
       onClick={(e) => {
         focusAt = index;
-        useStore.getState().select(item.id, e.shiftKey ? "range" : "toggle");
+        useStore.getState().select(item.id, e.shiftKey ? "range" : "toggle", index);
       }}
       title={selected ? "選択から外す（⌘+クリック）" : "選択に追加（⌘+クリック）"}
       className={`absolute right-1.5 bottom-1.5 h-5 w-5 items-center justify-center rounded-full border-2 border-white transition-colors ${
@@ -389,7 +389,7 @@ export function Stars({ n, size = 9 }: { n: number; size?: number }) {
 /** The menu of an item (and the rest of the selection); also the details panel's "…". */
 export function showItemMenu(e: React.MouseEvent | { clientX: number; clientY: number }, item: Item, index: number) {
   const s0 = useStore.getState();
-  if (!s0.selected.has(item.id)) s0.select(item.id, "only");
+  if (!s0.selected.has(item.id)) s0.select(item.id, "only", index);
   const s = useStore.getState();
   const ids = [...s.selected];
   const header: MenuItem[] = ids.length > 1 ? [{ header: `${ids.length} 件を選択中` }] : [];
@@ -454,6 +454,7 @@ export function Grid() {
   const thumbSize = useStore((s) => s.thumbSize);
   const specimenSize = useStore((s) => s.specimenSize);
   const kind = useStore((s) => s.layout);
+  const groupBy = useStore((s) => s.groupBy);
   const showInfo = useStore((s) => s.showInfo);
   const viewKind = useStore((s) => s.view.kind);
   const mode = useStore((s) => s.mode);
@@ -530,11 +531,13 @@ export function Grid() {
     else if (bottom + PAD > el.scrollTop + el.clientHeight) el.scrollTop = bottom + PAD - el.clientHeight;
   };
 
-  // Keep the focused item on screen when the layout changes (e.g. switching layouts).
+  // Keep the focused item on screen when the layout or grouping is switched.
+  // Not on every refresh (`sections` is new each time): changing another
+  // item, or thumbnails arriving, would pull the list back to it.
   useEffect(() => {
     const i = focusIndex(useStore.getState());
     if (i >= 0) reveal(i);
-  }, [kind, sections]);
+  }, [kind, groupBy]);
 
   /** Ids of cells intersecting a rectangle in content coordinates. */
   const hitTest = (r: Rect): string[] => {
@@ -617,7 +620,10 @@ export function Grid() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as Element).closest?.("input, textarea, select")) return;
       const s = useStore.getState();
+      // A dialog, menu or panel is over the list (each marks its overlay
+      // `data-modal`): Delete there must not trash the selection behind it.
       if (s.viewer !== null || s.drag || s.picker || s.sheet || s.settingsTab || s.exporting || s.transfer) return;
+      if (document.querySelector("[data-modal]")) return;
       const sel = () => [...useStore.getState().selected];
 
       // Everything with a command (commands.ts): the same table as the menus.
@@ -659,7 +665,7 @@ export function Grid() {
       else if (Math.abs(d) === 1) next = Math.min(s.items.length - 1, Math.max(0, cur + d));
       else next = neighbour(placement, cur, d < 0 ? "up" : "down");
       focusAt = next;
-      s.select(s.items[next].id, extend ? "range" : "only");
+      s.select(s.items[next].id, extend ? "range" : "only", next);
       reveal(next);
     };
     window.addEventListener("keydown", onKey);

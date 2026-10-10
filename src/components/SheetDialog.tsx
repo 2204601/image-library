@@ -23,6 +23,7 @@ import {
   type SheetOptions,
 } from "../lib/sheet";
 import { useStore } from "../store";
+import { composing } from "../lib/ime";
 
 const KEY = "sheetOptions";
 
@@ -239,7 +240,7 @@ export function SheetDialog() {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape" && !composing(e)) close();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -312,7 +313,7 @@ export function SheetDialog() {
   ];
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
+    <div data-modal className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
       <div
         className="flex h-[86vh] w-[1120px] max-w-[94vw] animate-zoom-in flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-2xl"
         onPointerDown={(e) => e.stopPropagation()}
@@ -351,7 +352,7 @@ export function SheetDialog() {
                 value={opt.title}
                 placeholder="例：どれがいいですか？"
                 onChange={(e) => set({ title: e.target.value })}
-                onKeyDown={(e) => e.key === "Escape" && e.currentTarget.blur()}
+                onKeyDown={(e) => e.key === "Escape" && !composing(e) && e.currentTarget.blur()}
                 className="h-8 rounded-md border border-line bg-bg px-2 outline-none focus:border-accent"
               />
             </Field>

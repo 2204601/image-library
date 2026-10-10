@@ -295,7 +295,11 @@ interface State {
   setExporting: (r: ExportRequest | null) => void;
   refresh: () => Promise<void>;
 
-  select: (id: string, mode: "only" | "toggle" | "range") => void;
+  /**
+   * `at`: the item's display index. With tag grouping an item can appear
+   * more than once, and a range runs between the places clicked.
+   */
+  select: (id: string, mode: "only" | "toggle" | "range", at?: number) => void;
   setSelection: (ids: string[]) => void;
   openViewer: (index: number | null) => void;
 
@@ -424,6 +428,13 @@ function traySort(from: View, to: View, cur: { sort: SortKey; desc: boolean }): 
 let refreshSeq = 0;
 let toastSeq = 0;
 let flashSeq = 0;
+/** Display index of `anchor` when known (see `select`). */
+let anchorAt: number | null = null;
+
+/** Display index of item `id`: `at` when it is there, else its first place. */
+function indexOf(items: Item[], id: string, at: number | null | undefined): number {
+  return at != null && items[at]?.id === id ? at : items.findIndex((i) => i.id === id);
+}
 
 /** The display list and its sections for the current view / grouping. */
 function arrange(s: {
@@ -924,27 +935,30 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  select: (id, mode) => {
+  select: (id, mode, at) => {
     const { selected, anchor, items } = get();
-    if (mode === "only") {
-      set({ selected: new Set([id]), anchor: id, focus: id });
-    } else if (mode === "toggle") {
+    const b = indexOf(items, id, at);
+    // No anchor in the list any more (trashed, filtered out): a range from
+    // nowhere would run from the top, so it starts here instead.
+    const a = mode === "range" && anchor !== null ? indexOf(items, anchor, anchorAt) : -1;
+    if (mode === "range" && a >= 0 && b >= 0) {
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      set({ selected: new Set(items.slice(lo, hi + 1).map((i) => i.id)), focus: id });
+      return;
+    }
+    anchorAt = b >= 0 ? b : null;
+    if (mode === "toggle") {
       const next = new Set(selected);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       set({ selected: next, anchor: id, focus: id });
     } else {
-      const a = items.findIndex((i) => i.id === (anchor ?? id));
-      const b = items.findIndex((i) => i.id === id);
-      const [lo, hi] = a < b ? [a, b] : [b, a];
-      set({
-        selected: new Set(items.slice(Math.max(lo, 0), hi + 1).map((i) => i.id)),
-        focus: id,
-      });
+      set({ selected: new Set([id]), anchor: id, focus: id });
     }
   },
   setSelection: (ids) => {
     const last = ids.at(-1) ?? null;
+    anchorAt = null;
     set({ selected: new Set(ids), anchor: last, focus: last });
   },
   openViewer: (viewer) => set({ viewer }),

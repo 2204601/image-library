@@ -102,7 +102,7 @@ export function Viewer() {
     (i: number) => {
       const next = Math.min(items.length - 1, Math.max(0, i));
       openViewer(next);
-      useStore.getState().select(items[next].id, "only");
+      useStore.getState().select(items[next].id, "only", next);
     },
     [items, openViewer],
   );
