@@ -12,6 +12,7 @@ import {
   type ToastAction,
 } from "../store";
 import { openGuarded } from "./libraryLock";
+import { showHud } from "../components/ActionHud";
 import { warn } from "./log";
 import { notifyIfAway } from "./osNotify";
 
@@ -406,9 +407,18 @@ export function createFolderHere() {
   return createFolder(parent);
 }
 
-export async function setRating(ids: string[], rating: number) {
+/**
+ * `quiet`: done on the control itself (the heart, the stars, the viewer's
+ * buttons), where the change shows; otherwise the HUD says what happened.
+ */
+type Feedback = { quiet?: boolean };
+
+export async function setRating(ids: string[], rating: number, { quiet }: Feedback = {}) {
   if (!ids.length) return;
-  await st().run(() => api.setRating(ids, rating));
+  await st().run(async () => {
+    await api.setRating(ids, rating);
+    if (!quiet) showHud({ kind: "rating", rating }, ids);
+  });
 }
 
 /** True when every one of `ids` has the flag (so a toggle turns it off). */
@@ -418,31 +428,37 @@ function allHave(ids: string[], flag: (i: Item) => boolean): boolean {
 }
 
 /** F: adds to favourites, or removes when every selected image already is one. */
-export async function toggleFavorite(ids: string[]) {
+export async function toggleFavorite(ids: string[], { quiet }: Feedback = {}) {
   if (!ids.length) return;
   const on = !allHave(ids, (i) => i.favorite);
-  await st().run(() => api.setFavorite(ids, on));
+  await st().run(async () => {
+    await api.setFavorite(ids, on);
+    if (!quiet) showHud({ kind: "favorite", on }, ids);
+  });
   const open = on ? hiddenViewAction("favorites", "お気に入りを開く", { kind: "favorites" }) : undefined;
   if (open) st().toast(`${ids.length} 件をお気に入りに追加しました`, false, open);
 }
 
 /** P: pins to the top of every list, or unpins when all are pinned. */
-export async function togglePinned(ids: string[]) {
+export async function togglePinned(ids: string[], { quiet }: Feedback = {}) {
   if (!ids.length) return;
   const on = !allHave(ids, (i) => i.pinnedAt !== null);
-  await st().run(() => api.setPinned(ids, on));
-  if (on)
-    st().toast(
-      `${ids.length} 件をピン留めしました（一覧の先頭に表示）`,
-      false,
-      hiddenViewAction("pinned", "ピン留めを開く", { kind: "pinned" }),
-    );
+  await st().run(async () => {
+    await api.setPinned(ids, on);
+    if (!quiet) showHud({ kind: "pin", on }, ids);
+  });
+  // Like favourites: a toast only to reach the list when the sidebar hides it.
+  const open = on ? hiddenViewAction("pinned", "ピン留めを開く", { kind: "pinned" }) : undefined;
+  if (open) st().toast(`${ids.length} 件をピン留めしました（一覧の先頭に表示）`, false, open);
 }
 
 /** Rotates / flips the images without changing the files. */
-export async function orient(ids: string[], op: OrientOp) {
+export async function orient(ids: string[], op: OrientOp, { quiet }: Feedback = {}) {
   if (!ids.length) return;
-  await st().run(() => api.orientItems(ids, op));
+  await st().run(async () => {
+    await api.orientItems(ids, op);
+    if (!quiet) showHud({ kind: "orient", op }, ids);
+  });
 }
 
 /** Manual order: move `ids` in front of `before` (null = end) in the open folder or the tray. */

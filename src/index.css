@@ -22,6 +22,9 @@
   --animate-zoom-in: zoom-in 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
   --animate-slide-down: slide-down 0.18s ease-out;
   --animate-slide-up: slide-up 0.18s ease-out;
+  /* ActionHud: the duration is set where it's used, with its timer. */
+  --animate-hud: hud ease-out;
+  --animate-change-pulse: change-pulse 0.7s ease-out forwards;
 
   @keyframes drop-pulse {
     0% {
@@ -103,6 +106,31 @@
     from {
       opacity: 0;
       transform: translateY(4px);
+    }
+  }
+  /* In, held, out; no fill, so with reduced motion it simply stays shown. */
+  @keyframes hud {
+    0% {
+      opacity: 0;
+      transform: translateY(8px) scale(0.96);
+    }
+    12%,
+    82% {
+      opacity: 1;
+      transform: none;
+    }
+    100% {
+      opacity: 0;
+    }
+  }
+  @keyframes change-pulse {
+    0% {
+      background-color: color-mix(in srgb, white 35%, transparent);
+      box-shadow: inset 0 0 0 3px color-mix(in srgb, white 80%, transparent);
+    }
+    100% {
+      background-color: transparent;
+      box-shadow: inset 0 0 0 3px transparent;
     }
   }
 }

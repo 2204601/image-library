@@ -6,6 +6,7 @@ import { memo, useEffect, useState } from "react";
 // Grid supplies the cell plumbing and uses these rows: the import cycle is
 // fine because everything is used at render time, not at load.
 import { onItemPointerDown, rowSelection, showItemMenu, Stars, type CellProps } from "../../components/Grid";
+import { ChangePulse } from "../../components/ActionHud";
 import { fontCategoryLabel, fontCategoryOf, fontScriptLabel, type Item } from "../../lib/api";
 import { useStore } from "../../store";
 import { type FontListPreview } from "./api";
@@ -103,6 +104,7 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
       data-drop={reorderable ? `item:${item.id}` : undefined}
       data-axis="y"
     >
+      <ChangePulse id={item.id} className="rounded-md" />
       <div className="flex min-w-0 items-baseline gap-2 text-xs">
         <span className="truncate text-[13px] font-medium">{item.fontFamily || item.name}</span>
         <span className="shrink-0 text-dim">{style}</span>

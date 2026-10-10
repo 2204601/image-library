@@ -235,10 +235,10 @@ export function Viewer() {
         {isImage && (
           <>
             <div className="flex items-center gap-1">
-              <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw")}>
+              <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw", { quiet: true })}>
                 <RotateCcw size={15} />
               </button>
-              <button className={tool} title="右に回転（⌘⇧R）" onClick={() => orient([item.id], "rotateCw")}>
+              <button className={tool} title="右に回転（⌘⇧R）" onClick={() => orient([item.id], "rotateCw", { quiet: true })}>
                 <RotateCw size={15} />
               </button>
             </div>
@@ -375,7 +375,7 @@ function Details({ item, items }: { item: Item; items: Item[] }) {
       </div>
       <div>
         <div className={label}>評価</div>
-        <RatingStars value={item.rating} onChange={(n) => setRating([item.id], n)} size={18} />
+        <RatingStars value={item.rating} onChange={(n) => setRating([item.id], n, { quiet: true })} size={18} />
         <div className="mt-2.5">
           <FlagButtons ids={[item.id]} items={items} />
         </div>
