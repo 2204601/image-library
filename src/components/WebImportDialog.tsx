@@ -184,7 +184,7 @@ export function PairDialog() {
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex animate-fade-in items-center justify-center bg-black/50">
+    <div data-modal className="fixed inset-0 z-[60] flex animate-fade-in items-center justify-center bg-black/50">
       <div className="w-[400px] max-w-[92vw] animate-zoom-in rounded-xl border border-line bg-panel p-5 text-center shadow-2xl">
         <Link2 size={28} className="mx-auto text-accent" />
         <div className="mt-2 text-base font-semibold">ブラウザの拡張機能が接続を求めています</div>

@@ -154,7 +154,7 @@ function Panel({ close, bottom }: { close: () => void; bottom: number }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50" onPointerDown={close}>
+    <div data-modal className="fixed inset-0 z-50" onPointerDown={close}>
       <div
         className="absolute left-2 flex max-h-[75vh] w-80 animate-slide-up flex-col overflow-hidden rounded-xl border border-line bg-raised shadow-2xl"
         style={{ bottom }}

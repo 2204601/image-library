@@ -21,6 +21,7 @@ import { modeNoun } from "../lib/modes";
 import { api, formatBytes, sizeLabel, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
 import { FontCategorySelect, FontDetails } from "../features/fonts/FontDetails";
 import { useStore } from "../store";
+import { composing } from "../lib/ime";
 import { RatingStars } from "./RatingStars";
 
 function folderPath(folders: Folder[], id: string): string {
@@ -78,7 +79,7 @@ function TagInput({ onAdd, exclude }: { onAdd: (names: string[]) => void; exclud
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
         onKeyDown={(e) => {
-          if (e.nativeEvent.isComposing) return; // IME conversion in progress
+          if (composing(e)) return; // IME conversion in progress
           if (e.key === "Enter") {
             e.preventDefault();
             const pick = open && !text.includes(",") ? suggestions[hi] : undefined;
@@ -240,7 +241,7 @@ function SavedText({
         // A name has no line breaks (pasted ones become spaces).
         onChange={(e) => setV(e.target.value.replace(/\s*\n\s*/g, " "))}
         onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+          if (e.key === "Enter" && !composing(e)) {
             e.preventDefault();
             e.currentTarget.blur();
           }
@@ -254,7 +255,7 @@ function SavedText({
     <input
       {...props}
       onKeyDown={(e) => {
-        if (e.key === "Enter" && !e.nativeEvent.isComposing) e.currentTarget.blur();
+        if (e.key === "Enter" && !composing(e)) e.currentTarget.blur();
       }}
     />
   );

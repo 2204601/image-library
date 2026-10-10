@@ -14,6 +14,7 @@ import {
   startOfToday,
 } from "../lib/rule";
 import { activeConditions, useStore } from "../store";
+import { composing } from "../lib/ime";
 import { RangeCalendar } from "./RangeCalendar";
 
 
@@ -95,7 +96,7 @@ function NumField({
       value={text}
       onChange={(e) => setText(e.target.value)}
       onBlur={commit}
-      onKeyDown={(e) => e.key === "Enter" && commit()}
+      onKeyDown={(e) => e.key === "Enter" && !composing(e) && commit()}
       inputMode="decimal"
       placeholder={placeholder}
       className="h-7 w-20 rounded border border-line bg-bg px-1.5 tabular-nums outline-none focus:border-accent"

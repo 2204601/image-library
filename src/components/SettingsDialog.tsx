@@ -12,6 +12,7 @@ import { isMac } from "../lib/shortcuts";
 import { appVersion, checkForUpdate } from "../lib/update";
 import { usedModes, useStore, type SettingsTab } from "../store";
 import { WebImportSettings } from "./WebImportDialog";
+import { composing } from "../lib/ime";
 import { ClaudeSettings } from "./ClaudeSettings";
 
 export const SETTINGS_KEY = isMac ? "⌘," : "Ctrl+,";
@@ -39,7 +40,7 @@ function useSettingsKeys() {
         s.openSettings(s.settingsTab ? null : "general");
         return;
       }
-      if (s.settingsTab && e.key === "Escape") {
+      if (s.settingsTab && e.key === "Escape" && !composing(e)) {
         e.preventDefault();
         e.stopImmediatePropagation();
         s.openSettings(null);
@@ -69,7 +70,7 @@ function Dialog({ tab }: { tab: SettingsTab }) {
   }, [anchor]);
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
+    <div data-modal className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
       <div
         role="dialog"
         aria-label="設定"

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { create } from "zustand";
 import { kindLabel } from "../lib/api";
 import { isMac, keyParts, matchRow, shortcutSections } from "../lib/shortcuts";
+import { composing } from "../lib/ime";
 import { useStore } from "../store";
 
 export const useShortcutHelp = create<{ open: boolean; setOpen: (open: boolean) => void }>((set) => ({
@@ -33,7 +34,7 @@ function useShortcutKeys() {
       }
       if (!open) return;
       e.stopImmediatePropagation();
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !composing(e)) {
         e.preventDefault();
         setOpen(false);
       }
@@ -72,7 +73,7 @@ function Panel() {
   }, [inViewer, layout, query]);
 
   return (
-    <div
+    <div data-modal
       className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50"
       onPointerDown={() => setOpen(false)}
     >

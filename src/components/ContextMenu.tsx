@@ -72,7 +72,7 @@ export function ContextMenu() {
 
   if (!menu) return null;
   return (
-    <div
+    <div data-modal
       className="fixed inset-0 z-50"
       onPointerDown={close}
       onContextMenu={(e) => {

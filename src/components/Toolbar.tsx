@@ -47,6 +47,7 @@ import { appliesTo, command } from "../lib/commands";
 import { comboText } from "../lib/shortcuts";
 import { activeConditions, useStore, type Mode } from "../store";
 import { showItemMenu } from "./Grid";
+import { composing } from "../lib/ime";
 import { FilterBar } from "./FilterBar";
 import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
 
@@ -205,7 +206,7 @@ export function Toolbar() {
               id="search"
               value={text}
               onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === "Escape" && (setText(""), e.currentTarget.blur())}
+              onKeyDown={(e) => e.key === "Escape" && !composing(e) && (setText(""), e.currentTarget.blur())}
               placeholder="検索（-除外 / OR）"
               className="w-0 min-w-0 flex-1 bg-transparent outline-none placeholder:text-dim"
             />

@@ -9,6 +9,7 @@ import { listTargets } from "../lib/actions";
 import { api, type Folder, type Item } from "../lib/api";
 import { modeNoun } from "../lib/modes";
 import { notifyIfAway } from "../lib/osNotify";
+import { composing } from "../lib/ime";
 import { useStore, type ExportRequest } from "../store";
 
 const LAST_DEST = "exportDest";
@@ -76,7 +77,7 @@ function Dialog({ req }: { req: ExportRequest }) {
   }, [req.source, subfolders]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !composing(e) && close();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
@@ -141,7 +142,7 @@ function Dialog({ req }: { req: ExportRequest }) {
   const rootName = isFolder ? folders.find((f) => f.id === (req.source as { id: string }).id)?.name : "";
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
+    <div data-modal className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
       <div
         role="dialog"
         className="w-[480px] max-w-[92vw] animate-zoom-in rounded-xl border border-line bg-panel shadow-2xl"

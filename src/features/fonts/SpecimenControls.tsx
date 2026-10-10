@@ -1,6 +1,7 @@
 // Specimen layout: the text every font shows, and its size (toolbar row).
 import { ALargeSmall } from "lucide-react";
 import { useStore } from "../../store";
+import { composing } from "../../lib/ime";
 
 export function SpecimenControls() {
   const text = useStore((s) => s.specimenText);
@@ -13,7 +14,7 @@ export function SpecimenControls() {
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => e.key === "Escape" && (setText(""), e.currentTarget.blur())}
+        onKeyDown={(e) => e.key === "Escape" && !composing(e) && (setText(""), e.currentTarget.blur())}
         placeholder="見本の文字を入力（空欄なら各フォントの見本）"
         className="h-7 min-w-32 flex-1 rounded-md border border-line bg-bg px-2 text-[13px] outline-none placeholder:text-dim focus:border-accent"
       />

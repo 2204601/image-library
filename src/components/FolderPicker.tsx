@@ -6,6 +6,7 @@ import { Clock, Folder as FolderIcon, FolderPlus, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { moveToFolder } from "../lib/actions";
 import { api, type Folder } from "../lib/api";
+import { composing } from "../lib/ime";
 import { currentFolderId, useStore } from "../store";
 
 interface Row {
@@ -96,7 +97,7 @@ function PickerDialog({ mode }: { mode: "move" | "goto" }) {
   };
 
   const onKey = (e: React.KeyboardEvent) => {
-    if (e.nativeEvent.isComposing) return;
+    if (composing(e)) return;
     if (e.key === "Escape") {
       e.preventDefault();
       close();
@@ -113,7 +114,7 @@ function PickerDialog({ mode }: { mode: "move" | "goto" }) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-fade-in items-start justify-center bg-black/40 pt-[12vh]" onPointerDown={close}>
+    <div data-modal className="fixed inset-0 z-50 flex animate-fade-in items-start justify-center bg-black/40 pt-[12vh]" onPointerDown={close}>
       <div
         className="flex max-h-[70vh] w-[460px] animate-zoom-in flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-2xl"
         onPointerDown={(e) => e.stopPropagation()}

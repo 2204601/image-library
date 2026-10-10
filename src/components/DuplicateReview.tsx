@@ -29,7 +29,7 @@ export function DuplicateReview() {
   const tags = new Set(effects?.flatMap((e) => e.addedTags)).size;
 
   return (
-    <div className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
+    <div data-modal className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
       <div
         className="flex max-h-[80vh] w-[720px] max-w-[92vw] animate-zoom-in flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-2xl"
         onPointerDown={(e) => e.stopPropagation()}

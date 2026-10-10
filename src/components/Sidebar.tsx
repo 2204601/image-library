@@ -51,6 +51,7 @@ import { startPointerDrag } from "./DragLayer";
 import { SHORTCUT_HELP_KEY, useShortcutHelp } from "./ShortcutHelp";
 import { colorHex } from "../lib/colors";
 import { comboText } from "../lib/shortcuts";
+import { composing } from "../lib/ime";
 import { dragRegion } from "../lib/titleBar";
 
 const collapsedKey = (root: string) => `collapsed:${root}`;
@@ -205,6 +206,7 @@ function InlineEdit({ value, onDone }: { value: string; onDone: (v: string | nul
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         e.stopPropagation();
+        if (composing(e)) return;
         if (e.key === "Enter") finish(e.currentTarget.value);
         if (e.key === "Escape") finish(null);
       }}
