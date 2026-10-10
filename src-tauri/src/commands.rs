@@ -476,20 +476,26 @@ pub struct ItemView {
     display_path: String,
 }
 
+/// Off the main thread, and the similar view's grouping (slow on a large
+/// library) after letting go of the library, so neither freezes the window.
 #[tauri::command]
-pub fn query_items(state: State<AppState>, query: ItemQuery) -> CmdResult<Vec<ItemView>> {
-    with_lib(&state, |lib| {
-        let items = db::query_items(&lib.conn, &query).map_err(err)?;
-        Ok(items
+pub async fn query_items(app: AppHandle, query: ItemQuery) -> CmdResult<Vec<ItemView>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let (root, rows) = with_lib(&state, |lib| Ok((lib.root.clone(), db::query_rows(&lib.conn, &query).map_err(err)?)))?;
+        Ok(rows
+            .finish()
             .into_iter()
             .map(|item| ItemView {
-                file_path: lib.file_path(&item).display().to_string(),
-                thumb_path: lib.thumb_path(&item).display().to_string(),
-                display_path: lib.display_path(&item).display().to_string(),
+                file_path: crate::library::file_path(&root, &item).display().to_string(),
+                thumb_path: crate::library::thumb_path(&root, &item).display().to_string(),
+                display_path: crate::library::display_path(&root, &item).display().to_string(),
                 item,
             })
             .collect())
     })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
@@ -565,17 +571,31 @@ pub fn restore_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> 
     with_lib(&state, |lib| db::restore_items(&lib.conn, &ids).map_err(err))
 }
 
+/// Rows go under the library's lock, files after it, off the main thread:
+/// emptying a large trash removes thousands of folders.
 #[tauri::command]
-pub fn delete_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
-    with_lib(&state, |lib| lib.delete_items(&ids))
+pub async fn delete_items(app: AppHandle, ids: Vec<String>) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (root, removed) = with_lib(&app.state::<AppState>(), |lib| Ok((lib.root.clone(), lib.delete_rows(&ids)?)))?;
+        crate::library::remove_files(&root, &removed);
+        Ok(())
+    })
+    .await
+    .map_err(err)?
 }
 
 #[tauri::command]
-pub fn empty_trash(state: State<AppState>) -> CmdResult<()> {
-    with_lib(&state, |lib| {
-        let ids = db::trashed_ids(&lib.conn).map_err(err)?;
-        lib.delete_items(&ids)
+pub async fn empty_trash(app: AppHandle) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let (root, removed) = with_lib(&app.state::<AppState>(), |lib| {
+            let ids = db::trashed_ids(&lib.conn).map_err(err)?;
+            Ok((lib.root.clone(), lib.delete_rows(&ids)?))
+        })?;
+        crate::library::remove_files(&root, &removed);
+        Ok(())
     })
+    .await
+    .map_err(err)?
 }
 
 pub(crate) fn item_paths(state: &AppState, ids: &[String]) -> CmdResult<Vec<(Item, PathBuf)>> {
@@ -625,11 +645,24 @@ pub fn set_pinned(state: State<AppState>, ids: Vec<String>, on: bool) -> CmdResu
 }
 
 /// Rotates / flips without touching the files (see orient.rs). Runs off the
-/// main thread because thumbnails are re-rendered. Returns how many changed.
+/// main thread because thumbnails are re-rendered, and renders without
+/// holding the library, which every other command needs. Returns how many changed.
 #[tauri::command]
 pub async fn orient_items(app: AppHandle, ids: Vec<String>, op: crate::orient::OrientOp) -> CmdResult<usize> {
+    /// One at a time: each works from the orientation it read, and two quick
+    /// turns of the same images must add up.
+    static ORIENTING: Mutex<()> = Mutex::new(());
     tauri::async_runtime::spawn_blocking(move || {
-        with_lib(&app.state::<AppState>(), |lib| import::orient(lib, &ids, op))
+        let _one = ORIENTING.lock().unwrap_or_else(|e| e.into_inner());
+        let state = app.state::<AppState>();
+        let job = with_lib(&state, |lib| import::OrientJob::plan(lib, &ids, op))?;
+        let rendered = job.render();
+        with_lib(&state, |lib| {
+            if lib.root != job.root() {
+                return Err("回転中に別のライブラリが開かれました".into());
+            }
+            job.commit(lib, rendered)
+        })
     })
     .await
     .map_err(err)?
@@ -657,25 +690,31 @@ pub fn copy_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<usize> 
 }
 
 /// Copies the original files into `dest`, never overwriting existing files.
+/// Off the main thread (gigabytes may be copied), holding the library only
+/// to look the items up.
 #[tauri::command]
-pub fn export_items(
-    state: State<AppState>,
+pub async fn export_items(
+    app: AppHandle,
     ids: Vec<String>,
     dest: PathBuf,
     subdirs: Option<Vec<String>>,
 ) -> CmdResult<usize> {
-    let items = item_paths(&state, &ids)?;
-    for (item, src) in &items {
-        // The folder under `dest` given for this item (same position as its id).
-        let sub = subdirs
-            .as_ref()
-            .and_then(|s| s.get(ids.iter().position(|x| *x == item.id)?))
-            .map_or("", String::as_str);
-        let dir = export_dir(&dest, sub);
-        fs::create_dir_all(&dir).map_err(err)?;
-        fs::copy(src, export_target(&dir, &item.name, &item.ext)).map_err(err)?;
-    }
-    Ok(items.len())
+    tauri::async_runtime::spawn_blocking(move || {
+        let items = item_paths(&app.state::<AppState>(), &ids)?;
+        for (item, src) in &items {
+            // The folder under `dest` given for this item (same position as its id).
+            let sub = subdirs
+                .as_ref()
+                .and_then(|s| s.get(ids.iter().position(|x| *x == item.id)?))
+                .map_or("", String::as_str);
+            let dir = export_dir(&dest, sub);
+            fs::create_dir_all(&dir).map_err(err)?;
+            fs::copy(src, export_target(&dir, &item.name, &item.ext)).map_err(err)?;
+        }
+        Ok(items.len())
+    })
+    .await
+    .map_err(err)?
 }
 
 /// `dest` plus a relative folder path ("旅行/2025/京都", `/`-separated), each

@@ -157,60 +157,95 @@ pub(crate) fn write_thumb(thumb: &DynamicImage, dir: &Path, id: &str) -> Result<
 /// thumbnail is kept; the previous rotated one is removed. Returns how many
 /// items changed.
 pub fn orient(lib: &mut Library, ids: &[String], op: OrientOp) -> Result<usize, String> {
-    let items = db::get_items(&lib.conn, ids).map_err(|e| e.to_string())?;
-    let thumbs = lib.root.join("thumbs");
-    let rendered: Vec<Result<(&db::Item, Orientation, String, (u32, u32)), String>> = items
-        .par_iter()
-        .filter(|it| it.kind == db::Kind::Image)
-        .filter_map(|it| {
-            let from = Orientation::new(it.rotation, it.flipped);
-            let to = from.then(op);
-            (to != from).then_some((it, from, to))
-        })
-        .map(|(it, from, to)| {
-            let base = orient::base_thumb(&it.thumb);
-            let name = to.thumb_name(&base);
-            if !to.is_identity() {
-                let img = image::open(thumbs.join(&base)).map_err(|e| format!("{}: {e}", it.name))?;
-                let out = to.apply(&img);
-                let path = thumbs.join(&name);
-                if name.ends_with(".png") {
-                    out.save_with_format(&path, ImageFormat::Png).map_err(|e| e.to_string())?;
-                } else {
-                    write_jpeg(&out, &path, 85)?;
-                }
-            }
-            // width / height are the displayed size: swap when going between upright and sideways.
-            let size = if from.swaps_axes() != to.swaps_axes() { (it.height, it.width) } else { (it.width, it.height) };
-            Ok((it, to, name, size))
-        })
-        .collect();
+    let job = OrientJob::plan(lib, ids, op)?;
+    let rendered = job.render();
+    job.commit(lib, rendered)
+}
 
-    let mut first_err = None;
-    let mut stale = Vec::new();
-    let tx = lib.conn.transaction().map_err(|e| e.to_string())?;
-    let mut changed = 0;
-    for r in rendered {
-        match r {
-            Ok((it, to, name, (w, h))) => {
-                db::set_orientation(&tx, &it.id, to, w, h, &name).map_err(|e| e.to_string())?;
-                if it.thumb != name && it.thumb != orient::base_thumb(&it.thumb) {
-                    stale.push(thumbs.join(&it.thumb));
+/// Orienting in three steps, so the slow middle one (re-rendering thumbnails)
+/// runs without holding the library: `plan` and `commit` need it, `render`
+/// doesn't (commands.rs `orient_items`).
+pub struct OrientJob {
+    root: PathBuf,
+    /// Images whose orientation changes: (item, from, to).
+    changes: Vec<(db::Item, Orientation, Orientation)>,
+}
+
+/// A rendered change: (id, old thumbnail, orientation, new thumbnail, displayed size).
+type Rendered = Result<(String, String, Orientation, String, (u32, u32)), String>;
+
+impl OrientJob {
+    pub fn plan(lib: &Library, ids: &[String], op: OrientOp) -> Result<Self, String> {
+        let items = db::get_items(&lib.conn, ids).map_err(|e| e.to_string())?;
+        let changes = items
+            .into_iter()
+            .filter(|it| it.kind == db::Kind::Image)
+            .filter_map(|it| {
+                let from = Orientation::new(it.rotation, it.flipped);
+                let to = from.then(op);
+                (to != from).then_some((it, from, to))
+            })
+            .collect();
+        Ok(Self { root: lib.root.clone(), changes })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn render(&self) -> Vec<Rendered> {
+        let thumbs = self.root.join("thumbs");
+        self.changes
+            .par_iter()
+            .map(|(it, from, to)| {
+                let base = orient::base_thumb(&it.thumb);
+                let name = to.thumb_name(&base);
+                if !to.is_identity() {
+                    let img = image::open(thumbs.join(&base)).map_err(|e| format!("{}: {e}", it.name))?;
+                    let out = to.apply(&img);
+                    let path = thumbs.join(&name);
+                    if name.ends_with(".png") {
+                        out.save_with_format(&path, ImageFormat::Png).map_err(|e| e.to_string())?;
+                    } else {
+                        write_jpeg(&out, &path, 85)?;
+                    }
                 }
-                changed += 1;
-            }
-            Err(e) => {
-                first_err.get_or_insert(e);
+                // width / height are the displayed size: swap when going between upright and sideways.
+                let size = if from.swaps_axes() != to.swaps_axes() { (it.height, it.width) } else { (it.width, it.height) };
+                Ok((it.id.clone(), it.thumb.clone(), *to, name, size))
+            })
+            .collect()
+    }
+
+    /// Records the rendered changes; `lib` must be the library planned in.
+    pub fn commit(&self, lib: &mut Library, rendered: Vec<Rendered>) -> Result<usize, String> {
+        let thumbs = self.root.join("thumbs");
+        let mut first_err = None;
+        let mut stale = Vec::new();
+        let tx = lib.conn.transaction().map_err(|e| e.to_string())?;
+        let mut changed = 0;
+        for r in rendered {
+            match r {
+                Ok((id, old, to, name, (w, h))) => {
+                    db::set_orientation(&tx, &id, to, w, h, &name).map_err(|e| e.to_string())?;
+                    if old != name && old != orient::base_thumb(&old) {
+                        stale.push(thumbs.join(&old));
+                    }
+                    changed += 1;
+                }
+                Err(e) => {
+                    first_err.get_or_insert(e);
+                }
             }
         }
-    }
-    tx.commit().map_err(|e| e.to_string())?;
-    for p in stale {
-        let _ = fs::remove_file(p);
-    }
-    match first_err {
-        Some(e) if changed == 0 => Err(e),
-        _ => Ok(changed),
+        tx.commit().map_err(|e| e.to_string())?;
+        for p in stale {
+            let _ = fs::remove_file(p);
+        }
+        match first_err {
+            Some(e) if changed == 0 => Err(e),
+            _ => Ok(changed),
+        }
     }
 }
 

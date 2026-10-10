@@ -709,7 +709,8 @@ const SUBFOLDERS_CTE: &str = "WITH RECURSIVE sub(id) AS (
        SELECT ? UNION ALL SELECT c.id FROM folders c JOIN sub ON c.parent_id = sub.id)
      SELECT id FROM sub";
 
-pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
+/// Rows of a query; `finish` does the rest (see `QueryRows`).
+pub fn query_rows(conn: &Connection, q: &ItemQuery) -> DbResult<QueryRows> {
     let mut wheres: Vec<String> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
 
@@ -792,22 +793,62 @@ pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(args.iter().map(|b| b.as_ref())), row_to_item)?;
     let items = rows.collect::<DbResult<Vec<_>>>()?;
-    if q.view == View::Similar {
-        return similar_groups(conn, items, q.similar_level);
+    let similar = match q.view {
+        View::Similar => Some(SimilarInput::read(conn, q.similar_level)?),
+        _ => None,
+    };
+    Ok(QueryRows { items, similar })
+}
+
+/// The items of a query, as `query_items` returns them.
+pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
+    Ok(query_rows(conn, q)?.finish())
+}
+
+/// A query's rows, with the similar view's grouping still to do: it compares
+/// many pairs on a large library and needs no database, so the app runs it
+/// after letting go of the library (commands.rs `query_items`).
+pub struct QueryRows {
+    items: Vec<Item>,
+    similar: Option<SimilarInput>,
+}
+
+impl QueryRows {
+    pub fn finish(self) -> Vec<Item> {
+        match self.similar {
+            Some(s) => similar_groups(self.items, s),
+            None => self.items,
+        }
     }
-    Ok(items)
+}
+
+/// What the look-alike grouping reads from the database.
+struct SimilarInput {
+    level: similar::Level,
+    /// id -> (perceptual hash, mean colour).
+    hashes: HashMap<String, (i64, u32)>,
+    /// Pairs the user said aren't duplicates.
+    dismissed: Vec<(String, String)>,
+}
+
+impl SimilarInput {
+    fn read(conn: &Connection, level: similar::Level) -> DbResult<Self> {
+        let mut stmt =
+            conn.prepare("SELECT id, phash, pcolor FROM items WHERE deleted_at IS NULL AND phash IS NOT NULL")?;
+        let hashes = stmt
+            .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get::<_, Option<u32>>(2)?.unwrap_or(0)))))?
+            .collect::<DbResult<_>>()?;
+        let mut stmt = conn.prepare("SELECT a, b FROM dismissed_pairs")?;
+        let dismissed = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<DbResult<_>>()?;
+        Ok(Self { level, hashes, dismissed })
+    }
 }
 
 /// Keeps only items that have look-alikes among `items`, grouped together.
 /// Groups follow the query's sort order; inside a group the best copy
 /// (most pixels, then largest file, then oldest) comes first.
-fn similar_groups(conn: &Connection, items: Vec<Item>, level: similar::Level) -> DbResult<Vec<Item>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, phash, pcolor FROM items WHERE deleted_at IS NULL AND phash IS NOT NULL",
-    )?;
-    let hashes: HashMap<String, (i64, u32)> = stmt
-        .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get::<_, Option<u32>>(2)?.unwrap_or(0)))))?
-        .collect::<DbResult<_>>()?;
+fn similar_groups(items: Vec<Item>, input: SimilarInput) -> Vec<Item> {
+    let SimilarInput { level, hashes, dismissed } = input;
     let mut items: Vec<Option<Item>> = items
         .into_iter()
         .filter(|i| hashes.contains_key(&i.id))
@@ -826,15 +867,11 @@ fn similar_groups(conn: &Connection, items: Vec<Item>, level: similar::Level) ->
     let index: HashMap<&str, usize> =
         items.iter().flatten().enumerate().map(|(k, i)| (i.id.as_str(), k)).collect();
     let mut excluded: HashSet<(usize, usize)> = HashSet::new();
-    let mut stmt = conn.prepare("SELECT a, b FROM dismissed_pairs")?;
-    let pairs = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-    for pair in pairs {
-        let (a, b) = pair?;
+    for (a, b) in &dismissed {
         if let (Some(&i), Some(&j)) = (index.get(a.as_str()), index.get(b.as_str())) {
             excluded.insert((i.min(j), i.max(j)));
         }
     }
-    drop(stmt);
     let mut out = Vec::new();
     for (n, group) in similar::groups_except(&entries, level, &excluded).into_iter().enumerate() {
         let mut members: Vec<Item> = group.into_iter().filter_map(|k| items[k].take()).collect();
@@ -848,7 +885,7 @@ fn similar_groups(conn: &Connection, items: Vec<Item>, level: similar::Level) ->
             out.push(m);
         }
     }
-    Ok(out)
+    out
 }
 
 /// Live items whose perceptual hash hasn't been computed: (id, unrotated

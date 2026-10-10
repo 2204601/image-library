@@ -134,38 +134,62 @@ impl Library {
     }
 
     pub fn file_path(&self, item: &Item) -> PathBuf {
-        self.root.join("images").join(&item.id).join(&item.file_name)
+        file_path(&self.root, item)
     }
 
     pub fn thumb_path(&self, item: &Item) -> PathBuf {
-        self.root.join("thumbs").join(&item.thumb)
+        thumb_path(&self.root, item)
     }
 
     /// What the viewer shows: the JPEG display copy if there is one.
     pub fn display_path(&self, item: &Item) -> PathBuf {
-        match &item.preview {
-            Some(p) => self.root.join("previews").join(p),
-            None => self.file_path(item),
-        }
+        display_path(&self.root, item)
     }
 
     /// Permanently deletes items (rows and files).
     pub fn delete_items(&self, ids: &[String]) -> Result<(), String> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        let removed = db::delete_items(&self.conn, ids).map_err(|e| e.to_string())?;
-        for item in removed {
-            let _ = fs::remove_dir_all(self.root.join("images").join(&item.id));
-            let _ = fs::remove_file(self.thumb_path(&item));
-            // The unrotated thumbnail is kept next to a rotated one.
-            let _ = fs::remove_file(self.root.join("thumbs").join(crate::orient::base_thumb(&item.thumb)));
-            if let Some(p) = &item.preview {
-                let _ = fs::remove_file(self.root.join("previews").join(p));
-            }
-            crate::files::preview::remove(&self.root.join("previews"), &item.id);
-        }
+        let removed = self.delete_rows(ids)?;
+        remove_files(&self.root, &removed);
         Ok(())
+    }
+
+    /// The database half of `delete_items`; the files go with `remove_files`,
+    /// which needn't hold the library (there may be thousands).
+    pub fn delete_rows(&self, ids: &[String]) -> Result<Vec<Item>, String> {
+        if ids.is_empty() {
+            return Ok(vec![]);
+        }
+        db::delete_items(&self.conn, ids).map_err(|e| e.to_string())
+    }
+}
+
+/// An item's paths in the library at `root` (also without the library held).
+pub fn file_path(root: &Path, item: &Item) -> PathBuf {
+    root.join("images").join(&item.id).join(&item.file_name)
+}
+
+pub fn thumb_path(root: &Path, item: &Item) -> PathBuf {
+    root.join("thumbs").join(&item.thumb)
+}
+
+pub fn display_path(root: &Path, item: &Item) -> PathBuf {
+    match &item.preview {
+        Some(p) => root.join("previews").join(p),
+        None => file_path(root, item),
+    }
+}
+
+/// Removes the files of deleted items (`Library::delete_rows`).
+pub fn remove_files(root: &Path, removed: &[Item]) {
+    for item in removed {
+        let _ = fs::remove_dir_all(root.join("images").join(&item.id));
+        let _ = fs::remove_file(thumb_path(root, item));
+        // The unrotated thumbnail is kept next to a rotated one.
+        let _ = fs::remove_file(root.join("thumbs").join(crate::orient::base_thumb(&item.thumb)));
+        if let Some(p) = &item.preview {
+            let _ = fs::remove_file(root.join("previews").join(p));
+        }
+        crate::files::preview::remove(&root.join("previews"), &item.id);
     }
 }
 
