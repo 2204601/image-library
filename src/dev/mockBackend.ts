@@ -740,7 +740,14 @@ function handle(cmd: string, a: any): unknown {
         const folderId = hasFolder
           ? null
           : (folders.find((f) => g.remove.some((rid) => inFolder(rid, f.id)))?.id ?? null);
-        return { keep: g.keep, remove: g.remove, addedTags, rating: best > keep.rating ? best : null, folderId };
+        return {
+          keep: g.keep,
+          remove: g.remove,
+          addedTags,
+          rating: best > keep.rating ? best : null,
+          ratingBefore: keep.rating,
+          folderId,
+        };
       });
       if (cmd === "resolve_duplicates") {
         for (const e of effects) {

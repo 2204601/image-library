@@ -298,7 +298,7 @@ export async function confirmDuplicates() {
       false,
       {
         label: "元に戻す",
-        onClick: () => st().run(() => undoDuplicates(removed, effects, review.groups)),
+        onClick: () => st().run(() => undoDuplicates(removed, effects)),
       },
     );
   } catch (e) {
@@ -312,16 +312,15 @@ export async function confirmDuplicates() {
  * Undoes a tidy-up: the trashed copies come back, and the kept ones lose
  * what they were given (tags, the higher rating, the folder).
  */
-async function undoDuplicates(removed: string[], effects: DuplicateEffect[], groups: { keep: Item }[]) {
+async function undoDuplicates(removed: string[], effects: DuplicateEffect[]) {
   await api.restoreItems(removed);
-  const ratingBefore = new Map(groups.map((g) => [g.keep.id, g.keep.rating]));
   const tagId = new Map(st().tags.map((t) => [t.name, t.id]));
   for (const e of effects) {
     for (const name of e.addedTags) {
       const id = tagId.get(name);
       if (id !== undefined) await api.removeTag([e.keep], id);
     }
-    if (e.rating != null) await api.setRating([e.keep], ratingBefore.get(e.keep) ?? 0);
+    if (e.rating != null) await api.setRating([e.keep], e.ratingBefore);
     if (e.folderId) await api.removeFromFolder([e.keep], e.folderId);
   }
 }

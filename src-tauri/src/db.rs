@@ -1199,6 +1199,8 @@ pub struct DuplicateEffect {
     pub added_tags: Vec<String>,
     /// The kept copy's new rating, if it goes up.
     pub rating: Option<u8>,
+    /// Its rating before, to undo with.
+    pub rating_before: u8,
     /// Folder the kept copy moves into (only when it has none of its own).
     pub folder_id: Option<String>,
 }
@@ -1245,6 +1247,7 @@ pub fn plan_duplicates(conn: &Connection, groups: &[DuplicateGroup]) -> DbResult
             remove: g.remove.clone(),
             added_tags,
             rating,
+            rating_before: own,
             folder_id,
         });
     }
