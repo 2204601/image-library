@@ -35,6 +35,20 @@ pub fn is_file(ext: &str) -> bool {
     EXTS.contains(&ext)
 }
 
+/// Whether `data` (the start of a file is enough) is a PDF: `%PDF-` within
+/// the first 1024 bytes, as PDF readers accept. A PDF is shown in the web
+/// view as a document, and the asset protocol picks its type from the
+/// content: HTML named `.pdf` would run as a page that can read the library.
+pub fn looks_like_pdf(data: &[u8]) -> bool {
+    data[..data.len().min(1024)].windows(5).any(|w| w == b"%PDF-")
+}
+
+/// `looks_like_pdf` for a stored file.
+pub fn is_pdf(path: &Path) -> bool {
+    let mut head = Vec::with_capacity(1024);
+    std::fs::File::open(path).and_then(|f| f.take(1024).read_to_end(&mut head)).is_ok() && looks_like_pdf(&head)
+}
+
 /// iWork documents saved as packages (folders) rather than single files.
 /// They can't be imported, and their insides shouldn't be either.
 pub fn is_package(path: &Path) -> bool {
@@ -136,12 +150,15 @@ fn embedded_preview(path: &Path) -> Option<DynamicImage> {
     let mut zip = zip::ZipArchive::new(std::fs::File::open(path).ok()?).ok()?;
     for name in ENTRIES {
         let Ok(mut entry) = zip.by_name(name) else { continue };
-        // A preview is small; don't inflate anything unreasonable.
-        if entry.size() > 32 << 20 {
+        // A preview is small; don't inflate anything unreasonable. The size
+        // in the zip is only what the entry claims, so the read is capped
+        // too (a compression bomb inflates far beyond it).
+        const MAX: u64 = 32 << 20;
+        if entry.size() > MAX {
             continue;
         }
         let mut data = Vec::with_capacity(entry.size() as usize);
-        if entry.read_to_end(&mut data).is_ok() {
+        if entry.by_ref().take(MAX + 1).read_to_end(&mut data).is_ok() && data.len() as u64 <= MAX {
             if let Ok(img) = image::load_from_memory(&data) {
                 return Some(img);
             }
