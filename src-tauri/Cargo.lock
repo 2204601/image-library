@@ -2200,7 +2200,7 @@ dependencies = [
 
 [[package]]
 name = "image-library"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "base64 0.22.1",
  "brotli 7.0.0",
