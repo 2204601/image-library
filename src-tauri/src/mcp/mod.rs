@@ -28,6 +28,9 @@ use std::sync::{Arc, Mutex};
 
 pub const PORT: u16 = 41621;
 const MAX_BODY: u64 = 4 * 1024 * 1024;
+/// Messages in one batch: each tool keeps to its own limits (10 images to
+/// view, ...), which a batch of thousands of calls would get around.
+const MAX_BATCH: usize = 20;
 
 /// Protocol revisions this server speaks, newest first. It only uses what
 /// they have in common (tools, text and image content).
@@ -112,6 +115,9 @@ fn post(body: &mut dyn Read, length: Option<u64>, host: &dyn Host) -> (u16, Opti
     let call = |name: &str, args: &Value| tools::call(host, name, args);
     // Batches were dropped from the protocol (2025-06-18) but cost nothing to answer.
     let reply = match &msg {
+        Value::Array(all) if all.len() > MAX_BATCH => {
+            return (400, Some(rpc_error(Value::Null, -32600, &format!("一度に送れるのは {MAX_BATCH} 件までです"))));
+        }
         Value::Array(all) => {
             let replies: Vec<Value> = all.iter().filter_map(|m| respond(m, &call)).collect();
             (!replies.is_empty()).then_some(Value::Array(replies))

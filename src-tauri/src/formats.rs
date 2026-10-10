@@ -127,9 +127,20 @@ fn decode_svg(bytes: &[u8]) -> Result<Decoded, String> {
 /// `<image href>` may only embed a `data:` URL. usvg's default reads any
 /// path it is given: a local picture would end up in the thumbnail, and a
 /// UNC path (`\\host\share`) would make Windows authenticate to that host.
+///
+/// Text is drawn with the system's fonts (usvg starts with none, so every
+/// `<text>` was left out), loaded once for all SVGs.
 pub fn svg_options() -> resvg::usvg::Options<'static> {
+    static FONTS: std::sync::OnceLock<std::sync::Arc<resvg::usvg::fontdb::Database>> = std::sync::OnceLock::new();
     let mut opt = resvg::usvg::Options::default();
     opt.image_href_resolver.resolve_string = Box::new(|_, _| None);
+    opt.fontdb = FONTS
+        .get_or_init(|| {
+            let mut db = resvg::usvg::fontdb::Database::new();
+            db.load_system_fonts();
+            std::sync::Arc::new(db)
+        })
+        .clone();
     opt
 }
 
@@ -266,6 +277,17 @@ mod tests {
         let img = decode(svg.as_bytes(), "svg").unwrap().image.to_rgba8();
         assert_eq!(img.get_pixel(200, 256).0[3], 0, "the local file isn't read");
         assert_eq!(img.get_pixel(800, 256).0, [0, 255, 0, 255]);
+    }
+
+    #[test]
+    fn svg_text_is_drawn() {
+        if svg_options().fontdb.is_empty() {
+            return; // no system fonts here
+        }
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+            <text x="10" y="70" font-size="60" fill="#000">Hi</text></svg>"##;
+        let img = decode(svg, "svg").unwrap().image.to_rgba8();
+        assert!(img.pixels().any(|p| p.0[3] > 0), "the text left marks");
     }
 
     #[test]

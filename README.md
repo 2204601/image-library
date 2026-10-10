@@ -180,7 +180,7 @@ npm run tauri build    # 配布用ビルド（.dmg / .msi）
 - 画像・フォント・ファイルの分け方（モード）と、共通基盤と種類ごとのコードの境界は [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) にまとめてある。
 - テスト用ライブラリの生成：`npm run seed -- /path/to/Test.library 10000`
   （1 万枚の取り込み 約 6 秒、検索+並び替えクエリ 約 6ms ／ Apple Silicon・release ビルド）
-- ブラウザ拡張の開発：`cargo run --manifest-path src-tauri/Cargo.toml --example webserver -- /path/to/Test.library` でアプリなしに受付サーバーを起動し（`extension/config.json` に接続キーを書く。「アプリと接続」は確認なしで許可する）、Chrome で `extension/` を読み込む。アプリが起動中でポートが使われているときは `-- <library> <拡張のフォルダ> 41699` のように別のポートを指定する（`config.json` にそのポートが書かれる）。拡張機能のファイルを変えたら `chrome://extensions` で再読み込み
+- ブラウザ拡張の開発：`cargo run --manifest-path src-tauri/Cargo.toml --example webserver -- /path/to/Test.library` でアプリなしに受付サーバーを起動し（`extension/config.json` に接続キーを書く。「アプリと接続」は確認なしで許可する）、Chrome で `extension/` を読み込む。アプリと同時に動かせるよう、ポートはアプリの 41620 ではなく 41630（ほかのポートは `-- <library> <拡張のフォルダ> 41699` のように指定。`config.json` にそのポートが書かれる）。拡張機能のファイルを変えたら `chrome://extensions` で再読み込み
 
 ### 構成
 

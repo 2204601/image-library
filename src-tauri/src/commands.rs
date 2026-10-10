@@ -138,19 +138,40 @@ fn settings_path(app: &AppHandle) -> CmdResult<PathBuf> {
 }
 
 fn load_settings(app: &AppHandle) -> Settings {
-    settings_path(app)
-        .ok()
-        .and_then(|p| fs::read(p).ok())
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
+    let Ok(path) = settings_path(app) else { return Settings::default() };
+    let Ok(bytes) = fs::read(&path) else { return Settings::default() };
+    serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+        // Unreadable (cut short by a crash before saves were atomic, or edited
+        // by hand): kept aside rather than overwritten by the next save, so
+        // the library list and connection keys can still be recovered.
+        log::warn!("{}: 読み込めないため退避します: {e}", path.display());
+        let _ = fs::rename(&path, path.with_extension(format!("json.bad-{}", db::now_ms())));
+        Settings::default()
+    })
 }
 
+/// Written to a temporary file and renamed over the old one, so a crash
+/// mid-write never leaves half a file.
 fn save_settings(app: &AppHandle, s: &Settings) -> CmdResult<()> {
     let path = settings_path(app)?;
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir).map_err(err)?;
     }
-    fs::write(path, serde_json::to_vec_pretty(s).map_err(err)?).map_err(err)
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_vec_pretty(s).map_err(err)?).map_err(err)?;
+    fs::rename(&tmp, &path).map_err(err)
+}
+
+/// Read, change and save the settings as one step. Commands run on several
+/// threads, and two loading the same file then saving would lose one's change.
+static SETTINGS_LOCK: Mutex<()> = Mutex::new(());
+
+fn update_settings<R>(app: &AppHandle, f: impl FnOnce(&mut Settings) -> R) -> CmdResult<R> {
+    let _guard = SETTINGS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut settings = load_settings(app);
+    let r = f(&mut settings);
+    save_settings(app, &settings)?;
+    Ok(r)
 }
 
 // -------------------------------------------------------------- library
@@ -166,12 +187,17 @@ pub struct LibraryInfo {
 
 /// This app as the holder of a library's lock (library.rs `Holder`).
 pub(crate) fn this_app(app: &AppHandle) -> Holder {
-    let mut settings = load_settings(app);
-    if settings.machine_id.is_empty() {
-        settings.machine_id = uuid::Uuid::new_v4().simple().to_string();
-        let _ = save_settings(app, &settings);
+    let mut machine = load_settings(app).machine_id;
+    if machine.is_empty() {
+        machine = update_settings(app, |s| {
+            if s.machine_id.is_empty() {
+                s.machine_id = uuid::Uuid::new_v4().simple().to_string();
+            }
+            s.machine_id.clone()
+        })
+        .unwrap_or_default();
     }
-    Holder { machine: settings.machine_id, name: computer_name(), pid: std::process::id(), at: db::now_ms() }
+    Holder { machine, name: computer_name(), pid: std::process::id(), at: db::now_ms() }
 }
 
 /// The PC's name as the user knows it ("鈴木の MacBook Pro").
@@ -232,10 +258,10 @@ fn activate(app: &AppHandle, state: &AppState, mut lib: Library) -> CmdResult<Li
         root: lib.root.display().to_string(),
         name: library_name(&lib.root),
     };
-    let mut settings = load_settings(app);
-    settings.last_library = Some(lib.root.clone());
-    settings.remember(&lib.root, true);
-    save_settings(app, &settings)?;
+    update_settings(app, |s| {
+        s.last_library = Some(lib.root.clone());
+        s.remember(&lib.root, true);
+    })?;
     *state.lib.lock().unwrap() = Some(lib);
     Ok(info)
 }
@@ -280,7 +306,11 @@ pub fn create_library(
     let path = if path.extension().is_some_and(|e| e == "library") {
         path
     } else {
-        path.with_extension("library")
+        // Appended, not `with_extension`: that replaces a dot in the name
+        // ("2025.01 Photos" became "2025.library", opening another library).
+        let mut p = path.into_os_string();
+        p.push(".library");
+        PathBuf::from(p)
     };
     // An existing library at the path is opened: it may be open elsewhere.
     if open.unwrap_or(true) {
@@ -290,9 +320,7 @@ pub fn create_library(
     if open.unwrap_or(true) {
         return activate(&app, &state, lib);
     }
-    let mut settings = load_settings(&app);
-    settings.remember(&lib.root, false);
-    save_settings(&app, &settings)?;
+    update_settings(&app, |s| s.remember(&lib.root, false))?;
     Ok(LibraryInfo { root: lib.root.display().to_string(), name: library_name(&lib.root) })
 }
 
@@ -337,20 +365,18 @@ pub fn list_libraries(app: AppHandle, state: State<AppState>) -> CmdResult<Vec<L
 
 #[tauri::command]
 pub fn set_library_favorite(app: AppHandle, path: PathBuf, favorite: bool) -> CmdResult<()> {
-    let mut settings = load_settings(&app);
-    settings.remember(&path, false);
-    if let Some(l) = settings.libraries.iter_mut().find(|l| l.path == path) {
-        l.favorite = favorite;
-    }
-    save_settings(&app, &settings)
+    update_settings(&app, |s| {
+        s.remember(&path, false);
+        if let Some(l) = s.libraries.iter_mut().find(|l| l.path == path) {
+            l.favorite = favorite;
+        }
+    })
 }
 
 /// Takes a library off the list (the folder is left alone).
 #[tauri::command]
 pub fn forget_library(app: AppHandle, path: PathBuf) -> CmdResult<()> {
-    let mut settings = load_settings(&app);
-    settings.libraries.retain(|l| l.path != path);
-    save_settings(&app, &settings)
+    update_settings(&app, |s| s.libraries.retain(|l| l.path != path))
 }
 
 /// Copies items (with their tags, folder, rating, favourite, ...) into another
@@ -386,9 +412,7 @@ pub async fn transfer_items(
         if move_items {
             summary.trashed = crate::transfer::trash_in_source(&state.lib, &src_root, &summary.done_ids)?;
         }
-        let mut settings = load_settings(&app);
-        settings.remember(&dest, false);
-        let _ = save_settings(&app, &settings);
+        let _ = update_settings(&app, |s| s.remember(&dest, false));
         Ok(summary)
     })
     .await
@@ -413,10 +437,10 @@ pub fn get_app_settings(app: AppHandle) -> AppSettings {
 
 #[tauri::command]
 pub fn set_app_settings(app: AppHandle, settings: AppSettings) -> CmdResult<AppSettings> {
-    let mut all = load_settings(&app);
-    all.app = settings;
-    save_settings(&app, &all)?;
-    Ok(all.app)
+    update_settings(&app, |all| {
+        all.app = settings;
+        all.app.clone()
+    })
 }
 
 /// The open library's own settings (`settings` table in library.db), as JSON by key.
@@ -871,9 +895,11 @@ pub(crate) fn percent_decode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
+        // On bytes: slicing the str would panic inside a multi-byte character ("%aあ").
+        let hex = |b: u8| (b as char).to_digit(16);
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(b);
+            if let (Some(h), Some(l)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
+                out.push((h * 16 + l) as u8);
                 i += 3;
                 continue;
             }
@@ -998,12 +1024,12 @@ pub fn web_import_status(app: AppHandle) -> CmdResult<WebImportStatus> {
 #[tauri::command]
 pub async fn set_web_import(app: AppHandle, enabled: bool) -> CmdResult<WebImportStatus> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut settings = load_settings(&app);
-        settings.web_import.enabled = enabled;
-        if settings.web_import.token.is_empty() {
-            settings.web_import.token = new_token();
-        }
-        save_settings(&app, &settings)?;
+        update_settings(&app, |s| {
+            s.web_import.enabled = enabled;
+            if s.web_import.token.is_empty() {
+                s.web_import.token = new_token();
+            }
+        })?;
         apply_web_import(&app);
         web_status(&app)
     })
@@ -1016,12 +1042,13 @@ pub async fn set_web_import(app: AppHandle, enabled: bool) -> CmdResult<WebImpor
 #[tauri::command]
 pub async fn reset_web_import_token(app: AppHandle) -> CmdResult<WebImportStatus> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut settings = load_settings(&app);
-        settings.web_import.token = new_token();
-        save_settings(&app, &settings)?;
+        let token = update_settings(&app, |s| {
+            s.web_import.token = new_token();
+            s.web_import.token.clone()
+        })?;
         let dir = extension_dir(&app)?;
         if dir.join("manifest.json").is_file() {
-            write_extension_config(&dir, &settings.web_import.token)?;
+            write_extension_config(&dir, &token)?;
         }
         apply_web_import(&app);
         web_status(&app)
@@ -1054,16 +1081,20 @@ pub async fn install_extension(app: AppHandle) -> CmdResult<String> {
         if !src.join("manifest.json").is_file() {
             return Err(format!("拡張機能のファイルが見つかりません: {}", src.display()));
         }
-        let mut settings = load_settings(&app);
-        if settings.web_import.token.is_empty() {
-            settings.web_import.token = new_token();
-            save_settings(&app, &settings)?;
+        let mut token = load_settings(&app).web_import.token;
+        if token.is_empty() {
+            token = update_settings(&app, |s| {
+                if s.web_import.token.is_empty() {
+                    s.web_import.token = new_token();
+                }
+                s.web_import.token.clone()
+            })?;
             apply_web_import(&app);
         }
         let dir = extension_dir(&app)?;
         let _ = fs::remove_dir_all(&dir);
         copy_dir(&src, &dir).map_err(err)?;
-        write_extension_config(&dir, &settings.web_import.token)?;
+        write_extension_config(&dir, &token)?;
         let _ = tauri_plugin_opener::reveal_item_in_dir(&dir);
         Ok(dir.display().to_string())
     })
@@ -1157,12 +1188,12 @@ pub fn mcp_status(app: AppHandle) -> McpStatus {
 #[tauri::command]
 pub async fn set_mcp(app: AppHandle, enabled: bool) -> CmdResult<McpStatus> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut settings = load_settings(&app);
-        settings.mcp.enabled = enabled;
-        if settings.mcp.token.is_empty() {
-            settings.mcp.token = new_token();
-        }
-        save_settings(&app, &settings)?;
+        update_settings(&app, |s| {
+            s.mcp.enabled = enabled;
+            if s.mcp.token.is_empty() {
+                s.mcp.token = new_token();
+            }
+        })?;
         apply_mcp(&app);
         Ok(mcp_state(&app))
     })
@@ -1175,9 +1206,7 @@ pub async fn set_mcp(app: AppHandle, enabled: bool) -> CmdResult<McpStatus> {
 #[tauri::command]
 pub async fn reset_mcp_token(app: AppHandle) -> CmdResult<McpStatus> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut settings = load_settings(&app);
-        settings.mcp.token = new_token();
-        save_settings(&app, &settings)?;
+        update_settings(&app, |s| s.mcp.token = new_token())?;
         apply_mcp(&app);
         Ok(mcp_state(&app))
     })
@@ -1398,5 +1427,6 @@ mod tests {
     fn percent_decode_utf8() {
         assert_eq!(super::percent_decode("%E7%94%BB%E5%83%8F.png"), "画像.png");
         assert_eq!(super::percent_decode("a%2"), "a%2");
+        assert_eq!(super::percent_decode("%aあ"), "%aあ");
     }
 }
