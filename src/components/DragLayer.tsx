@@ -112,11 +112,9 @@ async function drop(drag: Drag, target: string) {
     const siblings = s.folders.filter((f) => f.parentId === ref.parentId && f.id !== drag.id);
     const before =
       side === "before" ? id : (siblings[siblings.findIndex((f) => f.id === id) + 1]?.id ?? null);
-    await s.run(() => api.placeFolder(drag.id, ref.parentId, before));
-    s.flashTarget(`folder:${drag.id}`);
+    if (await s.run(() => api.placeFolder(drag.id, ref.parentId, before))) s.flashTarget(`folder:${drag.id}`);
   } else {
-    await s.run(() => api.moveFolder(drag.id, target === "root" ? null : target.slice(7)));
-    s.flashTarget(target);
+    if (await s.run(() => api.moveFolder(drag.id, target === "root" ? null : target.slice(7)))) s.flashTarget(target);
   }
 }
 

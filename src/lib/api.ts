@@ -24,6 +24,11 @@ export interface TransferSummary {
   failed: string[];
   /** Arrived items of kinds the destination isn't used for (its `modes` setting). */
   unusedKinds: Partial<Record<ItemKind, number>>;
+  /**
+   * Moving: how many went to this library's trash; null when another library
+   * was opened (or this one closed) during the copy, so they stayed.
+   */
+  trashed: number | null;
 }
 
 /** Settings of the whole app (settings.json): the settings screen's "一般" tab. */

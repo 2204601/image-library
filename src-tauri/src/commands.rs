@@ -373,18 +373,18 @@ pub async fn transfer_items(
             }
         }
         let state = app.state::<AppState>();
-        let src = with_lib(&state, |lib| {
+        let (src_root, src) = with_lib(&state, |lib| {
             let ids = match ids {
                 Some(ids) => ids,
                 None => db::live_ids(&lib.conn, kind).map_err(err)?,
             };
-            crate::transfer::Source::read(lib, &ids)
+            Ok((lib.root.clone(), crate::transfer::Source::read(lib, &ids)?))
         })?;
-        let summary = crate::transfer::copy_into(&src, &dest, |done, total| {
+        let mut summary = crate::transfer::copy_into(&src, &dest, |done, total| {
             let _ = app.emit("transfer-progress", Progress { done, total });
         })?;
-        if move_items && !summary.done_ids.is_empty() {
-            with_lib(&state, |lib| db::trash_items(&lib.conn, &summary.done_ids).map_err(err))?;
+        if move_items {
+            summary.trashed = crate::transfer::trash_in_source(&state.lib, &src_root, &summary.done_ids)?;
         }
         let mut settings = load_settings(&app);
         settings.remember(&dest, false);

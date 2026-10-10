@@ -552,7 +552,7 @@ function handle(cmd: string, a: any): unknown {
     case "transfer_items": {
       const ids: string[] = a.ids ?? items.filter((i) => i.kind === a.kind && i.deletedAt === null).map((i) => i.id);
       if (a.moveItems) for (const i of items) if (ids.includes(i.id)) i.deletedAt = Date.now();
-      return { copied: ids.length - 1, duplicates: 1, failed: [], unusedKinds: {} };
+      return { copied: ids.length - 1, duplicates: 1, failed: [], unusedKinds: {}, trashed: a.moveItems ? ids.length : null };
     }
     case "query_items":
       return query(a.query);
