@@ -27,7 +27,7 @@
 ```
 Claude Code ──(HTTP)────────────────────────┐
                                              ├─▶ アプリ内の MCP サーバー 127.0.0.1:41621/mcp ─▶ library.db
-Claude Desktop ─(stdio)─▶ image-library --mcp ┘     （トークンで認証）
+Claude Desktop ─(stdio)─▶ stockroom --mcp ─────┘     （トークンで認証）
                          （中継するだけ）
 ```
 
@@ -52,7 +52,7 @@ Claude Desktop ─(stdio)─▶ image-library --mcp ┘     （トークンで�
 HTTP の MCP サーバーとしてそのまま登録できる。設定画面に、このコマンドを丸ごとコピーするボタンを置く。
 
 ```bash
-claude mcp add --scope user --transport http image-library http://127.0.0.1:41621/mcp --header "Authorization: Bearer <token>"
+claude mcp add --scope user --transport http stockroom http://127.0.0.1:41621/mcp --header "Authorization: Bearer <token>"
 ```
 
 ### Claude Desktop から（中継）
@@ -63,8 +63,8 @@ Claude Desktop のローカル設定（`claude_desktop_config.json`）は stdio 
 ```json
 {
   "mcpServers": {
-    "image-library": {
-      "command": "/Applications/Image Library.app/Contents/MacOS/image-library",
+    "stockroom": {
+      "command": "/Applications/Stockroom.app/Contents/MacOS/stockroom",
       "args": ["--mcp"]
     }
   }
@@ -73,7 +73,7 @@ Claude Desktop のローカル設定（`claude_desktop_config.json`）は stdio 
 
 - `main.rs` で引数を見て、`--mcp` があれば Tauri を起動せずに中継を始める
 - トークンは `settings.json`（`app_config_dir`）から読む。設定ファイルにトークンを書かずに済む
-- アプリが開いていないとき：`initialize` には答え、ツールを呼ばれたら「Image Library を開いてから、もう一度試してください」というエラーを返す
+- アプリが開いていないとき：`initialize` には答え、ツールを呼ばれたら「Stockroom を開いてから、もう一度試してください」というエラーを返す
 - 設定画面に、上の JSON を丸ごとコピーするボタンを置く（パスは実行中のアプリの場所 `current_exe` から作る）
 - `tools/call` 以外（`initialize`、`tools/list`）は中継が自分で答える。アプリを閉じていても Claude Desktop は起動でき、ツールを使ったときに「開いてください」と返る
 
@@ -253,7 +253,7 @@ CREATE TABLE IF NOT EXISTS changes (
 cargo run --manifest-path src-tauri/Cargo.toml --example mcpserver -- /path/to/Test.library
 ```
 
-表示されたコマンドで Claude Code に登録する（名前は `image-library-dev`）。アプリが起動中でポートが使われているときは、
+表示されたコマンドで Claude Code に登録する（名前は `stockroom-dev`）。アプリが起動中でポートが使われているときは、
 `-- <library> 41699` のように別のポートを指定する。
 
 ## まだ決めていないこと・確かめること

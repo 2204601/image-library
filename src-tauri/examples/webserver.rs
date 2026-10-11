@@ -6,9 +6,9 @@
 //! It listens on DEV_PORT by default, not the app's: with every pairing let
 //! in, it must not stand in for a running app (or answer while the app is
 //! closed). The extension finds the port in the config.json written here.
-use image_library_lib::import::ImportSummary;
-use image_library_lib::library::Library;
-use image_library_lib::webimport::{Host, Server, PORT};
+use stockroom_lib::import::ImportSummary;
+use stockroom_lib::library::Library;
+use stockroom_lib::webimport::{Host, Server, PORT};
 
 /// Next to the app's ports (PORT for the extension, PORT + 1 for Claude).
 const DEV_PORT: u16 = PORT + 10;

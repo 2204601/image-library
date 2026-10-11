@@ -1,7 +1,7 @@
-# Image Library
+# Stockroom
 
-Eagle 風のローカル画像管理アプリ。画像をライブラリにコピーして、サムネイル一覧・フォルダ分け・タグ付け・検索で整理する。
-編集機能や AI 機能は持たない、軽量なデスクトップアプリ（Tauri 2 / Mac・Windows）。
+Eagle 風のローカル素材管理アプリ。画像・フォント・ファイル（PDF・オフィス文書）をライブラリにコピーして、サムネイル一覧・フォルダ分け・タグ付け・検索で整理する。
+編集機能や AI 機能は持たない、軽量なデスクトップアプリ（Tauri 2 / Mac・Windows）。旧名は Image Library。
 
 ## 機能
 
@@ -13,7 +13,7 @@ Eagle 風のローカル画像管理アプリ。画像をライブラリにコ�
     - HEIC・AVIF は OS のデコーダで読む（macOS は標準対応。Windows は Microsoft Store の「HEIF 画像拡張機能」「AV1 Video Extension」が必要）
     - HEIC・TIFF は表示用に JPEG のコピーを `previews/` に作る（Windows の WebView が表示できないため）
 - **ブラウザから保存**（Chrome / Edge の拡張機能）：Web ページの画像をライブラリへ。保存した画像には元のページの URL が付き、詳細パネルから開ける
-  - 画像を右クリック →「Image Library に保存」、Alt（Mac は Option）+右クリックですぐ保存
+  - 画像を右クリック →「Stockroom に保存」、Alt（Mac は Option）+右クリックですぐ保存
   - 「このページの画像を一覧して保存…」：ページ内の画像（srcset の大きい版、画像へのリンク、CSS の背景も）を大きさ・形式で絞り込んでまとめて保存
   - 「スクリーンショットを保存」：いまブラウザに見えている範囲を画像にして保存
   - 保存先のフォルダと付けるタグは拡張機能のアイコンから選ぶ
@@ -91,7 +91,7 @@ Eagle 風のローカル画像管理アプリ。画像をライブラリにコ�
   - macOS はサイドバーが半透明（Finder と同じ、後ろの画面がぼけて透ける）。ウィンドウが裏にあるときは不透明な灰色
 - **二重起動しない**：起動中にもう一度開くと、新しく起動せずに今のウィンドウを前に出す（1 つのアプリで開けるライブラリは 1 つ。切り替えはメニューの「最近使ったライブラリ」かサイドバー下部）
 - **OS の通知**：10 秒以上かかった取り込み・別のライブラリへのコピー／移動・書き出しが、ほかのアプリを使っている間に終わったら、OS の通知で知らせる
-- **ログ**：警告・エラーをファイルに残す。ヘルプ →「ログを表示」（macOS は `~/Library/Logs/com.local.imagelibrary/`、Windows は `%LOCALAPPDATA%\com.local.imagelibrary\logs\`）。1 MB ごとに切り替え、古いものは 2 つまで残す
+- **ログ**：警告・エラーをファイルに残す。ヘルプ →「ログを表示」（macOS は `~/Library/Logs/com.local.stockroom/`、Windows は `%LOCALAPPDATA%\com.local.stockroom\logs\`）。1 MB ごとに切り替え、古いものは 2 つまで残す
 
 ### キーボード（Windows は ⌘ → Ctrl、⌥ → Alt）
 
@@ -147,14 +147,14 @@ MyPictures.library/
 - NAS・社内のファイルサーバーに置いたライブラリを、**複数人で同時に開かない**（SQLite の WAL はネットワーク越しの同時アクセスに対応していない）
 - 戻すとき：コピーしたフォルダを置き、「既存のライブラリを開く」で選ぶ
 
-最後に開いたライブラリのパスはアプリ設定（macOS: `~/Library/Application Support/com.local.imagelibrary/settings.json`）に保存される。
+最後に開いたライブラリのパスはアプリ設定（macOS: `~/Library/Application Support/com.local.stockroom/settings.json`）に保存される。
 
 ## インストール
 
-[Releases](https://github.com/2204601/image-library/releases) から入手する。署名（Apple Developer ID / Windows コード署名）なしのビルドなので、**初回インストール時だけ**警告が出る。
+[Releases](https://github.com/2204601/stockroom/releases) から入手する。署名（Apple Developer ID / Windows コード署名）なしのビルドなので、**初回インストール時だけ**警告が出る。
 
 - **macOS（Apple Silicon 専用）**：`.dmg` を開いて「アプリケーション」へコピー → 起動すると「開発元を検証できない」と出るので「完了」→ **システム設定 › プライバシーとセキュリティ** の下にある「このまま開く」を押す。
-  ターミナルで `xattr -dr com.apple.quarantine "/Applications/Image Library.app"` を実行しても良い。
+  ターミナルで `xattr -dr com.apple.quarantine "/Applications/Stockroom.app"` を実行しても良い。
 - **Windows**：`-setup.exe` を実行 → SmartScreen が出たら「詳細情報」→「実行」。
 
 ### アップデート
@@ -164,6 +164,16 @@ MyPictures.library/
 会社のネットワークなどでプロキシが必要な場合は、OS のプロキシ設定（自動プロキシ設定の PAC を含む）をそのまま使う（`src-tauri/src/proxy.rs`）。
 
 アプリ自身が書き出したファイルには macOS の quarantine 属性が付かないので、この経路で更新すると Gatekeeper / SmartScreen の警告は出ない。更新ファイルは Tauri Updater の鍵（minisign）で署名されていて、アプリ側の公開鍵と一致しないものは適用されない。
+
+#### Image Library から Stockroom への更新
+
+名前と内部の ID（`com.local.imagelibrary` → `com.local.stockroom`）が変わった。アプリ内アップデートでそのまま移れる。
+
+- 設定（ライブラリの一覧・連携の接続キー）・ウィンドウの位置・ログは、Stockroom を初めて起動したときに新しい ID のフォルダへ移す（`src-tauri/src/appdirs.rs`）
+- Windows：インストール先が `Stockroom` のフォルダに変わる。インストーラが先に Image Library をアンインストールする（設定は消さない。`src-tauri/windows/hooks.nsh`）
+- macOS：アプリ内アップデートでは、アプリが `Image Library.app` の名前のまま置き換わる。Finder で `Stockroom.app` に名前を変えるか、`.dmg` から入れ直す
+- ブラウザ拡張：アプリが用意したフォルダから入れていた場合は、そのフォルダが移るので Chrome で読み込めなくなる。設定（⌘,）→「連携」→「拡張機能のフォルダを用意して表示」で出るフォルダを読み込み直し、古い拡張機能は削除する
+- Claude Desktop：設定に書いたアプリの場所が変わるので、設定（⌘,）→「連携」の「Claude と連携」に出る設定を貼り直し、古い `image-library` の項目を消す（Claude Code の登録は `image-library` の名前のままで使える）
 
 ## 開発
 
@@ -212,6 +222,8 @@ src-tauri/src/
   changes.rs            Claude がした変更の記録と取り消し
   loopback.rs           127.0.0.1 の待ち受け（受付サーバーと MCP で共通）
   commands.rs           フロントから呼ぶコマンド（共通）
+  appdirs.rs            アプリのフォルダ（旧名 Image Library のフォルダからの移し替え）
+src-tauri/windows/hooks.nsh  Windows インストーラの追加処理（旧名のアプリのアンインストール）
 src-tauri/examples/seed.rs  テストデータ生成
 src-tauri/examples/webserver.rs  アプリなしで拡張の受付サーバーを起動（拡張の開発用）
 src-tauri/examples/mcpserver.rs  アプリなしで MCP サーバーを起動（Claude からの整理の開発用）
@@ -234,8 +246,8 @@ extension/              Chrome 拡張（Manifest V3、ビルド不要）。ア�
 
 アプリ内アップデートは `releases/latest/download/latest.json` を見るので、**Publish するまで配信されない**（下書きのうちは旧バージョンのまま）。リリースには次が添付される。
 
-- `Image Library_X.Y.Z_aarch64.dmg` / `-setup.exe`：初回インストール用
-- `Image Library.app.tar.gz` と `.sig`、`-setup.exe` の `.sig`、`latest.json`：アプリ内アップデート用（tauri-action が生成）
+- `Stockroom_X.Y.Z_aarch64.dmg` / `-setup.exe`：初回インストール用
+- `Stockroom.app.tar.gz` と `.sig`、`-setup.exe` の `.sig`、`latest.json`：アプリ内アップデート用（tauri-action が生成）
 
 更新ファイルの署名鍵は GitHub Actions の Secrets に置く（`TAURI_SIGNING_PRIVATE_KEY`：秘密鍵ファイルの中身、`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：パスワード、未設定なら空）。対応する公開鍵は `tauri.conf.json` の `plugins.updater.pubkey`。**秘密鍵を失うと配布済みのアプリに更新を届けられなくなる**ので、必ずバックアップを取る。鍵の作り直しは `npx tauri signer generate -w ~/.tauri/image-library.key`。
 

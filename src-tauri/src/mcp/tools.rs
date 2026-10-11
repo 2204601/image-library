@@ -30,7 +30,7 @@ const MAX_SIDE: u32 = 768;
 /// Characters of an id shown, and the fewest accepted back.
 const SHORT_ID: usize = 8;
 
-const NO_LIBRARY: &str = "Image Library でライブラリが開かれていません。アプリでライブラリを開いてから、もう一度試してください";
+const NO_LIBRARY: &str = "Stockroom でライブラリが開かれていません。アプリでライブラリを開いてから、もう一度試してください";
 
 // ------------------------------------------------------------ the list
 

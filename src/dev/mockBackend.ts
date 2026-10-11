@@ -461,10 +461,10 @@ function mcpStatus() {
     port: mcp.port,
     error: mcp.error,
     claudeCodeCommand: on
-      ? `claude mcp add --scope user --transport http image-library http://127.0.0.1:41621/mcp --header "Authorization: Bearer ${mcp.token}"`
+      ? `claude mcp add --scope user --transport http stockroom http://127.0.0.1:41621/mcp --header "Authorization: Bearer ${mcp.token}"`
       : null,
     desktopConfig: on
-      ? JSON.stringify({ mcpServers: { "image-library": { command: "/Applications/Image Library.app/Contents/MacOS/image-library", args: ["--mcp"] } } }, null, 2)
+      ? JSON.stringify({ mcpServers: { "stockroom": { command: "/Applications/Stockroom.app/Contents/MacOS/stockroom", args: ["--mcp"] } } }, null, 2)
       : null,
   };
 }
@@ -798,7 +798,7 @@ function handle(cmd: string, a: any): unknown {
       return { summary: c.summary, skipped: 0 };
     }
     case "install_extension":
-      webImport.extensionDir = "/Users/mock/Library/Application Support/com.local.imagelibrary/chrome-extension";
+      webImport.extensionDir = "/Users/mock/Library/Application Support/com.local.stockroom/chrome-extension";
       return webImport.extensionDir;
     case "list_folders":
       return folders.map((f) => ({ ...f, count: ofKind(a.kind)(live()).filter((i) => inFolder(i.id, f.id)).length }));

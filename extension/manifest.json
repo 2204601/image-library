@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "Image Library に保存",
-  "description": "Web ページの画像を、デスクトップアプリの Image Library に保存します。",
+  "name": "Stockroom に保存",
+  "description": "Web ページの画像を、デスクトップアプリの Stockroom に保存します。",
   "version": "1.1.1",
   "minimum_chrome_version": "116",
   "icons": {
@@ -12,7 +12,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Image Library に保存",
+    "default_title": "Stockroom に保存",
     "default_icon": {
       "16": "icons/16.png",
       "32": "icons/32.png"

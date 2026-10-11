@@ -22,7 +22,7 @@ function show(text, kind = "", { busy = false, retry = false, close = false } = 
 async function connect() {
   const code = String(crypto.getRandomValues(new Uint16Array(1))[0] % 10000).padStart(4, "0");
   $("code").textContent = code;
-  show("アプリの確認を待っています…（Image Library の画面を見てください）", "", { busy: true });
+  show("アプリの確認を待っています…（Stockroom の画面を見てください）", "", { busy: true });
   try {
     await pair(code);
     const info = await call("/info").catch(() => ({}));

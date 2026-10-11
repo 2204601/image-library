@@ -1,4 +1,4 @@
-//! `image-library --mcp`: what Claude Desktop starts as its MCP server
+//! `stockroom --mcp`: what Claude Desktop starts as its MCP server
 //! (it only starts stdio servers from its local config). Reads JSON-RPC
 //! messages from stdin, one per line, and answers on stdout.
 //!
@@ -14,11 +14,10 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// `identifier` in tauri.conf.json: the app's settings live in a folder of that name.
-const APP_ID: &str = "com.local.imagelibrary";
-
 /// Runs until stdin closes; returns the exit code.
 pub fn run() -> i32 {
+    // Claude Desktop can start this before the app has run since it was renamed.
+    crate::appdirs::move_from_old_name();
     let stdin = std::io::stdin();
     let mut out = std::io::stdout().lock();
     for line in stdin.lock().lines() {
@@ -42,20 +41,12 @@ pub fn run() -> i32 {
 
 /// The app's settings folder (Tauri's `app_config_dir`).
 fn config_dir() -> Option<PathBuf> {
-    let home = || std::env::var_os("HOME").map(PathBuf::from);
-    let base = if cfg!(target_os = "macos") {
-        home()?.join("Library/Application Support")
-    } else if cfg!(windows) {
-        PathBuf::from(std::env::var_os("APPDATA")?)
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| home().map(|h| h.join(".config")))?
-    };
-    Some(base.join(APP_ID))
+    Some(crate::appdirs::config_base()?.join(crate::appdirs::APP_ID))
 }
 
 /// The token, if the user has turned the server on.
 fn token() -> Result<String, String> {
-    let off = "Image Library で Claude との連携がオフになっています。アプリのライブラリメニュー →「Claude と連携…」でオンにしてください";
+    let off = "Stockroom で Claude との連携がオフになっています。アプリのライブラリメニュー →「Claude と連携…」でオンにしてください";
     let path = config_dir().ok_or(off)?.join("settings.json");
     let settings: Value = std::fs::read(&path).ok().and_then(|b| serde_json::from_slice(&b).ok()).ok_or(off)?;
     let mcp = &settings["mcp"];
@@ -81,10 +72,10 @@ fn forward(msg: &Value) -> Option<Value> {
         Ok((202, _)) => None,
         Ok((401, _)) => Some(tool_error(
             &id,
-            "Image Library に接続できませんでした（トークンが違います）。アプリを再起動してから、もう一度試してください",
+            "Stockroom に接続できませんでした（トークンが違います）。アプリを再起動してから、もう一度試してください",
         )),
-        Ok((status, body)) => Some(tool_error(&id, &format!("Image Library がエラーを返しました（{status}）: {body}"))),
-        Err(_) => Some(tool_error(&id, "Image Library が起動していません。アプリを開いてから、もう一度試してください")),
+        Ok((status, body)) => Some(tool_error(&id, &format!("Stockroom がエラーを返しました（{status}）: {body}"))),
+        Err(_) => Some(tool_error(&id, "Stockroom が起動していません。アプリを開いてから、もう一度試してください")),
     }
 }
 
@@ -144,7 +135,7 @@ mod tests {
     fn answers_the_handshake_without_the_app() {
         let init = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18" } });
         let r = respond(&init, &|_, _| ToolOutput::error("x")).unwrap();
-        assert_eq!(r["result"]["serverInfo"]["name"], "image-library");
+        assert_eq!(r["result"]["serverInfo"]["name"], "stockroom");
         let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" });
         assert!(respond(&list, &|_, _| ToolOutput::error("x")).unwrap()["result"]["tools"].as_array().unwrap().len() > 5);
     }

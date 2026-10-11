@@ -2199,45 +2199,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "image-library"
-version = "0.17.0"
-dependencies = [
- "base64 0.22.1",
- "brotli 7.0.0",
- "clipboard-rs",
- "core-foundation-sys",
- "flate2",
- "hex",
- "image",
- "log",
- "rayon",
- "resvg",
- "rusqlite",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "skrifa",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-drag",
- "tauri-plugin-log",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-process",
- "tauri-plugin-single-instance",
- "tauri-plugin-updater",
- "tauri-plugin-window-state",
- "tempfile",
- "tiny_http",
- "uuid",
- "walkdir",
- "windows 0.62.2",
- "woff2-patched",
- "zip",
-]
-
-[[package]]
 name = "image-webp"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4348,6 +4309,45 @@ name = "stable_deref_trait"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
+
+[[package]]
+name = "stockroom"
+version = "0.17.0"
+dependencies = [
+ "base64 0.22.1",
+ "brotli 7.0.0",
+ "clipboard-rs",
+ "core-foundation-sys",
+ "flate2",
+ "hex",
+ "image",
+ "log",
+ "rayon",
+ "resvg",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "skrifa",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-drag",
+ "tauri-plugin-log",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-process",
+ "tauri-plugin-single-instance",
+ "tauri-plugin-updater",
+ "tauri-plugin-window-state",
+ "tempfile",
+ "tiny_http",
+ "uuid",
+ "walkdir",
+ "windows 0.62.2",
+ "woff2-patched",
+ "zip",
+]
 
 [[package]]
 name = "strict-num"

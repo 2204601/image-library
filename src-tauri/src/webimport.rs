@@ -183,7 +183,7 @@ fn handle(head: &Head, body: &mut dyn Read, port: u16, shared: &Shared, host: &d
             let name = lib.lock().unwrap().as_ref().map(|l| {
                 l.root.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
             });
-            (200, json!({ "app": "image-library", "version": env!("CARGO_PKG_VERSION"), "library": name }))
+            (200, json!({ "app": "stockroom", "version": env!("CARGO_PKG_VERSION"), "library": name }))
         }
         ("GET", "/folders") => with_lib(&|l| {
             #[derive(Serialize)]

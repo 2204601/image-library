@@ -31,7 +31,7 @@ export async function loadAppVersion() {
 let busy = false;
 
 /** Same as `plugins.updater.endpoints` in src-tauri/tauri.conf.json. */
-const FEED = "https://github.com/2204601/image-library/releases/latest/download/latest.json";
+const FEED = "https://github.com/2204601/stockroom/releases/latest/download/latest.json";
 
 /**
  * The proxy the OS would use for the feed (PAC included). The updater's HTTP
@@ -62,7 +62,7 @@ export async function checkForUpdate(manual: boolean) {
     // The proxy also applies to the download (the Update keeps it).
     const update = await check({ timeout: 15_000, proxy: await systemProxy() });
     if (!update) {
-      if (manual) st().notify({ title: "最新版です", detail: `Image Library ${appVersion()}`, kind: "success" });
+      if (manual) st().notify({ title: "最新版です", detail: `Stockroom ${appVersion()}`, kind: "success" });
       return;
     }
     await offer(update);

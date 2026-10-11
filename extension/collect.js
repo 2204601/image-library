@@ -236,7 +236,7 @@ async function start() {
   }
   $("page-title").textContent = tab.title || "ページの画像";
   $("page-url").textContent = tab.url ?? "";
-  document.title = `${tab.title} の画像 - Image Library`;
+  document.title = `${tab.title} の画像 - Stockroom`;
 
   const connecting = (async () => {
     try {

@@ -1,3 +1,4 @@
+pub mod appdirs;
 pub mod changes;
 pub mod commands;
 pub mod db;
@@ -19,7 +20,7 @@ pub mod webimport;
 use commands::*;
 
 /// The log file's name in the app's log folder (without ".log").
-pub const LOG_FILE: &str = "image-library";
+pub const LOG_FILE: &str = "stockroom";
 
 /// Panics into the log too: release builds abort on panic, so stderr is all
 /// that would be left, and nobody sees it.
@@ -58,6 +59,8 @@ fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before the plugins below open the app's folders (logs, window state).
+    let moved = appdirs::move_from_old_name();
     // The menu bar is made by the frontend from its command table
     // (src/lib/menuBar.ts); until it loads, macOS shows Tauri's default menu.
     tauri::Builder::default()
@@ -100,11 +103,14 @@ pub fn run() {
                 .build(),
         )
         .manage(AppState::default())
-        .setup(|app| {
+        .setup(move |app| {
             log_panics();
+            for m in &moved {
+                log::info!("{m}");
+            }
             main_window(app.handle())?;
             log::info!(
-                "Image Library {} ({} {})",
+                "Stockroom {} ({} {})",
                 app.package_info().version,
                 std::env::consts::OS,
                 std::env::consts::ARCH
