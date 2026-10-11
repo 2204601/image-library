@@ -1,4 +1,4 @@
-// Talking to the Image Library app (src-tauri/src/webimport.rs) and the bits
+// Talking to the Stockroom app (src-tauri/src/webimport.rs) and the bits
 // shared by the background worker, the popup and the image list.
 
 const DEFAULT_PORT = 41620;
@@ -11,7 +11,7 @@ export class AppError extends Error {
 }
 
 const NOT_RUNNING =
-  "Image Library に接続できません。アプリを起動して、ライブラリのメニュー →「ブラウザ拡張と連携」で受け付けをオンにしてください";
+  "Stockroom に接続できません。アプリを起動して、ライブラリのメニュー →「ブラウザ拡張と連携」で受け付けをオンにしてください";
 export const NOT_CONNECTED =
   "この拡張機能はアプリと接続されていません。拡張機能のアイコン →「アプリと接続」を押してください";
 
@@ -298,5 +298,5 @@ export async function saveImage(url, { tabId, frameId, pageUrl, title } = {}) {
 
 /** "保存しました" / "すでにあります" for an import result. */
 export function savedMessage(res) {
-  return res.imported ? "Image Library に保存しました" : "すでに Image Library にあります";
+  return res.imported ? "Stockroom に保存しました" : "すでに Stockroom にあります";
 }

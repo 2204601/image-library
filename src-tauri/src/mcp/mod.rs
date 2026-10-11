@@ -37,7 +37,7 @@ const MAX_BATCH: usize = 20;
 const PROTOCOL_VERSIONS: [&str; 4] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// What Claude is told about the server when it connects.
-const INSTRUCTIONS: &str = "Image Library（画像・フォント・ファイルを管理するデスクトップアプリ）のライブラリを整理するためのツールです。\
+const INSTRUCTIONS: &str = "Stockroom（画像・フォント・ファイルを管理するデスクトップアプリ）のライブラリを整理するためのツールです。\
 対象はアプリでいま開いているライブラリです。\n\
 - まず library_info / list_folders / list_tags で全体を把握し、find_items で対象を探してください。\
 find_items は 1 件 1 行で、先頭の 8 文字の id を書き込みのツールにそのまま渡せます。\n\
@@ -81,7 +81,7 @@ fn serve(mut req: tiny_http::Request, port: u16, token: &str, host: &dyn Host) {
     let (status, body) = if !loopback::is_own_host(host_header.as_deref(), port) || origin.is_some() {
         (403, Some(json!({ "error": "許可されていない接続です" })))
     } else if !loopback::has_token(auth.as_deref(), token) {
-        (401, Some(json!({ "error": "トークンが違います。Image Library の「Claude と連携」から設定し直してください" })))
+        (401, Some(json!({ "error": "トークンが違います。Stockroom の「Claude と連携」から設定し直してください" })))
     } else if path != "/mcp" {
         (404, Some(json!({ "error": "見つかりません" })))
     } else if method != "POST" {
@@ -168,7 +168,7 @@ pub fn respond(msg: &Value, call: &dyn Fn(&str, &Value) -> ToolOutput) -> Option
             json!({
                 "protocolVersion": version,
                 "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "image-library", "title": "Image Library", "version": env!("CARGO_PKG_VERSION") },
+                "serverInfo": { "name": "stockroom", "title": "Stockroom", "version": env!("CARGO_PKG_VERSION") },
                 "instructions": INSTRUCTIONS,
             })
         }
@@ -266,7 +266,7 @@ mod tests {
         let (status, res) = call(p, "POST", "/mcp", &hd, init);
         assert_eq!(status, 200);
         assert_eq!(res["result"]["protocolVersion"], "2025-06-18");
-        assert_eq!(res["result"]["serverInfo"]["name"], "image-library");
+        assert_eq!(res["result"]["serverInfo"]["name"], "stockroom");
         // An unknown revision gets the newest one.
         let init2 = init.replace("2025-06-18", "1999-01-01");
         assert_eq!(call(p, "POST", "/mcp", &hd, &init2).1["result"]["protocolVersion"], PROTOCOL_VERSIONS[0]);

@@ -138,7 +138,7 @@ export function WebImportSettings() {
               <ul className="list-disc space-y-0.5 pl-4 text-xs text-dim">
                 <li>ツールバーの拡張機能のアイコンで、保存先のフォルダと付けるタグを選ぶ</li>
                 <li>
-                  画像を右クリック →「Image Library に保存」。{isMac ? "Option" : "Alt"}{" "}
+                  画像を右クリック →「Stockroom に保存」。{isMac ? "Option" : "Alt"}{" "}
                   を押しながら右クリックすると、すぐに保存
                 </li>
                 <li>アイコンの「このページの画像を一覧して保存…」で、大きさ・形式で絞り込んでまとめて保存</li>

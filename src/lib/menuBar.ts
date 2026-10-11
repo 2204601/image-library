@@ -142,19 +142,19 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
 
   const appMenu = isMac
     ? [
-        submenu("Image Library", [
-          PredefinedMenuItem.new({ item: { About: null }, text: "Image Library について" }),
+        submenu("Stockroom", [
+          PredefinedMenuItem.new({ item: { About: null }, text: "Stockroom について" }),
           cmd("app.checkUpdate"),
           sep(),
           cmd("app.settings"),
           sep(),
           PredefinedMenuItem.new({ item: "Services", text: "サービス" }),
           sep(),
-          PredefinedMenuItem.new({ item: "Hide", text: "Image Library を隠す" }),
+          PredefinedMenuItem.new({ item: "Hide", text: "Stockroom を隠す" }),
           PredefinedMenuItem.new({ item: "HideOthers", text: "ほかを隠す" }),
           PredefinedMenuItem.new({ item: "ShowAll", text: "すべてを表示" }),
           sep(),
-          PredefinedMenuItem.new({ item: "Quit", text: "Image Library を終了" }),
+          PredefinedMenuItem.new({ item: "Quit", text: "Stockroom を終了" }),
         ]),
       ]
     : [];

@@ -4,7 +4,7 @@ import { fileName, saveImage, savedMessage, sendToApp } from "./shared.js";
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.removeAll(() => {
-    chrome.contextMenus.create({ id: "save-image", title: "Image Library に保存", contexts: ["image"] });
+    chrome.contextMenus.create({ id: "save-image", title: "Stockroom に保存", contexts: ["image"] });
     chrome.contextMenus.create({
       id: "list-images",
       title: "このページの画像を一覧して保存…",
@@ -12,7 +12,7 @@ chrome.runtime.onInstalled.addListener(() => {
     });
     chrome.contextMenus.create({
       id: "capture",
-      title: "スクリーンショット（見えている範囲）を Image Library に保存",
+      title: "スクリーンショット（見えている範囲）を Stockroom に保存",
       contexts: ["page"],
     });
   });
@@ -60,7 +60,7 @@ function openImageList(tab) {
 
 /** Runs a save, telling the user how it went in the page and on the toolbar icon. */
 async function saveWithFeedback(tab, save) {
-  const slow = setTimeout(() => toast(tab.id, "Image Library に保存中…", "busy"), 600);
+  const slow = setTimeout(() => toast(tab.id, "Stockroom に保存中…", "busy"), 600);
   try {
     const res = await save();
     clearTimeout(slow);
@@ -76,10 +76,10 @@ async function saveWithFeedback(tab, save) {
 function badge(tabId, text, color, title) {
   chrome.action.setBadgeBackgroundColor({ tabId, color });
   chrome.action.setBadgeText({ tabId, text });
-  if (title) chrome.action.setTitle({ tabId, title: `Image Library に保存\n${title}` });
+  if (title) chrome.action.setTitle({ tabId, title: `Stockroom に保存\n${title}` });
   setTimeout(() => {
     chrome.action.setBadgeText({ tabId, text: "" });
-    chrome.action.setTitle({ tabId, title: "Image Library に保存" });
+    chrome.action.setTitle({ tabId, title: "Stockroom に保存" });
   }, 4000);
 }
 
@@ -90,7 +90,7 @@ function toast(tabId, message, kind) {
       target: { tabId },
       args: [message, kind],
       func: (message, kind) => {
-        const id = "__image_library_toast__";
+        const id = "__stockroom_toast__";
         document.getElementById(id)?.remove();
         clearTimeout(window[id]);
         const el = document.createElement("div");

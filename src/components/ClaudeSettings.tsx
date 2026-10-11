@@ -110,7 +110,7 @@ export function ClaudeSettings() {
                   に、次の
                   <Code text="mcpServers" /> を書き足して、Claude Desktop
                   を再起動します（ほかのサーバーが既にあれば、その中に
-                  <Code text="image-library" /> の項目だけを足します）。
+                  <Code text="stockroom" /> の項目だけを足します）。
                 </p>
                 <CopyBlock text={status.desktopConfig} />
                 <p className="mt-1.5 text-xs text-dim">

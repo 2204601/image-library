@@ -1207,13 +1207,13 @@ fn mcp_state(app: &AppHandle) -> McpStatus {
         error: srv.error.clone(),
         claude_code_command: ready.then(|| {
             format!(
-                "claude mcp add --scope user --transport http image-library {url} --header \"Authorization: Bearer {}\"",
+                "claude mcp add --scope user --transport http stockroom {url} --header \"Authorization: Bearer {}\"",
                 s.token
             )
         }),
         desktop_config: exe.filter(|_| ready).map(|exe| {
             let config = serde_json::json!({
-                "mcpServers": { "image-library": { "command": exe, "args": ["--mcp"] } }
+                "mcpServers": { "stockroom": { "command": exe, "args": ["--mcp"] } }
             });
             serde_json::to_string_pretty(&config).unwrap_or_default()
         }),

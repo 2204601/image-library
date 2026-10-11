@@ -2,9 +2,9 @@
 //! it from Claude Code. Prints the command that connects Claude Code to it.
 //!   cargo run --example mcpserver -- <path/to/X.library> [port]
 //! (another port leaves a running app alone)
-use image_library_lib::changes::Change;
-use image_library_lib::library::Library;
-use image_library_lib::mcp::{Host, Server, PORT};
+use stockroom_lib::changes::Change;
+use stockroom_lib::library::Library;
+use stockroom_lib::mcp::{Host, Server, PORT};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -29,7 +29,7 @@ fn main() {
     let _server = Server::start(port, token.clone(), host).unwrap();
     println!("listening on 127.0.0.1:{port}");
     println!(
-        "claude mcp add --transport http image-library-dev http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\""
+        "claude mcp add --transport http stockroom-dev http://127.0.0.1:{port}/mcp --header \"Authorization: Bearer {token}\""
     );
     loop {
         std::thread::park();

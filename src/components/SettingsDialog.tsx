@@ -203,7 +203,7 @@ function GeneralTab() {
         アップデートを自動で確認する
       </Check>
       <div className="mt-2 flex items-center gap-3">
-        <span className="text-xs text-dim">Image Library {appVersion() || "（開発版）"}</span>
+        <span className="text-xs text-dim">Stockroom {appVersion() || "（開発版）"}</span>
         <button
           onClick={() => checkForUpdate(true)}
           className="h-7 rounded-md border border-line px-2.5 text-xs hover:bg-white/5"

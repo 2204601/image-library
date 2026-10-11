@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Image Library",
+  "productName": "Stockroom",
   "version": "0.17.0",
-  "identifier": "com.local.imagelibrary",
+  "identifier": "com.local.stockroom",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -14,7 +14,7 @@
     "windows": [
       {
         "create": false,
-        "title": "Image Library",
+        "title": "Stockroom",
         "width": 1280,
         "height": 800,
         "minWidth": 900,
@@ -67,6 +67,9 @@
     "macOS": {
       "signingIdentity": "-"
     },
+    "windows": {
+      "nsis": { "installerHooks": "./windows/hooks.nsh" }
+    },
     "createUpdaterArtifacts": true,
     "resources": {
       "../extension/": "extension/"
@@ -75,7 +78,7 @@
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdDOEYwRjQ0RTJBQTU2MDQKUldRRVZxcmlSQStQZkttbkN4UmdGRkZpRUN5ZEI0OWxBUEtCcnJHL3gvQ2ZrelZ6T2VEK2hVMFUK",
-      "endpoints": ["https://github.com/2204601/image-library/releases/latest/download/latest.json"],
+      "endpoints": ["https://github.com/2204601/stockroom/releases/latest/download/latest.json"],
       "windows": { "installMode": "passive" }
     }
   }
