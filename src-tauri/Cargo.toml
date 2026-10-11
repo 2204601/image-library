@@ -1,7 +1,7 @@
 [package]
 name = "stockroom"
 version = "0.17.0"
-description = "Local library for images, fonts and documents"
+description = "A local stockroom for everything you collect"
 authors = ["you"]
 edition = "2021"
 
