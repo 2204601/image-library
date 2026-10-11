@@ -138,10 +138,45 @@ pub fn svg_options() -> resvg::usvg::Options<'static> {
         .get_or_init(|| {
             let mut db = resvg::usvg::fontdb::Database::new();
             db.load_system_fonts();
+            name_present_generic_families(&mut db);
             std::sync::Arc::new(db)
         })
         .clone();
     opt
+}
+
+/// Text without a font that is installed falls back to the generic families
+/// (`serif` ends every list, and usvg's default font is Times New Roman), but
+/// only if they name a font that is here; otherwise usvg drops the text. When
+/// one doesn't (a system without Times New Roman / Arial, and no fontconfig
+/// saying what to use), it names a font that has Latin letters.
+fn name_present_generic_families(db: &mut resvg::usvg::fontdb::Database) {
+    use resvg::usvg::fontdb::{Family, Query};
+    let present = |db: &resvg::usvg::fontdb::Database, f: Family| db.query(&Query { families: &[f], ..Default::default() }).is_some();
+    use skrifa::MetadataProvider;
+    let has_latin = |id| {
+        db.with_face_data(id, |data, index| {
+            skrifa::FontRef::from_index(data, index).is_ok_and(|f| f.charmap().map('a').is_some())
+        })
+        .unwrap_or(false)
+    };
+    let Some(any) = db
+        .faces()
+        .find(|f| has_latin(f.id))
+        .and_then(|f| f.families.first())
+        .map(|(name, _)| name.clone())
+    else {
+        return;
+    };
+    if !present(db, Family::Serif) {
+        db.set_serif_family(any.clone());
+    }
+    if !present(db, Family::SansSerif) {
+        db.set_sans_serif_family(any.clone());
+    }
+    if !present(db, Family::Monospace) {
+        db.set_monospace_family(any);
+    }
 }
 
 /// Renders an SVG with its longer side at `max_side` px.
@@ -281,13 +316,25 @@ mod tests {
 
     #[test]
     fn svg_text_is_drawn() {
-        if svg_options().fontdb.is_empty() {
-            return; // no system fonts here
-        }
+        // One font that isn't any generic family's default, as on a system
+        // without Times New Roman: the text must still be drawn.
+        let Some(font) = crate::fonts::tests::system_font(crate::fonts::tests::SINGLE) else { return };
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
             <text x="10" y="70" font-size="60" fill="#000">Hi</text></svg>"##;
-        let img = decode(svg, "svg").unwrap().image.to_rgba8();
-        assert!(img.pixels().any(|p| p.0[3] > 0), "the text left marks");
+        let draws = |db: resvg::usvg::fontdb::Database| {
+            let mut opt = svg_options();
+            opt.fontdb = std::sync::Arc::new(db);
+            let tree = resvg::usvg::Tree::from_data(svg, &opt).unwrap();
+            let mut pixmap = resvg::tiny_skia::Pixmap::new(200, 100).unwrap();
+            resvg::render(&tree, resvg::tiny_skia::Transform::default(), &mut pixmap.as_mut());
+            pixmap.pixels().iter().any(|p| p.alpha() > 0)
+        };
+        let mut db = resvg::usvg::fontdb::Database::new();
+        db.load_font_data(font);
+        db.set_serif_family("No Such Font");
+        assert!(!draws(db.clone()), "dropped while the generic families name no font here");
+        name_present_generic_families(&mut db);
+        assert!(draws(db), "the text left marks");
     }
 
     #[test]
