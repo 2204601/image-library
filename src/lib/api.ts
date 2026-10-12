@@ -191,7 +191,7 @@ export type Shape = "landscape" | "portrait" | "square";
 export interface Filter {
   /**
    * Any of these kinds (empty = every kind): the kind filter of "すべて", or
-   * the font mode's own (store `queryKinds`). In a smart folder's rule, the
+   * the font mode's own (`queryKinds` in lib/modes.ts). In a smart folder's rule, the
    * kinds picked when it was saved.
    */
   kinds: ItemKind[];

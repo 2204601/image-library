@@ -21,7 +21,7 @@ import {
 } from "./lib/api";
 import { fontApi } from "./features/fonts/api";
 import { filesApi, onFileThumbs } from "./features/files/api";
-import { kindsNoun, kindsOfMode, modeKind, modesFor, type Mode } from "./lib/modes";
+import { listIs, modeKind, modesFor, queryKinds, ruleKinds, usedKinds, type KindState, type Mode } from "./lib/modes";
 import {
   DEFAULT_LIBRARY_SETTINGS,
   openingMode,
@@ -39,6 +39,8 @@ import { notifyIfAway } from "./lib/osNotify";
  * (`filter.kinds`) narrows the list to some kinds (see `listKinds`).
  */
 export { MODES, type Mode } from "./lib/modes";
+// The kinds a list holds (lib/modes.ts), used across the components.
+export { listIs, listKinds, listNoun, queryKinds, shownKinds } from "./lib/modes";
 
 /** x/y = current pointer, sx/sy = where the drag started (for snap-back). */
 type DragPos = { x: number; y: number; sx: number; sy: number };
@@ -379,62 +381,6 @@ const loadGroupBy = (mode: Mode): GroupBy => {
 export const smartFolderInMode = (sf: SmartFolder, mode: Mode) =>
   mode === "all" || !sf.rule.filter.kinds?.length || sf.rule.filter.kinds.includes(mode);
 
-type KindState = {
-  mode: Mode;
-  view: View;
-  filter: Filter;
-  smartFolders: SmartFolder[];
-  librarySettings: LibrarySettings;
-};
-
-/** Kinds the query asks for: the mode's, narrowed by the kind filter. */
-export function shownKinds(s: Pick<KindState, "mode" | "filter" | "librarySettings">): ItemKind[] {
-  const base = kindsOfMode(s.mode, usedModes(s));
-  const picked = s.filter.kinds.filter((k) => base.includes(k));
-  return picked.length ? picked : base;
-}
-
-/**
- * `filter.kinds` of the query: none when every kind is shown. The similar
- * view is of images whatever the kind filter (look-alikes are found by image hash).
- */
-export const queryKinds = (s: Pick<KindState, "mode" | "view" | "filter" | "librarySettings">): ItemKind[] => {
-  if (s.view.kind === "similar") return ["image"];
-  const kinds = shownKinds(s);
-  return kinds.length === KINDS.length ? [] : kinds;
-};
-
-/**
- * Kinds the list on screen can hold: those shown, narrowed further by an
- * open smart folder's rule and the similar view (images only). What applies
- * to one kind only (an image's shape and pixel size) is offered when this is
- * that kind alone; commands go by the selection too (`appliesTo`).
- */
-export function listKinds(s: KindState): ItemKind[] {
-  const v = s.view;
-  if (v.kind === "similar") return ["image"];
-  let kinds = shownKinds(s);
-  const rule = v.kind === "smart" ? s.smartFolders.find((f) => f.id === v.id)?.rule.filter.kinds : undefined;
-  if (rule?.length) kinds = kinds.filter((k) => rule.includes(k));
-  return kinds;
-}
-
-/** Whether the list on screen holds only `kind`. */
-export const listIs = (s: KindState, kind: ItemKind) => {
-  const kinds = listKinds(s);
-  return kinds.length === 1 && kinds[0] === kind;
-};
-
-/** What the list's items are called ("画像", or "アイテム" for several kinds). */
-export const listNoun = (s: KindState) => kindsNoun(listKinds(s));
-
-/** A rule's kinds for the kind filter: its own, else images when it has image-only conditions. */
-function ruleKinds(f: Partial<Filter>): ItemKind[] {
-  if (f.kinds?.length) return f.kinds;
-  const sized = !!f.shapes?.length || [f.minWidth, f.maxWidth, f.minHeight, f.maxHeight].some((v) => v != null);
-  return sized ? ["image"] : [];
-}
-
 /** Conditions only images have (shape, pixel size), cleared when the list isn't of images alone. */
 const IMAGE_ONLY: Partial<Filter> = { shapes: [], minWidth: null, maxWidth: null, minHeight: null, maxHeight: null };
 
@@ -533,8 +479,7 @@ function saveLibrarySetting(key: string, value: unknown) {
 }
 
 /** Kinds the open library is used for, in `KINDS` order. */
-export const usedModes = (s: { librarySettings: LibrarySettings }): ItemKind[] =>
-  KINDS.map((k) => k.kind).filter((k) => s.librarySettings.modes.includes(k));
+export const usedModes = usedKinds;
 
 /** Modes the switch offers: "すべて", and the fonts when used with another kind (see `modesFor`). */
 export const shownModes = (s: { librarySettings: LibrarySettings }): Mode[] => modesFor(usedModes(s));
