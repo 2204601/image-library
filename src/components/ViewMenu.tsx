@@ -12,8 +12,10 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { GroupBy } from "../lib/grouping";
-import { MODE_GROUPS, MODE_LAYOUTS, useStore, type Layout, type Mode, type ShowInfo } from "../store";
+import type { ItemKind } from "../lib/api";
+import { listKinds, MODE_GROUPS, MODE_LAYOUTS, useStore, type Layout, type Mode, type ShowInfo } from "../store";
 
 /** Every grouping; each mode offers its own subset (MODE_GROUPS). */
 export const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
@@ -39,15 +41,18 @@ export const LAYOUTS: { key: Layout; label: string; icon: React.ReactNode; hint:
   },
 ];
 
-/** Layouts always on the toolbar; the others are in the display menu. */
+/**
+ * Layouts always on the toolbar; the others are in the display menu. "すべて"
+ * puts the images' own first when the list can hold images.
+ */
 const PRIMARY: Record<Mode, Layout[]> = {
-  all: ["grid", "justified"],
-  image: ["justified", "waterfall"],
+  all: ["grid", "list"],
   font: ["specimen", "list"],
-  file: ["grid", "list"],
 };
+const PRIMARY_IMAGES: Layout[] = ["justified", "waterfall"];
 
-const INFO: { key: keyof ShowInfo; label: string; only?: Mode }[] = [
+/** What a thumbnail can show; `only`: when the list can hold that kind. */
+const INFO: { key: keyof ShowInfo; label: string; only?: ItemKind }[] = [
   { key: "name", label: "名前" },
   { key: "dims", label: "画像サイズ", only: "image" },
   { key: "rating", label: "評価" },
@@ -115,7 +120,9 @@ export function LayoutSwitch() {
   const layout = useStore((s) => s.layout);
   const setLayout = useStore((s) => s.setLayout);
   const mode = useStore((s) => s.mode);
-  const shown = LAYOUTS.filter((l) => PRIMARY[mode].includes(l.key) || l.key === layout);
+  const images = useStore((s) => listKinds(s).includes("image"));
+  const primary = mode === "all" && images ? PRIMARY_IMAGES : PRIMARY[mode];
+  const shown = LAYOUTS.filter((l) => primary.includes(l.key) || l.key === layout);
   return (
     <div className="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
       {shown.map((l, i) => (
@@ -192,6 +199,7 @@ export function DisplayMenu() {
   const setSpecimenSize = useStore((s) => s.setSpecimenSize);
   const layout = useStore((s) => s.layout);
   const mode = useStore((s) => s.mode);
+  const kinds = useStore(useShallow(listKinds));
   // The specimen layout sizes its sample text instead of thumbnails.
   const specimen = layout === "specimen";
   const setLayout = useStore((s) => s.setLayout);
@@ -232,7 +240,7 @@ export function DisplayMenu() {
       </label>
       <div className="mx-1.5 my-1 border-t border-line" />
       <div className={heading}>サムネイルの下に表示</div>
-      {INFO.filter((i) => !i.only || i.only === mode).map((i) => (
+      {INFO.filter((i) => !i.only || kinds.includes(i.only)).map((i) => (
         <label key={i.key} className="flex cursor-default items-center gap-2 rounded px-2 py-1.5 hover:bg-white/8">
           <input
             type="checkbox"

@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, Heart, ImagePlus, Layers, Pin, Star, Trash2 } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import {
   exportSelection,
   importFilesDialog,
@@ -16,8 +17,8 @@ import {
 import { command, isEnabled, runKey } from "../lib/commands";
 import { applicable, commandIcon, commandItem } from "../lib/menuItems";
 import { FontListCells, SpecimenRow } from "../features/fonts/FontRows";
-import { api, formatBytes, sizeLabel, type Item } from "../lib/api";
-import { modeNoun } from "../lib/modes";
+import { api, formatBytes, sizeLabel, type Item, type ItemKind } from "../lib/api";
+import { itemsNoun, kindsNoun } from "../lib/modes";
 import { colorHex } from "../lib/colors";
 import type { Section } from "../lib/grouping";
 import {
@@ -31,7 +32,7 @@ import {
   visibleRange,
   type Placement,
 } from "../lib/layouts";
-import { activeConditions, currentFolderId, useStore, type Mode, type ShowInfo } from "../store";
+import { activeConditions, currentFolderId, listKinds, useStore, type ShowInfo } from "../store";
 import { ChangePulse } from "./ActionHud";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
@@ -425,7 +426,7 @@ export function showItemMenu(e: React.MouseEvent | { clientX: number; clientY: n
       submenu: [
         commandItem("list.export", { onClick: () => exportSelection(ids) }),
         commandItem("list.sheet", { onClick: () => openSheet(ids) }),
-        commandItem("list.transfer", { onClick: () => s.setTransfer({ ids, mode: s.mode, count: ids.length }) }),
+        commandItem("list.transfer", { onClick: () => s.setTransfer({ ids, noun: itemsNoun(ids.flatMap((id) => byId.get(id) ?? [])), count: ids.length }) }),
       ],
     },
     {
@@ -457,7 +458,7 @@ export function Grid() {
   const groupBy = useStore((s) => s.groupBy);
   const showInfo = useStore((s) => s.showInfo);
   const viewKind = useStore((s) => s.view.kind);
-  const mode = useStore((s) => s.mode);
+  const kinds = useStore(useShallow(listKinds));
   const keepPick = useStore((s) => s.keepPick);
   // Comparing copies needs their size and format at a glance.
   const info = useMemo(
@@ -681,7 +682,7 @@ export function Grid() {
       onPointerDown={onBackgroundPointerDown}
     >
       {items.length === 0 ? (
-        <Empty kind={viewKind} mode={mode} filtering={filtering} analyzing={analyzing} />
+        <Empty kind={viewKind} kinds={kinds} filtering={filtering} analyzing={analyzing} />
       ) : (
         <div style={{ height: placement.height, position: "relative" }}>
           {marquee && (
@@ -808,8 +809,19 @@ function GroupHeader({ items, section, keepPick }: { items: Item[]; section: Sec
   );
 }
 
-function Empty({ kind, mode, filtering, analyzing }: { kind: string; mode: Mode; filtering: boolean; analyzing: boolean }) {
-  const noun = modeNoun(mode);
+function Empty({
+  kind,
+  kinds,
+  filtering,
+  analyzing,
+}: {
+  kind: string;
+  kinds: ItemKind[];
+  filtering: boolean;
+  analyzing: boolean;
+}) {
+  const noun = kindsNoun(kinds);
+  const only = kinds.length === 1 ? kinds[0] : null;
   if (kind === "trash") return <p className="mt-24 text-center text-dim">ゴミ箱は空です</p>;
   if (kind === "similar")
     return (
@@ -866,11 +878,13 @@ function Empty({ kind, mode, filtering, analyzing }: { kind: string; mode: Mode;
     <div className="mt-24 flex flex-col items-center gap-3 text-dim">
       <ImagePlus size={40} strokeWidth={1.25} />
       <p>
-        {mode === "font"
+        {only === "font"
           ? "フォントファイルやフォルダをここにドラッグ&ドロップ"
-          : mode === "file"
+          : only === "file"
             ? "PDF・オフィス文書やフォルダをここにドラッグ&ドロップ"
-            : "画像やフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け"}
+            : only === "image"
+              ? "画像やフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け"
+              : "ファイルやフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け"}
       </p>
       <button
         onPointerDown={(e) => e.stopPropagation()}

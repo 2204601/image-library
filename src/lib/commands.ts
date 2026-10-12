@@ -42,13 +42,14 @@ import {
   toggleFavorite,
   togglePinned,
   toggleTray,
-  transferAllOfMode,
+  transferAllOfKind,
+  transferableKind,
   transferList,
   trayList,
 } from "./actions";
 import { api, kindLabel, type Item, type ItemKind } from "./api";
 import { checkForUpdate } from "./update";
-import { currentFolderId, MODES, shownModes, useStore } from "../store";
+import { currentFolderId, listKinds, MODES, shownModes, useStore } from "../store";
 import { modeLabel } from "./modes";
 import { useShortcutHelp } from "../components/ShortcutHelp";
 
@@ -62,7 +63,7 @@ export interface Command {
   label?: (s: S) => string;
   icon?: LucideIcon;
   keys?: string[];
-  /** Modes it applies to (all when absent): rotating is for images only. */
+  /** Kinds it applies to (all when absent): rotating is for images only. */
   kinds?: ItemKind[];
   enabled?: (s: S) => boolean;
   checked?: (s: S) => boolean;
@@ -116,10 +117,16 @@ export const COMMANDS: Command[] = [
   {
     id: "library.transferAll",
     title: "すべてを別のライブラリへ…",
-    label: (s) => (s.mode === "all" ? "すべてを別のライブラリへ…" : `${kindLabel(s.mode)}をすべて別のライブラリへ…`),
-    // A kind at a time (in "すべて", switch to the kind first).
-    enabled: (s) => s.mode !== "all" && (s.counts.kinds[s.mode] ?? 0) > 0,
-    run: () => transferAllOfMode(),
+    label: (s) => {
+      const kind = transferableKind(s);
+      return kind ? `${kindLabel(kind)}をすべて別のライブラリへ…` : "すべてを別のライブラリへ…";
+    },
+    // A kind at a time (in "すべて", narrow to the kind first).
+    enabled: (s) => {
+      const kind = transferableKind(s);
+      return !!kind && (s.counts.kinds[kind] ?? 0) > 0;
+    },
+    run: () => transferAllOfKind(),
   },
 
   // -------------------------------------------------------------- modes
@@ -418,12 +425,15 @@ export function command(id: string): Command {
 }
 
 /**
- * Whether a command applies in the current mode at all (rotate: images only).
- * In "すべて" it depends on the selection: rotating when only images are selected.
+ * Whether a command applies to the list at all (rotate: images only): when
+ * the list holds only kinds it is for, or none of them never; else it
+ * depends on the selection (rotating when only images are selected).
  */
 export const appliesTo = (c: Command, s: S) => {
   if (!c.kinds) return true;
-  if (s.mode !== "all") return c.kinds.includes(s.mode);
+  const kinds = listKinds(s);
+  if (kinds.every((k) => c.kinds!.includes(k))) return true;
+  if (!kinds.some((k) => c.kinds!.includes(k))) return false;
   const xs = selItems(s);
   return xs.length > 0 && xs.every((i) => c.kinds!.includes(i.kind));
 };

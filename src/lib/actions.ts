@@ -2,11 +2,13 @@
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { api, EMPTY_FILTER, kindLabel, kindOfExt, type DuplicateEffect, type Item, type ItemKind, type LibraryInfo, type OrientOp, type View } from "./api";
-import { modeKinds, modeNoun } from "./modes";
+import { itemsNoun, kindsNoun } from "./modes";
 import {
   activeConditions,
   currentFolderId,
   isHidden,
+  queryKinds,
+  shownKinds,
   useStore,
   type ListSource,
   type ToastAction,
@@ -131,16 +133,24 @@ export async function transferTo(
   }
 }
 
-/** Opens the "別のライブラリへ" dialog for every item of the current mode (one kind). */
-export function transferAllOfMode() {
-  const { mode, counts } = st();
-  if (mode === "all") return;
-  const count = counts.kinds[mode] ?? 0;
+/**
+ * The kind "<種類>をすべて別のライブラリへ" works on: the one the list is
+ * narrowed to (the font mode, or the kind filter), if one.
+ */
+export function transferableKind(s = st()): ItemKind | null {
+  const kinds = shownKinds(s);
+  return kinds.length === 1 ? kinds[0] : null;
+}
+
+/** Opens the "別のライブラリへ" dialog for every item of a kind (the shown one by default). */
+export function transferAllOfKind(kind = transferableKind()) {
+  if (!kind) return;
+  const count = st().counts.kinds[kind] ?? 0;
   if (!count) {
-    st().toast(`このライブラリに${kindLabel(mode)}はありません`);
+    st().toast(`このライブラリに${kindLabel(kind)}はありません`);
     return;
   }
-  st().setTransfer({ ids: null, kind: mode, count });
+  st().setTransfer({ ids: null, kind, count });
 }
 
 let busy = false;
@@ -170,15 +180,18 @@ export function importPaths(paths: string[], folderId?: string) {
   return guarded(async () => st().importDone(await api.importPaths(paths, folder), since));
 }
 
-/** Picks files of the current mode's kind (any supported file can still be dropped). */
+/** Picks files of the kinds shown (any supported file can still be dropped). */
 export async function importFilesDialog() {
-  const mode = st().mode;
-  const exts = (await api.supportedExts()).filter((e) => mode === "all" || kindOfExt(e) === mode);
+  const kinds = shownKinds(st());
+  const exts = (await api.supportedExts()).filter((e) => kinds.includes(kindOfExt(e)));
   const picked = await open({
-    title: `${modeNoun(mode)}を追加`,
+    title: `${kindsNoun(kinds)}を追加`,
     multiple: true,
     filters: [
-      { name: mode === "all" ? "対応しているファイル" : kindLabel(mode), extensions: [...exts, ...exts.map((e) => e.toUpperCase())] },
+      {
+        name: kinds.length === 1 ? kindLabel(kinds[0]) : "対応しているファイル",
+        extensions: [...exts, ...exts.map((e) => e.toUpperCase())],
+      },
     ],
   });
   if (picked) await importPaths(Array.isArray(picked) ? picked : [picked]);
@@ -539,7 +552,7 @@ export async function clearTray() {
   await st().refresh();
 }
 
-/** Items of the current mode in `view`, in the list's sort (the tray: its own order). */
+/** Items of the kinds shown in `view`, in the list's sort (the tray: its own order). */
 function queryView(view: View, opts: { tagIds?: number[]; includeSubfolders?: boolean } = {}): Promise<Item[]> {
   const s = st();
   const manual = view.kind === "tray" || (view.kind === "folder" && s.sort === "manual");
@@ -550,7 +563,7 @@ function queryView(view: View, opts: { tagIds?: number[]; includeSubfolders?: bo
     tagMatchAll: false,
     includeSubfolders: opts.includeSubfolders ?? false,
     minRating: 0,
-    filter: { ...EMPTY_FILTER, kinds: modeKinds(s.mode) },
+    filter: { ...EMPTY_FILTER, kinds: queryKinds({ ...s, view }) },
     similarLevel: "standard",
     sort: manual ? "manual" : s.sort === "manual" ? "importedAt" : s.sort,
     desc: manual ? false : s.desc,
@@ -626,7 +639,7 @@ async function withTargets(source: ListSource, fn: (items: Item[]) => unknown) {
   try {
     const items = await listTargets(source);
     if (!items.length) {
-      st().toast(`${sourceName(source)}に${modeNoun(st().mode)}はありません`);
+      st().toast(`${sourceName(source)}に${kindsNoun(shownKinds(st()))}はありません`);
       return;
     }
     await fn(items);
@@ -653,7 +666,7 @@ export function trayList(source: ListSource) {
 /** 別のライブラリへ… for a list. */
 export function transferList(source: ListSource) {
   return withTargets(source, (items) =>
-    st().setTransfer({ ids: items.map((i) => i.id), mode: st().mode, count: items.length }),
+    st().setTransfer({ ids: items.map((i) => i.id), noun: itemsNoun(items), count: items.length }),
   );
 }
 

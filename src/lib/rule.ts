@@ -1,5 +1,5 @@
 // Helpers for describing filters / smart folder rules in the UI.
-import { fontCategoryLabel, fontScriptLabel, formatBytes, type Filter, type Rule, type Shape, type Tag } from "./api";
+import { fontCategoryLabel, fontScriptLabel, formatBytes, kindLabel, type Filter, type Rule, type Shape, type Tag } from "./api";
 
 export const SHAPE_LABEL: Record<Shape, string> = {
   landscape: "横長",
@@ -68,6 +68,7 @@ export function describeSize(f: Filter): string {
 export function describeRule(rule: Rule, tags: Tag[]): string[] {
   const out: string[] = [];
   const f = rule.filter;
+  if (f.kinds?.length) out.push(`種類: ${f.kinds.map(kindLabel).join("・")}`);
   if (rule.search.trim()) out.push(`「${rule.search.trim()}」`);
   if (rule.tagIds.length) {
     const names = rule.tagIds.map((id) => tags.find((t) => t.id === id)?.name).filter(Boolean);

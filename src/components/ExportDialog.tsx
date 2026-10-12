@@ -7,7 +7,7 @@ import { FolderDown, FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { listTargets } from "../lib/actions";
 import { api, type Folder, type Item } from "../lib/api";
-import { modeNoun } from "../lib/modes";
+import { itemsNoun } from "../lib/modes";
 import { notifyIfAway } from "../lib/osNotify";
 import { composing } from "../lib/ime";
 import { useStore, type ExportRequest } from "../store";
@@ -54,7 +54,6 @@ export function relativeDirs(items: Item[], rootId: string, folders: Folder[]): 
 
 function Dialog({ req }: { req: ExportRequest }) {
   const close = () => useStore.getState().setExporting(null);
-  const mode = useStore((s) => s.mode);
   const folders = useStore((s) => s.folders);
   const isFolder = req.source.kind === "folder";
   const hasSubfolders = isFolder && folders.some((f) => f.parentId === (req.source as { id: string }).id);
@@ -157,7 +156,7 @@ function Dialog({ req }: { req: ExportRequest }) {
             対象：
             {items === null
               ? "数えています…"
-              : `${modeNoun(mode)} ${items.length} 件${isFolder && hasSubfolders && subfolders ? "（サブフォルダを含む）" : ""}`}
+              : `${itemsNoun(items)} ${items.length} 件${isFolder && hasSubfolders && subfolders ? "（サブフォルダを含む）" : ""}`}
             。ファイルはそのままの形式でコピーします
           </p>
         </div>

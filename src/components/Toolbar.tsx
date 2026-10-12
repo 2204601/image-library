@@ -39,13 +39,24 @@ import {
   similarGroups,
 } from "../lib/actions";
 import { SpecimenControls } from "../features/fonts/SpecimenControls";
-import { modeNoun } from "../lib/modes";
-import { fontCategoryLabel, fontScriptLabel, type Folder, type SimilarLevel, type SmartFolder, type SortKey, type View } from "../lib/api";
+import { kindsNoun } from "../lib/modes";
+import {
+  fontCategoryLabel,
+  fontScriptLabel,
+  KINDS,
+  type Folder,
+  type ItemKind,
+  type SimilarLevel,
+  type SmartFolder,
+  type SortKey,
+  type View,
+} from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
 import { appliesTo, command } from "../lib/commands";
 import { comboText } from "../lib/shortcuts";
-import { activeConditions, useStore, type Mode } from "../store";
+import { useShallow } from "zustand/react/shallow";
+import { activeConditions, listKinds, shownKinds, usedModes, useStore, type Mode } from "../store";
 import { showItemMenu } from "./Grid";
 import { composing } from "../lib/ime";
 import { FilterBar } from "./FilterBar";
@@ -54,8 +65,8 @@ import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
 /** Thin line between groups of controls. */
 const Divider = () => <div className="mx-0.5 h-5 w-px shrink-0 bg-line" />;
 
-/** Sort keys; `only` limits one to a mode (fonts have no pixel size). */
-export const SORTS: { key: SortKey; label: string; only?: Mode }[] = [
+/** Sort keys; `only`: offered when the list is of that kind alone (only images have a pixel size). */
+export const SORTS: { key: SortKey; label: string; only?: ItemKind }[] = [
   { key: "importedAt", label: "追加日" },
   { key: "name", label: "名前" },
   { key: "size", label: "ファイルサイズ" },
@@ -128,7 +139,9 @@ export function Toolbar() {
   const startEditSmart = useStore((s) => s.startEditSmart);
   const conditions = useStore(activeConditions);
   const mode = useStore((s) => s.mode);
-  const sorts = SORTS.filter((s) => !s.only || s.only === mode);
+  const kinds = useStore(useShallow(listKinds));
+  const addNoun = useStore((s) => kindsNoun(shownKinds(s)));
+  const sorts = SORTS.filter((s) => !s.only || (kinds.length === 1 && kinds[0] === s.only));
   const smart = view.kind === "smart" ? smartFolders.find((f) => f.id === view.id) : undefined;
   const isTrash = view.kind === "trash";
   const isFolder = view.kind === "folder";
@@ -273,7 +286,7 @@ export function Toolbar() {
             // One bordered group, like the other controls.
             <div className="flex h-8 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
               <button
-                title={`${modeNoun(mode)}を追加`}
+                title={`${addNoun}を追加`}
                 onClick={importFilesDialog}
                 className="flex items-center gap-1.5 px-2.5 whitespace-nowrap hover:bg-white/5"
               >
@@ -316,6 +329,7 @@ export function Toolbar() {
             サブフォルダの内容も表示
           </label>
         )}
+        <KindFilter />
         <div className="flex items-center gap-1" title="評価で絞り込み（この評価以上）">
           <span className="mr-0.5 text-dim">評価</span>
           {[1, 2, 3, 4, 5].map((n) => (
@@ -418,6 +432,44 @@ export function Toolbar() {
       {(filterOpen || editingSmart) && <FilterBar />}
       {conditions > 0 && !editingSmart && <ActiveFilters count={count} />}
     </header>
+  );
+}
+
+/**
+ * The kind filter of "すべて" (`filter.kinds`): a click shows one kind, ⌘-click
+ * adds or drops one. Made from `KINDS`, so a kind added later gets its chip.
+ * It stays from view to view, like the modes it replaces.
+ */
+function KindFilter() {
+  const mode = useStore((s) => s.mode);
+  const used = useStore(useShallow(usedModes));
+  const picked = useStore(useShallow((s) => s.filter.kinds));
+  const setKinds = useStore((s) => s.setKinds);
+  // The similar view is of images whatever is picked.
+  const similar = useStore((s) => s.view.kind === "similar");
+  if (mode !== "all" || used.length < 2 || similar) return null;
+  const chip = (key: string, label: string, on: boolean, title: string, onClick: (e: React.MouseEvent) => void) => (
+    <button
+      key={key}
+      title={title}
+      aria-pressed={on}
+      onClick={onClick}
+      className={`border-line px-2 not-first:border-l ${on ? "bg-accent/25 text-fg" : "text-dim hover:bg-white/5"}`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div role="group" aria-label="種類" className="flex h-6 shrink-0 overflow-hidden rounded-md border border-line">
+      {chip("all", "すべて", picked.length === 0, "すべての種類", () => setKinds([]))}
+      {KINDS.filter((k) => used.includes(k.kind)).map(({ kind, label }) => {
+        const on = picked.includes(kind);
+        return chip(kind, label, on, `${label}だけ（${comboText("Mod")}+クリックで種類を足す・外す）`, (e) => {
+          if (e.metaKey || e.ctrlKey) setKinds(on ? picked.filter((k) => k !== kind) : [...picked, kind]);
+          else setKinds(on && picked.length === 1 ? [] : [kind]);
+        });
+      })}
+    </div>
   );
 }
 

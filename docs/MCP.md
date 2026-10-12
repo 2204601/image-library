@@ -232,7 +232,7 @@ CREATE TABLE IF NOT EXISTS changes (
 - `rename_tag`、`set_tag_color`
 - `create_smart_folder`：言葉で頼まれた条件をルールに直して保存する
 - フォントの見本画像を返す（`view_images` をフォントにも使う。サムネイルで足りるかを試してから）
-- ファイルモードの PDF などから中の文字を返す
+- ファイル（PDF など）から中の文字を返す
 
 ## ファイル
 

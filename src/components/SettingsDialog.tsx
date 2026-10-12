@@ -4,8 +4,8 @@
 import { FileText, FolderInput, FolderOpen, Image as ImageIcon, Library, Puzzle, Settings, Shapes, Type, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { transferAllOfMode } from "../lib/actions";
-import { api, formatBytes, KINDS, kindLabel, type AppSettings } from "../lib/api";
+import { transferAllOfKind } from "../lib/actions";
+import { api, formatBytes, KINDS, kindLabel, type AppSettings, type ItemKind } from "../lib/api";
 import { sidebarEntriesOf } from "../lib/librarySettings";
 import { modeLabel, modesFor, type Mode } from "../lib/modes";
 import { isMac } from "../lib/shortcuts";
@@ -17,7 +17,7 @@ import { ClaudeSettings } from "./ClaudeSettings";
 
 export const SETTINGS_KEY = isMac ? "⌘," : "Ctrl+,";
 
-const KIND_ICON: Record<Mode, React.ReactNode> = {
+const KIND_ICON: Record<Mode | ItemKind, React.ReactNode> = {
   all: <Shapes size={14} />,
   image: <ImageIcon size={14} />,
   font: <Type size={14} />,
@@ -224,7 +224,6 @@ function LibraryTab() {
   const hidden = useStore((s) => s.librarySettings.hidden);
   const setUsedModes = useStore((s) => s.setUsedModes);
   const setSidebarHidden = useStore((s) => s.setSidebarHidden);
-  const mode = useStore((s) => s.mode);
   const [size, setSize] = useState<number | null>(null);
   useEffect(() => {
     if (library) api.librarySize().then(setSize, () => setSize(null));
@@ -256,25 +255,27 @@ function LibraryTab() {
           {isMac ? "Finder で表示" : "エクスプローラで表示"}
         </button>
       </div>
-      {/* A kind at a time ("すべて" shows every kind, not one to move). */}
-      {mode !== "all" && (
-        <button
-          onClick={() => {
-            useStore.getState().openSettings(null);
-            transferAllOfMode();
-          }}
-          disabled={!(kinds[mode] ?? 0)}
-          className="mt-2 flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs enabled:hover:bg-white/5 disabled:opacity-40"
-        >
-          <FolderInput size={14} />
-          {kindLabel(mode)}をすべて別のライブラリへ移す…
-          {(kinds[mode] ?? 0) > 0 && <span className="text-dim tabular-nums">（{kinds[mode]} 件）</span>}
-        </button>
-      )}
+      {/* A kind at a time (one library per kind is what moving all is for). */}
+      <div className="mt-2 flex flex-wrap gap-2">
+        {KINDS.filter((k) => (kinds[k.kind] ?? 0) > 0).map(({ kind }) => (
+          <button
+            key={kind}
+            onClick={() => {
+              useStore.getState().openSettings(null);
+              transferAllOfKind(kind);
+            }}
+            className="flex h-8 items-center gap-1.5 rounded-md border border-line px-3 text-xs hover:bg-white/5"
+          >
+            <FolderInput size={14} />
+            {kindLabel(kind)}をすべて別のライブラリへ移す…
+            <span className="text-dim tabular-nums">（{kinds[kind]} 件）</span>
+          </button>
+        ))}
+      </div>
 
       <Heading
         title="使う種類"
-        sub="使う種類と「すべて」がモードの切り替えに出ます（1 種類ならモードの切り替えは出しません）。この設定はライブラリに保存されます"
+        sub="使う種類が一覧と種類の絞り込みに出ます。フォントをほかの種類と使うときは、フォントを見比べる「フォント」のモードも出ます。この設定はライブラリに保存されます"
       />
       {KINDS.map(({ kind, label }) => {
         const on = used.includes(kind);
@@ -310,7 +311,7 @@ function LibraryTab() {
           const off = hidden[m] ?? [];
           return (
             <div key={m}>
-              {used.length > 1 && (
+              {modesFor(used).length > 1 && (
                 <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-dim">
                   {KIND_ICON[m]}
                   {modeLabel(m)}
