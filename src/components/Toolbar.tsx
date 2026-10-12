@@ -16,8 +16,8 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  RotateCcw,
-  RotateCw,
+  RotateCcwSquare,
+  RotateCwSquare,
   Search,
   Star,
   Trash2,
@@ -524,8 +524,8 @@ function SelectionActions() {
     <div className="flex shrink-0 items-center text-fg/80">
       {rotatable && (
         <>
-          {button(<RotateCcw size={15} />, `左に回転（${comboText("Mod+Shift+L")}）`, () => orient(ids, "rotateCcw"), narrow)}
-          {button(<RotateCw size={15} />, `右に回転（${comboText("Mod+Shift+R")}）`, () => orient(ids, "rotateCw"), narrow)}
+          {button(<RotateCcwSquare size={15} />, `左に回転（${comboText("Mod+Shift+L")}）`, () => orient(ids, "rotateCcw"), narrow)}
+          {button(<RotateCwSquare size={15} />, `右に回転（${comboText("Mod+Shift+R")}）`, () => orient(ids, "rotateCw"), narrow)}
         </>
       )}
       {button(

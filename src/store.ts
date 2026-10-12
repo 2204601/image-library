@@ -177,6 +177,8 @@ interface State {
   /** Viewer: details panel and the strip of thumbnails. */
   viewerInfo: boolean;
   viewerStrip: boolean;
+  /** Viewer: the image alone, with the bar, arrows, details and strip hidden (H). */
+  viewerBare: boolean;
   /** Tag names copied with ⌘⇧C. */
   tagClipboard: string[];
   /** Most recently used target folders (for Shift+D and the picker). */
@@ -284,6 +286,7 @@ interface State {
   setGroupBy: (g: GroupBy) => void;
   toggleViewerInfo: () => void;
   toggleViewerStrip: () => void;
+  toggleViewerBare: () => void;
   setTagClipboard: (names: string[]) => void;
   rememberFolders: (ids: string[]) => void;
   rememberTags: (names: string[]) => void;
@@ -535,6 +538,7 @@ export const useStore = create<State>((set, get) => ({
   groupBy: loadGroupBy(initialMode),
   viewerInfo: load("viewerInfo") === "true",
   viewerStrip: load("viewerStrip") !== "false",
+  viewerBare: load("viewerBare") === "true",
   tagClipboard: [],
   recentFolders: [],
   recentTags: [],
@@ -876,6 +880,11 @@ export const useStore = create<State>((set, get) => ({
     const viewerStrip = !get().viewerStrip;
     set({ viewerStrip });
     persist("viewerStrip", String(viewerStrip));
+  },
+  toggleViewerBare: () => {
+    const viewerBare = !get().viewerBare;
+    set({ viewerBare });
+    persist("viewerBare", String(viewerBare));
   },
   setTagClipboard: (tagClipboard) => set({ tagClipboard }),
   rememberFolders: (ids) => {

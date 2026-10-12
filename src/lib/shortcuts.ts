@@ -115,6 +115,7 @@ export function shortcutSections(): ShortcutSection[] {
         { label: "実寸 / 全体を表示", keys: ["Mod+0", "Mod+9"], kinds: ["image"] },
         { label: "詳細", keys: ["I"] },
         { label: "前後のサムネイル", keys: ["T"] },
+        { label: "画像のみ表示（操作や情報を隠す）", keys: ["H"] },
         { label: "お気に入り・ピン留め・作業台・評価", keys: ["F", "P", "B", "0-5"] },
         pair("item.rotateCcw", "item.rotateCw", "左に回転 / 右に回転"),
       ],

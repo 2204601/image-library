@@ -15,8 +15,8 @@ import {
   Heart,
   Layers,
   Pin,
-  RotateCcw,
-  RotateCw,
+  RotateCcwSquare,
+  RotateCwSquare,
   Trash2,
   Undo2,
   type LucideIcon,
@@ -304,7 +304,7 @@ export const COMMANDS: Command[] = [
   {
     id: "item.rotateCcw",
     title: "左に回転",
-    icon: RotateCcw,
+    icon: RotateCcwSquare,
     keys: ["Mod+Shift+L"],
     kinds: ["image"],
     enabled: live,
@@ -313,7 +313,7 @@ export const COMMANDS: Command[] = [
   {
     id: "item.rotateCw",
     title: "右に回転",
-    icon: RotateCw,
+    icon: RotateCwSquare,
     keys: ["Mod+Shift+R"],
     kinds: ["image"],
     enabled: live,
