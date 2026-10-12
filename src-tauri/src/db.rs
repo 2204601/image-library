@@ -435,7 +435,7 @@ pub enum Shape {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Filter {
-    /// Any of these kinds (the sidebar's "種類").
+    /// Any of these kinds (the toolbar's kind filter in "すべて", or the font mode).
     pub kinds: Vec<Kind>,
     /// Fonts of any of these writing systems / typeface styles (the sidebar,
     /// under "フォント"). "none" = style unknown. Either one limits the list to fonts.
@@ -1336,7 +1336,7 @@ fn kind_where(kind: Option<Kind>, n: usize, t: &str) -> (String, Box<dyn ToSql>)
 }
 
 /// Totals for the sidebar. With `kind`, everything but `kinds` counts only
-/// items of that kind (the app shows one kind at a time; `kinds` is for
+/// items of that kind (the font mode; `kinds` is for
 /// switching between them).
 pub fn counts(conn: &Connection, kind: Option<Kind>) -> DbResult<Counts> {
     let mut stmt = conn.prepare_cached("SELECT kind, COUNT(*) FROM items WHERE deleted_at IS NULL GROUP BY kind")?;

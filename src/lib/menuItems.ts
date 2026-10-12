@@ -22,7 +22,7 @@ export function commandItem(id: string, over: Partial<{ label: string; onClick: 
   };
 }
 
-/** Commands that apply in this mode (the rest are left out, not greyed). */
+/** Commands that apply to the list and selection (the rest are left out, not greyed). */
 export const applicable = (ids: string[]) => ids.filter((id) => appliesTo(command(id), st()));
 
 /** An icon button for a command; `active` when its state is on (a favourite already). */

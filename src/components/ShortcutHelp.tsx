@@ -4,7 +4,8 @@ import { create } from "zustand";
 import { kindLabel } from "../lib/api";
 import { isMac, keyParts, matchRow, shortcutSections } from "../lib/shortcuts";
 import { composing } from "../lib/ime";
-import { useStore } from "../store";
+import { useShallow } from "zustand/react/shallow";
+import { listKinds, useStore } from "../store";
 
 export const useShortcutHelp = create<{ open: boolean; setOpen: (open: boolean) => void }>((set) => ({
   open: false,
@@ -52,7 +53,7 @@ export function ShortcutHelp() {
 
 function Panel() {
   const setOpen = useShortcutHelp((s) => s.setOpen);
-  const mode = useStore((s) => s.mode);
+  const kinds = useStore(useShallow(listKinds));
   const layout = useStore((s) => s.layout);
   const inViewer = useStore((s) => s.viewer !== null);
   const [query, setQuery] = useState("");
@@ -120,7 +121,7 @@ function Panel() {
                   <ul>
                     {s.rows.map(({ row, label }) => {
                       // Shown but faded where it doesn't apply (e.g. rotating fonts).
-                      const off = row.kinds && mode !== "all" && !row.kinds.includes(mode);
+                      const off = row.kinds && !kinds.some((k) => row.kinds!.includes(k));
                       return (
                         <li
                           key={label}

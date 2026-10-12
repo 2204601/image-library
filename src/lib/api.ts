@@ -190,9 +190,9 @@ export type Shape = "landscape" | "portrait" | "square";
 /** Attribute filters (the filter bar). Empty / null = no restriction. */
 export interface Filter {
   /**
-   * Any of these kinds. The app shows one kind at a time (store `mode`), so
-   * ad-hoc queries set this from the mode; smart folders keep the mode they
-   * were saved in here (empty = made before modes: shown in every mode).
+   * Any of these kinds (empty = every kind): the kind filter of "すべて", or
+   * the font mode's own (`queryKinds` in lib/modes.ts). In a smart folder's rule, the
+   * kinds picked when it was saved.
    */
   kinds: ItemKind[];
   /** Fonts of any of these writing systems / styles (sidebar, under "フォント"). */

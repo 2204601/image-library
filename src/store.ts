@@ -21,7 +21,7 @@ import {
 } from "./lib/api";
 import { fontApi } from "./features/fonts/api";
 import { filesApi, onFileThumbs } from "./features/files/api";
-import { modeKind, modeKinds, modesFor, type Mode } from "./lib/modes";
+import { listIs, modeKind, modesFor, queryKinds, ruleKinds, usedKinds, type KindState, type Mode } from "./lib/modes";
 import {
   DEFAULT_LIBRARY_SETTINGS,
   openingMode,
@@ -33,11 +33,14 @@ import { warn } from "./lib/log";
 import { notifyIfAway } from "./lib/osNotify";
 
 /**
- * What the app shows: every kind ("all") or one kind. Everything (the list,
+ * What the app shows: every kind ("all") or the fonts. Everything (the list,
  * counts, folders, tags, smart folders) is of the current mode; each mode
- * remembers its own layout and grouping.
+ * remembers its own layout and grouping. Inside "すべて", the kind filter
+ * (`filter.kinds`) narrows the list to some kinds (see `listKinds`).
  */
 export { MODES, type Mode } from "./lib/modes";
+// The kinds a list holds (lib/modes.ts), used across the components.
+export { listIs, listKinds, listNoun, queryKinds, shownKinds } from "./lib/modes";
 
 /** x/y = current pointer, sx/sy = where the drag started (for snap-back). */
 type DragPos = { x: number; y: number; sx: number; sy: number };
@@ -60,19 +63,15 @@ export type Layout = "justified" | "grid" | "waterfall" | "list" | "specimen";
 
 /** Layouts of each mode, the first being its default. */
 export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
-  // Mixed kinds: every item as a thumbnail of the same box.
-  all: ["grid", "justified", "list"],
-  image: ["justified", "waterfall", "grid", "list"],
+  // Images keep their shape; fonts and files take a fixed one (layouts.ts `aspect`).
+  all: ["justified", "waterfall", "grid", "list"],
   font: ["specimen", "list", "grid"],
-  file: ["grid", "list"],
 };
 
 /** Groupings of each mode. */
 export const MODE_GROUPS: Record<Mode, GroupBy[]> = {
   all: ["none", "kind", "rating", "tag", "folder"],
-  image: ["none", "rating", "tag", "folder"],
   font: ["none", "rating", "tag", "folder", "family"],
-  file: ["none", "rating", "tag", "folder"],
 };
 
 /** What the grid shows under each thumbnail. */
@@ -104,8 +103,8 @@ export interface Toast extends Required<Pick<ToastOptions, "title" | "kind" | "d
 }
 
 export type TransferRequest =
-  /** Selected items (`mode` names them: "画像 3 件"). */
-  | { ids: string[]; mode: Mode; count: number }
+  /** Selected items (`noun` names them: "画像 3 件"). */
+  | { ids: string[]; noun: string; count: number }
   /** Every item of `kind` not in the trash. */
   | { ids: null; kind: ItemKind; count: number };
 
@@ -244,8 +243,10 @@ interface State {
 
   /** Opens a library in the mode it was left in (see `openingMode`). */
   setLibrary: (lib: LibraryInfo | null) => Promise<void>;
-  /** Switches kind; starts in "all" with no conditions, on the mode's own layout and grouping. */
+  /** Switches mode; starts in "all" with no conditions, on the mode's own layout and grouping. */
   setMode: (mode: Mode) => void;
+  /** Narrows "すべて" to these kinds (none = every kind the library is used for). */
+  setKinds: (kinds: ItemKind[]) => void;
   /** Kinds the library is used for / switches to drop or bring back a kind. */
   setUsedModes: (modes: ItemKind[]) => void;
   /** Hides (or shows again) sidebar entries of a mode. */
@@ -361,19 +362,36 @@ const loadJson = (key: string): object => {
   }
 };
 
-/** The mode's saved layout (the pre-mode "layout" key counts for images), else its default. */
+/**
+ * The mode's saved layout, else its default. "すべて" falls back to what the
+ * image mode of earlier versions had (and the "layout" key from before modes).
+ */
 const loadLayout = (mode: Mode): Layout => {
-  const saved = load(`layout:${mode}`) ?? (mode === "image" ? load("layout") : null);
+  const keys = mode === "all" ? ["layout:all", "layout:image", "layout"] : [`layout:${mode}`];
+  const saved = keys.map(load).find((v) => v !== null);
   return MODE_LAYOUTS[mode].find((l) => l === saved) ?? MODE_LAYOUTS[mode][0];
 };
 const loadGroupBy = (mode: Mode): GroupBy => {
-  const saved = load(`groupBy:${mode}`) ?? (mode === "image" ? load("groupBy") : null);
+  const keys = mode === "all" ? ["groupBy:all", "groupBy:image", "groupBy"] : [`groupBy:${mode}`];
+  const saved = keys.map(load).find((v) => v !== null);
   return MODE_GROUPS[mode].find((g) => g === saved) ?? "none";
 };
 
-/** Smart folders of a mode: saved in it, or before there were modes. */
+/** Smart folders of a mode: any in "すべて"; in a kind's mode, those that can hold the kind. */
 export const smartFolderInMode = (sf: SmartFolder, mode: Mode) =>
   mode === "all" || !sf.rule.filter.kinds?.length || sf.rule.filter.kinds.includes(mode);
+
+/** Conditions only images have (shape, pixel size), cleared when the list isn't of images alone. */
+const IMAGE_ONLY: Partial<Filter> = { shapes: [], minWidth: null, maxWidth: null, minHeight: null, maxHeight: null };
+
+/**
+ * Drops what no longer applies once the list holds other kinds: image-only
+ * conditions and the pixel size sort.
+ */
+function fitToKinds(s: KindState & { sort: SortKey }): Partial<State> {
+  if (listIs(s, "image")) return {};
+  return { filter: { ...s.filter, ...IMAGE_ONLY }, ...(s.sort === "dimensions" ? { sort: "importedAt" as SortKey } : {}) };
+}
 
 /** Number of active ad-hoc conditions (for badges / "clear" buttons). */
 export function activeConditions(s: {
@@ -387,6 +405,7 @@ export function activeConditions(s: {
     (s.search.trim() ? 1 : 0) +
     (s.tagFilter.length ? 1 : 0) +
     (s.minRating ? 1 : 0) +
+    // The kind filter shows on the toolbar itself, not as a condition.
     (f.fontScripts.length ? 1 : 0) +
     (f.fontCategories.length ? 1 : 0) +
     (f.exts.length ? 1 : 0) +
@@ -450,7 +469,7 @@ function arrange(s: {
 }
 
 // The mode comes from the library being opened (setLibrary).
-const initialMode: Mode = "image";
+const initialMode: Mode = "all";
 
 let librarySeq = 0;
 
@@ -460,10 +479,9 @@ function saveLibrarySetting(key: string, value: unknown) {
 }
 
 /** Kinds the open library is used for, in `KINDS` order. */
-export const usedModes = (s: { librarySettings: LibrarySettings }): ItemKind[] =>
-  KINDS.map((k) => k.kind).filter((k) => s.librarySettings.modes.includes(k));
+export const usedModes = usedKinds;
 
-/** Modes the switch offers: "すべて" and the kinds in use (see `modesFor`). */
+/** Modes the switch offers: "すべて", and the fonts when used with another kind (see `modesFor`). */
 export const shownModes = (s: { librarySettings: LibrarySettings }): Mode[] => modesFor(usedModes(s));
 
 /** Whether a sidebar entry (SIDEBAR_ENTRIES id) is hidden in the current mode. */
@@ -579,14 +597,22 @@ export const useStore = create<State>((set, get) => ({
       }
       if (seq !== librarySeq) return; // another library was opened meanwhile
     }
+    // Left in the image or file mode of an earlier version: "すべて" of that kind,
+    // remembered as "すべて" from now on.
+    const filter = { ...EMPTY_FILTER, kinds: mode === "all" ? librarySettings.lastKinds : [] };
+    if (library && librarySettings.lastKinds.length) {
+      librarySettings = { ...librarySettings, lastKinds: [] };
+      saveLibrarySetting("lastMode", mode);
+    }
     const sortNow = { ...get(), ...traySort(get().view, { kind: "all" }, get()) };
+    const next = { mode, view: { kind: "all" } as View, filter, smartFolders: [], librarySettings };
     set({
       library,
       librarySettings,
       mode,
       layout: loadLayout(mode),
       groupBy: loadGroupBy(mode),
-      sort: sortNow.sort === "dimensions" && mode !== "image" ? "importedAt" : sortNow.sort,
+      sort: sortNow.sort,
       desc: sortNow.desc,
       items: [],
       rawItems: [],
@@ -595,7 +621,8 @@ export const useStore = create<State>((set, get) => ({
       search: "",
       tagFilter: [],
       minRating: 0,
-      filter: EMPTY_FILTER,
+      filter,
+      ...fitToKinds({ ...next, sort: sortNow.sort }),
       editingSmart: null,
       recentTags: library ? loadRecentTags(library.root) : [],
       selected: new Set(),
@@ -626,6 +653,7 @@ export const useStore = create<State>((set, get) => ({
     }
     // Leaving the tray (if there) restores the sort it replaced.
     const sortNow = { ...get(), ...traySort(get().view, { kind: "all" }, get()) };
+    const next = { ...get(), mode, view: { kind: "all" } as View, filter: EMPTY_FILTER };
     set({
       mode,
       view: { kind: "all" },
@@ -636,9 +664,10 @@ export const useStore = create<State>((set, get) => ({
       editingSmart: null,
       layout: loadLayout(mode),
       groupBy: loadGroupBy(mode),
-      // Only images have a pixel size.
-      sort: sortNow.sort === "dimensions" && mode !== "image" ? "importedAt" : sortNow.sort,
+      sort: sortNow.sort,
       desc: sortNow.desc,
+      // Only images have a pixel size.
+      ...fitToKinds({ ...next, sort: sortNow.sort }),
       items: [],
       rawItems: [],
       sections: [],
@@ -649,13 +678,29 @@ export const useStore = create<State>((set, get) => ({
     });
     get().refresh();
   },
+  setKinds: (kinds) => {
+    const s = get();
+    const used = usedModes(s);
+    const picked = used.filter((k) => kinds.includes(k));
+    // Every kind in use is the same list as none picked.
+    const filter = { ...s.filter, kinds: picked.length === used.length ? [] : picked };
+    set({ filter, ...fitToKinds({ ...s, filter }) });
+    get().refresh();
+  },
   setUsedModes: (modes) => {
     const used = KINDS.map((k) => k.kind).filter((k) => modes.includes(k));
     if (!used.length) return;
     set({ librarySettings: { ...get().librarySettings, modes: used } });
     // Every kind = nothing to remember (a kind added later is used too).
     saveLibrarySetting("modes", used.length === KINDS.length ? null : used);
-    if (!modesFor(used).includes(get().mode)) get().setMode(used[0]);
+    if (!modesFor(used).includes(get().mode)) get().setMode(modesFor(used)[0]);
+    else {
+      // A kind dropped from the kind filter; what applied to it alone goes too.
+      const s = get();
+      const filter = { ...s.filter, kinds: s.filter.kinds.filter((k) => used.includes(k)) };
+      set({ filter, ...fitToKinds({ ...s, filter }) });
+      get().refresh();
+    }
   },
   setSidebarHidden: (mode, ids) => {
     const hidden = { ...get().librarySettings.hidden, [mode]: ids };
@@ -676,10 +721,18 @@ export const useStore = create<State>((set, get) => ({
       view.kind === "similar" && get().view.kind !== "similar" ? { items: [], rawItems: [], sections: [] } : {};
     // Conditions belong to the view they were set in: moving to another one
     // starts clean (re-selecting the open view keeps them).
+    // The kind filter stays: it is what the user browses, like a mode.
     const moved = JSON.stringify(view) !== JSON.stringify(get().view);
     const reset = moved
-      ? { search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER, editingSmart: null }
+      ? {
+          search: "",
+          tagFilter: [],
+          minRating: 0,
+          filter: { ...EMPTY_FILTER, kinds: get().filter.kinds },
+          editingSmart: null,
+        }
       : {};
+    const next = { ...get(), ...reset, view, ...traySort(get().view, view, get()) };
     set({
       view,
       selected: new Set(),
@@ -688,6 +741,7 @@ export const useStore = create<State>((set, get) => ({
       ...clear,
       ...reset,
       ...traySort(get().view, view, get()),
+      ...fitToKinds(next),
     });
     get().refresh();
   },
@@ -755,7 +809,8 @@ export const useStore = create<State>((set, get) => ({
     get().refresh();
   },
   clearConditions: () => {
-    set({ search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER });
+    // The kind filter has its own "すべて" on the toolbar.
+    set({ search: "", tagFilter: [], minRating: 0, filter: { ...EMPTY_FILTER, kinds: get().filter.kinds } });
     get().refresh();
   },
   toggleFilterOpen: () => {
@@ -764,9 +819,12 @@ export const useStore = create<State>((set, get) => ({
     persist("filterOpen", String(filterOpen));
   },
   currentRule: () => {
-    const { search, tagFilter, tagMatchAll, minRating, filter, mode } = get();
-    // The rule remembers the mode it was made in (see `smartFolderInMode`).
-    return { search, tagIds: tagFilter, tagMatchAll, minRating, filter: { ...filter, kinds: modeKinds(mode) } };
+    const s = get();
+    const { search, tagFilter, tagMatchAll, minRating, filter } = s;
+    // The kinds picked are a condition like the others; a rule made in the font
+    // mode keeps to fonts (see `smartFolderInMode`).
+    const kinds: ItemKind[] = s.mode === "font" ? ["font"] : filter.kinds;
+    return { search, tagIds: tagFilter, tagMatchAll, minRating, filter: { ...filter, kinds } };
   },
   startEditSmart: (sf) => {
     // Edit in the "all" view so the user sees exactly what the rule matches.
@@ -778,8 +836,9 @@ export const useStore = create<State>((set, get) => ({
       tagFilter: sf.rule.tagIds,
       tagMatchAll: sf.rule.tagMatchAll,
       minRating: sf.rule.minRating,
-      // The kind is the mode's, not an editable condition.
-      filter: { ...EMPTY_FILTER, ...sf.rule.filter, kinds: [] },
+      // The kinds go to the kind filter (in the font mode, they are its own). Shape and
+      // pixel size only match images, so a rule with them shows as of images.
+      filter: { ...EMPTY_FILTER, ...sf.rule.filter, kinds: get().mode === "all" ? ruleKinds(sf.rule.filter) : [] },
       filterOpen: true,
       selected: new Set(),
     });
@@ -850,6 +909,7 @@ export const useStore = create<State>((set, get) => ({
     const seq = ++refreshSeq;
     const { mode, view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating, filter, similarLevel } =
       get();
+    const kinds = queryKinds(get());
     try {
       let dismissedGroups: number | null = null;
       if (view.kind === "similar") {
@@ -869,8 +929,8 @@ export const useStore = create<State>((set, get) => ({
           tagMatchAll,
           includeSubfolders: showSubfolders,
           minRating,
-          // The list is of the mode's kind only.
-          filter: { ...filter, kinds: modeKinds(mode) },
+          // The mode's kinds, narrowed by the kind filter.
+          filter: { ...filter, kinds },
           similarLevel,
           sort,
           desc,

@@ -13,7 +13,7 @@ import {
   SIZE_PRESETS,
   startOfToday,
 } from "../lib/rule";
-import { activeConditions, useStore } from "../store";
+import { activeConditions, listIs, useStore } from "../store";
 import { composing } from "../lib/ime";
 import { RangeCalendar } from "./RangeCalendar";
 
@@ -134,8 +134,8 @@ export function FilterBar() {
   const editing = useStore((s) => s.editingSmart);
   const active = useStore(activeConditions);
   const clearConditions = useStore((s) => s.clearConditions);
-  // Shape and pixel size are of images (fonts have none).
-  const sized = useStore((s) => s.mode === "image");
+  // Shape and pixel size are of images (fonts and files have none): offered when the list is of images alone.
+  const sized = useStore((s) => listIs(s, "image"));
 
   const toggle = <K extends "exts" | "shapes">(key: K, v: Filter[K][number]) => {
     const cur = filter[key] as string[];

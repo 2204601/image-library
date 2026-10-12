@@ -17,7 +17,7 @@ import {
   togglePinned,
   toggleTray,
 } from "../lib/actions";
-import { modeNoun } from "../lib/modes";
+import { listNoun } from "../store";
 import { api, formatBytes, sizeLabel, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
 import { FontCategorySelect, FontDetails } from "../features/fonts/FontDetails";
 import { useStore } from "../store";
@@ -343,7 +343,7 @@ export function Inspector() {
   const rev = useStore((s) => s.rev);
   const run = useStore((s) => s.run);
   const isTrash = useStore((s) => s.view.kind === "trash");
-  const mode = useStore((s) => s.mode);
+  const noun = useStore(listNoun);
   const inspectorWidth = useStore((s) => s.inspectorWidth);
   const [info, setInfo] = useState<SelectionInfo>({ tags: [], folders: [] });
   const [adding, setAdding] = useState(false);
@@ -391,7 +391,7 @@ export function Inspector() {
         className="flex shrink-0 items-center justify-center border-l border-line bg-panel text-dim"
         style={{ width: inspectorWidth }}
       >
-        {modeNoun(mode)}を選択してください
+        {noun}を選択してください
       </aside>
     );
   }

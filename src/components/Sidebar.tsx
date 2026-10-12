@@ -2,12 +2,10 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
-  FileText,
   Folder as FolderIcon,
   FolderPlus,
   FolderSearch,
   Heart,
-  Image as ImageIcon,
   Images,
   Inbox,
   Keyboard,
@@ -43,8 +41,8 @@ import {
 } from "../lib/actions";
 import { FontFilters } from "../features/fonts/FontFilters";
 import { api, type Folder, type View } from "../lib/api";
-import { modeLabel, modeNoun, type Mode } from "../lib/modes";
-import { activeConditions, isHidden, MODES, shownModes, useStore, type ListSource } from "../store";
+import { modeLabel, type Mode } from "../lib/modes";
+import { activeConditions, isHidden, listNoun, MODES, shownModes, usedModes, useStore, type ListSource } from "../store";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
@@ -446,7 +444,7 @@ function SmartFolderList() {
   const startEditSmart = useStore((s) => s.startEditSmart);
   const run = useStore((s) => s.run);
   const hasConditions = useStore((s) => activeConditions(s) > 0);
-  const mode = useStore((s) => s.mode);
+  const noun = useStore(listNoun);
   const showMenu = useMenu((s) => s.show);
 
   return (
@@ -465,7 +463,7 @@ function SmartFolderList() {
     >
       {smartFolders.length === 0 && (
         <p className="px-2 py-1 text-xs leading-relaxed text-dim">
-          絞り込み（⌘⇧F）の条件を保存すると、当てはまる{modeNoun(mode)}が自動で集まります
+          絞り込み（⌘⇧F）の条件を保存すると、当てはまる{noun}が自動で集まります
         </p>
       )}
       {smartFolders.map((sf) => (
@@ -509,16 +507,13 @@ function SmartFolderList() {
 
 const MODE_ICON: Record<Mode, React.ReactNode> = {
   all: <Shapes size={14} />,
-  image: <ImageIcon size={14} />,
   font: <Type size={14} />,
-  file: <FileText size={14} />,
 };
 
 /**
- * Which kinds the app shows ("すべて" or one kind): the sidebar's header, a
- * menu rather than tabs, so it stays one line however many kinds there are
- * (videos, audio later). Lists "すべて" and the kinds the library is used
- * for, with counts and ⌘1〜⌘4 (MODES order).
+ * What the app shows ("すべて", or the fonts to compare): the sidebar's
+ * header, with counts and ⌘1 / ⌘2 (MODES order). Images and files are
+ * narrowed in "すべて" with the kind filter on the toolbar.
  */
 function ModeSwitch() {
   const mode = useStore((s) => s.mode);
@@ -581,7 +576,7 @@ function ModeSwitch() {
               {MODE_ICON[m]}
               <span className="flex-1">{modeLabel(m)}</span>
               <span className="text-xs tabular-nums opacity-60">{countOf(m)}</span>
-              {/* ⌘1〜⌘4 follow MODES whichever kinds are shown. */}
+              {/* ⌘1 / ⌘2 follow MODES. */}
               <span className="w-8 text-right text-xs opacity-50">{comboText(`Mod+${MODES.indexOf(m) + 1}`)}</span>
             </button>
           ))}
@@ -689,6 +684,7 @@ export function Sidebar() {
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
   const mode = useStore((s) => s.mode);
+  const usesImages = useStore((s) => usedModes(s).includes("image"));
   const hidden = useStore(useShallow((s) => s.librarySettings.hidden[s.mode] ?? []));
   const openSettings = useStore((s) => s.openSettings);
   const showMenu = useMenu((s) => s.show);
@@ -708,7 +704,7 @@ export function Sidebar() {
       title: "まとめて出力・書き出しの前に、画像を一時的に集めておく場所（B キーで追加、ここへドラッグでも）",
     },
     // Look-alikes are found by image hash: images only.
-    ...(mode === "image" ? [{ view: { kind: "similar" } as View, label: "重複の候補", icon: <Copy size={15} /> }] : []),
+    ...(mode === "all" && usesImages ? [{ view: { kind: "similar" } as View, label: "重複の候補", icon: <Copy size={15} /> }] : []),
     { view: { kind: "trash" }, label: "ゴミ箱", icon: <Trash2 size={15} />, count: counts.trash },
   ];
 

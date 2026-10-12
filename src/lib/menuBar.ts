@@ -22,7 +22,7 @@ import { warn } from "./log";
 import { comboText, isMac } from "./shortcuts";
 import { GROUPS, LAYOUTS } from "../components/ViewMenu";
 import { SORTS } from "../components/Toolbar";
-import { MODE_GROUPS, MODE_LAYOUTS, shownModes, usedModes, useStore } from "../store";
+import { listIs, MODE_GROUPS, MODE_LAYOUTS, shownModes, usedModes, useStore } from "../store";
 
 type S = ReturnType<typeof useStore.getState>;
 type Item = MenuItem | CheckMenuItem | Submenu | PredefinedMenuItem;
@@ -138,7 +138,7 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
   entries = [];
   const s = st();
   const mode = s.mode;
-  const used = usedModes(s);
+  const modes = shownModes(s);
 
   const appMenu = isMac
     ? [
@@ -217,8 +217,8 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
       "評価",
       [0, 1, 2, 3, 4, 5].map((n) => cmd(`item.rate${n}`)),
     ),
-    // In "すべて", greyed out unless only images are selected (`appliesTo`).
-    ...(mode === "image" || mode === "all"
+    // In "すべて", greyed out unless only images are listed or selected (`appliesTo`).
+    ...(mode === "all" && usedModes(s).includes("image")
       ? [
           submenu("回転・反転", [
             cmd("item.rotateCcw"),
@@ -237,8 +237,8 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
   ]);
 
   const view = submenu("表示", [
-    // "すべて" and the kinds in use; ⌘1〜⌘4 stay those of MODES.
-    ...(used.length > 1 ? [...shownModes(st()).map((m) => cmd(`mode.${m}`)), sep()] : []),
+    // "すべて" and the fonts when both are offered; ⌘1 / ⌘2 stay those of MODES.
+    ...(modes.length > 1 ? [...modes.map((m) => cmd(`mode.${m}`)), sep()] : []),
     submenu(
       "レイアウト",
       LAYOUTS.filter((l) => MODE_LAYOUTS[mode].includes(l.key)).map((l) =>
@@ -260,14 +260,17 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
       ),
     ),
     submenu("並び順", [
-      ...SORTS.filter((o) => !o.only || o.only === mode).map((o) =>
+      // Kept in the menu and greyed out: what the list holds changes without a rebuild.
+      ...SORTS.filter((o) => !o.only || (mode === "all" && usedModes(s).includes(o.only))).map((o) =>
         live(
           () => o.label,
           () => st().setSort(o.key, st().desc),
           {
             checked: (x) => x.sort === o.key,
-            // Manual order is a folder's or the tray's.
-            enabled: (x) => o.key !== "manual" || x.view.kind === "folder" || x.view.kind === "tray",
+            // Manual order is a folder's or the tray's; pixel size, of images alone.
+            enabled: (x) =>
+              (o.key !== "manual" || x.view.kind === "folder" || x.view.kind === "tray") &&
+              (!o.only || listIs(x, o.only)),
           },
         ),
       ),

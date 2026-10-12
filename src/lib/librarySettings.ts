@@ -9,13 +9,18 @@ export interface LibrarySettings {
   modes: ItemKind[];
   /** The mode the library was last left in. */
   lastMode: Mode | null;
+  /**
+   * The kind filter it was left in, from versions with an image / file mode
+   * (`lastMode` "image" opens "すべて" narrowed to images). Read, never saved.
+   */
+  lastKinds: ItemKind[];
   /** Sidebar entries hidden, per mode (ids of `SIDEBAR_ENTRIES`). */
   hidden: Partial<Record<Mode, string[]>>;
 }
 
 const ALL_KINDS = KINDS.map((k) => k.kind);
 
-export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = { modes: ALL_KINDS, lastMode: null, hidden: {} };
+export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = { modes: ALL_KINDS, lastMode: null, lastKinds: [], hidden: {} };
 
 /** Sidebar entries that can be hidden. "すべて" and "ゴミ箱" always stay. */
 export const SIDEBAR_ENTRIES: { id: string; label: string; modes?: Mode[] }[] = [
@@ -24,7 +29,7 @@ export const SIDEBAR_ENTRIES: { id: string; label: string; modes?: Mode[] }[] = 
   { id: "favorites", label: "お気に入り" },
   { id: "pinned", label: "ピン留め" },
   { id: "tray", label: "作業台" },
-  { id: "similar", label: "重複の候補", modes: ["image"] },
+  { id: "similar", label: "重複の候補", modes: ["all"] },
   { id: "section:fontFilters", label: "言語・書体", modes: ["font"] },
   { id: "section:folders", label: "フォルダ" },
   { id: "section:smart", label: "スマートフォルダ" },
@@ -34,6 +39,8 @@ export const SIDEBAR_ENTRIES: { id: string; label: string; modes?: Mode[] }[] = 
 export const sidebarEntriesOf = (mode: Mode) => SIDEBAR_ENTRIES.filter((e) => !e.modes || e.modes.includes(mode));
 
 const isMode = (v: unknown): v is Mode => MODES.includes(v as Mode);
+/** The image and file modes of earlier versions, now "すべて" narrowed to the kind. */
+const isOldMode = (v: unknown): v is "image" | "file" => v === "image" || v === "file";
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
 
 /** Reads the stored JSON, skipping keys, kinds and entries this version doesn't know. */
@@ -41,25 +48,35 @@ export function parseLibrarySettings(raw: Record<string, unknown>): LibrarySetti
   const listed = strings(raw.modes);
   const modes = ALL_KINDS.filter((k) => listed.includes(k));
   const known = new Set(SIDEBAR_ENTRIES.map((e) => e.id));
+  const ids = (key: string) => strings(raw[key]).filter((id) => known.has(id));
   const hidden: LibrarySettings["hidden"] = {};
   for (const k of MODES) {
-    const ids = strings(raw[`hidden:${k}`]).filter((id) => known.has(id));
-    if (ids.length) hidden[k] = ids;
+    // "すべて" takes over the image / file mode's (the one left in first) until saved anew.
+    const keys =
+      k === "all"
+        ? ["hidden:all", ...(isOldMode(raw.lastMode) ? [`hidden:${raw.lastMode}`] : []), "hidden:image", "hidden:file"]
+        : [`hidden:${k}`];
+    const from = keys.find((key) => raw[key] !== undefined);
+    const list = from ? ids(from) : [];
+    if (list.length) hidden[k] = list;
   }
   return {
     modes: modes.length ? modes : ALL_KINDS,
-    lastMode: isMode(raw.lastMode) ? raw.lastMode : null,
+    lastMode: isMode(raw.lastMode) ? raw.lastMode : isOldMode(raw.lastMode) ? "all" : null,
+    lastKinds: isOldMode(raw.lastMode) ? [raw.lastMode] : [],
     hidden,
   };
 }
 
 /**
- * The mode a library opens in: the one it was left in, else the used kind it
- * has the most of, else the first used kind.
+ * The mode a library opens in: the one it was left in, else the fonts when
+ * they are what it has the most of, else "すべて".
  */
 export function openingMode(s: LibrarySettings, kinds: Partial<Record<ItemKind, number>>): Mode {
-  if (s.lastMode && modesFor(s.modes).includes(s.lastMode)) return s.lastMode;
+  const shown = modesFor(s.modes);
+  if (s.lastMode && shown.includes(s.lastMode)) return s.lastMode;
+  if (!shown.includes("font")) return shown[0];
   let best = s.modes[0];
   for (const m of s.modes) if ((kinds[m] ?? 0) > (kinds[best] ?? 0)) best = m;
-  return best;
+  return best === "font" ? "font" : shown[0];
 }
