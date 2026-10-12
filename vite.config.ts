@@ -8,6 +8,19 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
 
+  // The app's own code and the libraries in separate files: one bundle went
+  // past Vite's 500 kB warning (a CI warning on every build). Loading is from
+  // disk, so this is about keeping the warning meaningful, not download size.
+  build: {
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [{ name: "vendor", test: /[\\/]node_modules[\\/]/ }],
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
