@@ -93,10 +93,14 @@ export interface ToastOptions {
   action?: ToastAction;
   /** ms before it goes away; paused while hovered or while the window is in the background. */
   duration?: number;
+  /** Rewrite this toast in place (a result following its "…しています"), if it is still showing. */
+  replace?: number;
 }
 
 export interface Toast extends Required<Pick<ToastOptions, "title" | "kind" | "duration">> {
   id: number;
+  /** Bumped when the toast is rewritten in place; restarts its countdown. */
+  rev: number;
   detail?: string;
   action?: ToastAction;
   leaving?: boolean;
@@ -312,8 +316,8 @@ interface State {
   setImporting: (p: State["importing"]) => void;
   setUpdating: (p: State["updating"]) => void;
   toast: (message: string, error?: boolean, action?: ToastAction) => void;
-  /** A toast with a title, detail line and kind (results worth noticing). */
-  notify: (t: ToastOptions) => void;
+  /** A toast with a title, detail line and kind (results worth noticing). Returns its id. */
+  notify: (t: ToastOptions) => number;
   dismissToast: (id: number) => void;
   /**
    * Runs a mutation, reports errors, then refreshes. Resolves to whether it
@@ -1039,13 +1043,19 @@ export const useStore = create<State>((set, get) => ({
   setImporting: (importing) => set({ importing }),
   setUpdating: (updating) => set({ updating }),
   toast: (message, error, action) => get().notify({ title: message, kind: error ? "error" : "info", action }),
-  notify: ({ title, detail, kind = "info", action, duration }) => {
-    const id = ++toastSeq;
-    const t: Toast = { id, title, detail, kind, action, duration: duration ?? (kind === "error" || action ? 8000 : 5000) };
+  notify: ({ title, detail, kind = "info", action, duration, replace }) => {
+    const rev = ++toastSeq;
+    const fields = { title, detail, kind, action, rev, duration: duration ?? (kind === "error" || action ? 8000 : 5000) };
+    if (replace !== undefined && get().toasts.some((x) => x.id === replace && !x.leaving)) {
+      set({ toasts: get().toasts.map((x) => (x.id === replace ? { ...fields, id: replace } : x)) });
+      return replace;
+    }
+    const t: Toast = { ...fields, id: rev };
     // At most a handful on screen; the oldest give way.
     const live = get().toasts.filter((x) => !x.leaving);
     for (const old of live.slice(0, Math.max(0, live.length - 3))) get().dismissToast(old.id);
     set({ toasts: [...get().toasts, t] });
+    return t.id;
   },
   dismissToast: (id) => {
     if (!get().toasts.some((t) => t.id === id && !t.leaving)) return;

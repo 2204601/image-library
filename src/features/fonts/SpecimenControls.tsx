@@ -2,6 +2,7 @@
 import { ALargeSmall } from "lucide-react";
 import { useStore } from "../../store";
 import { composing } from "../../lib/ime";
+import { Slider } from "../../components/Slider";
 
 export function SpecimenControls() {
   const text = useStore((s) => s.specimenText);
@@ -18,15 +19,14 @@ export function SpecimenControls() {
         placeholder="見本の文字を入力（空欄なら各フォントの見本）"
         className="h-7 min-w-32 flex-1 rounded-md border border-line bg-bg px-2 text-[13px] outline-none placeholder:text-dim focus:border-accent"
       />
-      <input
-        type="range"
+      <Slider
         min={12}
         max={160}
         step={2}
         value={size}
         onChange={(e) => setSize(Number(e.target.value))}
         title="見本の文字の大きさ（⌘+ / ⌘-）"
-        className="w-24 shrink-0 accent-accent"
+        className="w-24 shrink-0"
       />
       <span className="w-12 shrink-0 text-dim tabular-nums">{size}px</span>
     </div>

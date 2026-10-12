@@ -39,6 +39,7 @@ function ToastCard({ t, paused }: { t: Toast; paused: boolean }) {
       style={{ borderColor: `color-mix(in srgb, ${color} 45%, var(--color-line))` }}
     >
       <div
+        key={`ring${t.rev}`}
         className="pointer-events-none absolute inset-0 rounded-xl animate-toast-ring"
         style={{ "--ring": `color-mix(in srgb, ${color} 55%, transparent)` } as React.CSSProperties}
       />
@@ -70,6 +71,7 @@ function ToastCard({ t, paused }: { t: Toast; paused: boolean }) {
       </div>
       {/* Time left; it ends the toast, and stops while hovered or in the background. */}
       <div
+        key={`countdown${t.rev}`}
         className="h-0.5 origin-left animate-countdown group-hover:[animation-play-state:paused]"
         style={{
           background: color,

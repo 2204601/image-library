@@ -16,6 +16,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { GroupBy } from "../lib/grouping";
 import type { ItemKind } from "../lib/api";
 import { listKinds, MODE_GROUPS, MODE_LAYOUTS, useStore, type Layout, type Mode, type ShowInfo } from "../store";
+import { Slider } from "./Slider";
 
 /** Every grouping; each mode offers its own subset (MODE_GROUPS). */
 export const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
@@ -226,15 +227,14 @@ export function DisplayMenu() {
       <div className="mx-1.5 my-1 border-t border-line" />
       <div className={heading}>{specimen ? "見本の文字の大きさ" : "サムネイルの大きさ"}</div>
       <label className="flex items-center gap-2 px-2 py-1.5" title="⌘+ / ⌘-">
-        <input
-          type="range"
+        <Slider
           min={specimen ? 12 : 80}
           max={specimen ? 160 : 360}
           step={specimen ? 2 : 10}
           value={specimen ? specimenSize : thumbSize}
           disabled={layout === "list"}
           onChange={(e) => (specimen ? setSpecimenSize : setThumbSize)(Number(e.target.value))}
-          className="min-w-0 flex-1 accent-accent disabled:opacity-40"
+          className="min-w-0 flex-1 disabled:opacity-40"
         />
         <span className="w-10 text-right text-dim tabular-nums">{specimen ? specimenSize : thumbSize}</span>
       </label>

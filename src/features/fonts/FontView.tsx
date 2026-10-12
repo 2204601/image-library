@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { Item } from "../../lib/api";
 import { fontApi, type FontInfo } from "./api";
 import { countMissing, Sample } from "./Sample";
+import { Slider } from "../../components/Slider";
 
 const SAMPLE_JA = "あのイーハトーヴォのすきとおった風、夏でも底に冷たさをもつ青いそら";
 const SAMPLE_EN = "The quick brown fox jumps over the lazy dog 0123456789";
@@ -103,13 +104,12 @@ export function FontView({ item }: { item: Item }) {
             className="min-w-60 flex-1 rounded-md border border-white/15 bg-black/40 px-3 py-1.5 text-sm outline-none focus:border-accent"
           />
           <label className="flex items-center gap-2 text-xs text-white/55">
-            <input
-              type="range"
+            <Slider
               min={12}
               max={200}
               value={size}
               onChange={(e) => setSize(Number(e.target.value))}
-              className="w-40 accent-accent"
+              className="w-40"
             />
             <span className="w-12 tabular-nums">{size}px</span>
           </label>

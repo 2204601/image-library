@@ -57,17 +57,20 @@ export async function checkForUpdate(manual: boolean) {
     return;
   }
   busy = true;
-  if (manual) st().notify({ title: "アップデートを確認しています…", duration: 2500 });
+  // One toast for the whole check: the result rewrites "確認しています…" in place.
+  // It lasts past the check's timeout so it doesn't vanish before the result.
+  const progress = manual ? st().notify({ title: "アップデートを確認しています…", duration: 30_000 }) : undefined;
   try {
     // The proxy also applies to the download (the Update keeps it).
     const update = await check({ timeout: 15_000, proxy: await systemProxy() });
     if (!update) {
-      if (manual) st().notify({ title: "最新版です", detail: `Stockroom ${appVersion()}`, kind: "success" });
+      if (manual) st().notify({ title: "最新版です", detail: `Stockroom ${appVersion()}`, kind: "success", replace: progress });
       return;
     }
+    if (progress !== undefined) st().dismissToast(progress);
     await offer(update);
   } catch (e) {
-    if (manual) st().notify({ title: "アップデートを確認できませんでした", detail: String(e), kind: "error" });
+    if (manual) st().notify({ title: "アップデートを確認できませんでした", detail: String(e), kind: "error", replace: progress });
     else warn("update check failed", e);
   } finally {
     busy = false;
@@ -75,10 +78,10 @@ export async function checkForUpdate(manual: boolean) {
 }
 
 async function offer(update: Update) {
-  const notes = update.body?.trim();
+  // No release notes here: the release body is the download page's
+  // "which installer" note, which means nothing inside the app.
   const ok = await ask(
     `新しいバージョン v${update.version} があります（現在 v${update.currentVersion}）。` +
-      (notes ? `\n\n${notes.slice(0, 600)}` : "") +
       "\n\nダウンロードして再起動しますか？",
     { title: "アップデート", kind: "info", okLabel: "更新して再起動", cancelLabel: "あとで" },
   );
