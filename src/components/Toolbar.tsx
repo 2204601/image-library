@@ -9,11 +9,13 @@ import {
   FolderSearch,
   ImagePlus,
   LayoutGrid,
+  Minus,
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Plus,
   RotateCcw,
   RotateCw,
   Search,
@@ -61,6 +63,7 @@ import { showItemMenu } from "./Grid";
 import { composing } from "../lib/ime";
 import { FilterBar } from "./FilterBar";
 import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
+import { Slider } from "./Slider";
 
 /** Thin line between groups of controls. */
 const Divider = () => <div className="mx-0.5 h-5 w-px shrink-0 bg-line" />;
@@ -115,9 +118,7 @@ export function Toolbar() {
   const sort = useStore((s) => s.sort);
   const desc = useStore((s) => s.desc);
   const setSort = useStore((s) => s.setSort);
-  const thumbSize = useStore((s) => s.thumbSize);
   const layout = useStore((s) => s.layout);
-  const setThumbSize = useStore((s) => s.setThumbSize);
   const tags = useStore((s) => s.tags);
   const items = useStore((s) => s.items);
   // Number of images (with tag grouping an image can be listed more than once).
@@ -417,21 +418,39 @@ export function Toolbar() {
           <Divider />
           <LayoutSwitch />
           <DisplayMenu />
-          <input
-            type="range"
-            min={80}
-            max={360}
-            step={10}
-            value={thumbSize}
-            onChange={(e) => setThumbSize(Number(e.target.value))}
-            title="サムネイルサイズ（⌘+ / ⌘-）"
-            className={`w-20 shrink-0 accent-accent @max-2xl:hidden ${layout === "specimen" || layout === "list" ? "hidden" : ""}`}
-          />
+          <ThumbSize hidden={layout === "specimen" || layout === "list"} />
         </div>
       </div>
       {(filterOpen || editingSmart) && <FilterBar />}
       {conditions > 0 && !editingSmart && <ActiveFilters count={count} />}
     </header>
+  );
+}
+
+/** Thumbnail size: the slider, with − / + that step like ⌘- / ⌘+. */
+function ThumbSize({ hidden }: { hidden: boolean }) {
+  const thumbSize = useStore((s) => s.thumbSize);
+  const setThumbSize = useStore((s) => s.setThumbSize);
+  const zoom = (id: "view.zoomIn" | "view.zoomOut") => command(id).run(useStore.getState());
+  const step = "flex h-6 w-5 shrink-0 items-center justify-center rounded text-dim hover:bg-white/8 hover:text-fg";
+  return (
+    <div className={`flex shrink-0 items-center @max-2xl:hidden ${hidden ? "hidden" : ""}`}>
+      <button title="縮小（⌘-）" onClick={() => zoom("view.zoomOut")} className={step}>
+        <Minus size={13} />
+      </button>
+      <Slider
+        min={80}
+        max={360}
+        step={10}
+        value={thumbSize}
+        onChange={(e) => setThumbSize(Number(e.target.value))}
+        title="サムネイルサイズ（⌘+ / ⌘-）"
+        className="mx-1 w-20"
+      />
+      <button title="拡大（⌘+）" onClick={() => zoom("view.zoomIn")} className={step}>
+        <Plus size={13} />
+      </button>
+    </div>
   );
 }
 
