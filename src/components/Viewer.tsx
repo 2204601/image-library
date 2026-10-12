@@ -10,10 +10,9 @@ import {
   Maximize,
   Minus,
   Plus,
-  RotateCcwSquare,
-  RotateCwSquare,
   X,
 } from "lucide-react";
+import { RotateLeft, RotateRight } from "../lib/icons";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openSelection, orient, setRating, toggleFavorite, togglePinned, toggleTray } from "../lib/actions";
 import { formatBytes, sizeLabel, orientTransform, type Item } from "../lib/api";
@@ -253,10 +252,10 @@ export function Viewer() {
             <>
               <div className="flex items-center gap-1">
                 <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw", { quiet: true })}>
-                  <RotateCcwSquare size={15} />
+                  <RotateLeft size={15} />
                 </button>
                 <button className={tool} title="右に回転（⌘⇧R）" onClick={() => orient([item.id], "rotateCw", { quiet: true })}>
-                  <RotateCwSquare size={15} />
+                  <RotateRight size={15} />
                 </button>
               </div>
               <div className="flex items-center gap-1">
