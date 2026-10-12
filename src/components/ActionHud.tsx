@@ -1,4 +1,5 @@
-import { FlipHorizontal2, FlipVertical2, Heart, HeartOff, Pin, PinOff, RotateCcw, RotateCw, Star, Undo2 } from "lucide-react";
+import { FlipHorizontal2, FlipVertical2, Heart, HeartOff, Pin, PinOff, Star, Undo2 } from "lucide-react";
+import { RotateLeft, RotateRight } from "../lib/icons";
 import { create } from "zustand";
 import type { OrientOp } from "../lib/api";
 
@@ -35,8 +36,8 @@ export function showHud(content: HudContent, ids: string[]) {
 }
 
 const ORIENT: Record<OrientOp, { icon: typeof Star; text: string }> = {
-  rotateCcw: { icon: RotateCcw, text: "左に回転しました" },
-  rotateCw: { icon: RotateCw, text: "右に回転しました" },
+  rotateCcw: { icon: RotateLeft, text: "左に回転しました" },
+  rotateCw: { icon: RotateRight, text: "右に回転しました" },
   flipH: { icon: FlipHorizontal2, text: "左右反転しました" },
   flipV: { icon: FlipVertical2, text: "上下反転しました" },
   reset: { icon: Undo2, text: "元の向きに戻しました" },

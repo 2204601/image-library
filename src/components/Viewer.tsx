@@ -3,16 +3,16 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  EyeOff,
   Folder as FolderIcon,
   GalleryHorizontal,
   Info,
   Maximize,
   Minus,
   Plus,
-  RotateCcw,
-  RotateCw,
   X,
 } from "lucide-react";
+import { RotateLeft, RotateRight } from "../lib/icons";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openSelection, orient, setRating, toggleFavorite, togglePinned, toggleTray } from "../lib/actions";
 import { formatBytes, sizeLabel, orientTransform, type Item } from "../lib/api";
@@ -29,6 +29,9 @@ const MIN = 0.05;
 const MAX = 16;
 const STEP = 1.25;
 
+/** How long the image-only view's "H to show" note stays. */
+const HINT_MS = 2200;
+
 /** Filmstrip thumbnail size and pitch (size + gap). */
 const STRIP = 64;
 const PITCH = STRIP + 6;
@@ -41,6 +44,10 @@ export function Viewer() {
   const showStrip = useStore((s) => s.viewerStrip);
   const toggleInfo = useStore((s) => s.toggleViewerInfo);
   const toggleStrip = useStore((s) => s.toggleViewerStrip);
+  const bare = useStore((s) => s.viewerBare);
+  const toggleBare = useStore((s) => s.toggleViewerBare);
+  // A note of how to get the controls back, shortly after the image-only view starts.
+  const [hint, setHint] = useState(0);
   const item = index !== null ? items[index] : undefined;
   const boxRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
@@ -52,6 +59,12 @@ export function Viewer() {
   // Fonts and files get their own body (sample text, document) instead of the zoomable image.
   const isImage = item?.kind === "image";
   useEffect(() => setZoom("fit"), [item?.id]);
+  useEffect(() => {
+    if (!open || !bare) return setHint(0);
+    setHint((n) => n + 1);
+    const t = setTimeout(() => setHint(0), HINT_MS);
+    return () => clearTimeout(t);
+  }, [open, bare]);
 
   useLayoutEffect(() => {
     const el = boxRef.current;
@@ -164,11 +177,13 @@ export function Viewer() {
         toggleInfo();
       } else if (!mod && !e.shiftKey && e.code === "KeyT") {
         toggleStrip();
+      } else if (!mod && !e.shiftKey && e.code === "KeyH") {
+        toggleBare();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [index, item, items, openViewer, scale, zoomTo, show, toggleInfo, toggleStrip]);
+  }, [index, item, items, openViewer, scale, zoomTo, show, toggleInfo, toggleStrip, toggleBare]);
 
   // Option/Ctrl + wheel (and trackpad pinch, which arrives as ctrl+wheel) zooms.
   useEffect(() => {
@@ -215,72 +230,77 @@ export function Viewer() {
   const sideways = item.rotation % 2 === 1;
 
   return (
-    <div className="fixed inset-0 z-40 flex animate-fade-in flex-col bg-black/95">
-      <div
-        {...dragRegion(true)}
-        className="flex items-center gap-3 px-4 py-2 text-sm text-white/80"
-        // The macOS window buttons are over the top left, centred on this bar
-        // as on the toolbar (48px tall).
-        style={{ paddingLeft: "max(1rem, var(--traffic-lights))", minHeight: "calc(var(--titlebar) + 8px)" }}
-      >
-        <span className="min-w-0 flex-1 truncate">{item.name}</span>
-        <span className="text-xs text-white/40 tabular-nums">
-          {sizeLabel(item)}
-        </span>
-        {item.kind === "file" && (
-          <button className={tool} title="既定のアプリで開く" onClick={() => openSelection([item.id])}>
-            <ExternalLink size={15} />
-          </button>
-        )}
-        {isImage && (
-          <>
-            <div className="flex items-center gap-1">
-              <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw", { quiet: true })}>
-                <RotateCcw size={15} />
-              </button>
-              <button className={tool} title="右に回転（⌘⇧R）" onClick={() => orient([item.id], "rotateCw", { quiet: true })}>
-                <RotateCw size={15} />
-              </button>
-            </div>
-            <div className="flex items-center gap-1">
-              <button className={tool} title="縮小（⌘-）" onClick={() => zoomTo(scale / STEP)}>
-                <Minus size={16} />
-              </button>
-              <button
-                className="w-14 rounded px-1 text-center text-xs tabular-nums hover:bg-white/10"
-                title="実寸（⌘0）"
-                onClick={() => zoomTo(1)}
-              >
-                {Math.round(scale * 100)}%
-              </button>
-              <button className={tool} title="拡大（⌘+）" onClick={() => zoomTo(scale * STEP)}>
-                <Plus size={16} />
-              </button>
-              <button
-                className={`${tool} ${zoom === "fit" ? "text-accent" : ""}`}
-                title="全体を表示（⌘9）"
-                onClick={() => setZoom("fit")}
-              >
-                <Maximize size={15} />
-              </button>
-            </div>
-          </>
-        )}
-        <span className="tabular-nums text-white/50">
-          {index + 1} / {items.length}
-        </span>
-        <div className="flex items-center gap-1">
-          <button className={toggle(showStrip)} title="前後のサムネイル（T）" onClick={toggleStrip}>
-            <GalleryHorizontal size={16} />
-          </button>
-          <button className={toggle(showInfo)} title="詳細（I）" onClick={toggleInfo}>
-            <Info size={16} />
+    <div className={`fixed inset-0 z-40 flex animate-fade-in flex-col ${bare ? "bg-black" : "bg-black/95"}`}>
+      {!bare && (
+        <div
+          {...dragRegion(true)}
+          className="flex items-center gap-3 px-4 py-2 text-sm text-white/80"
+          // The macOS window buttons are over the top left, centred on this bar
+          // as on the toolbar (48px tall).
+          style={{ paddingLeft: "max(1rem, var(--traffic-lights))", minHeight: "calc(var(--titlebar) + 8px)" }}
+        >
+          <span className="min-w-0 flex-1 truncate">{item.name}</span>
+          <span className="text-xs text-white/40 tabular-nums">
+            {sizeLabel(item)}
+          </span>
+          {item.kind === "file" && (
+            <button className={tool} title="既定のアプリで開く" onClick={() => openSelection([item.id])}>
+              <ExternalLink size={15} />
+            </button>
+          )}
+          {isImage && (
+            <>
+              <div className="flex items-center gap-1">
+                <button className={tool} title="左に回転（⌘⇧L）" onClick={() => orient([item.id], "rotateCcw", { quiet: true })}>
+                  <RotateLeft size={15} />
+                </button>
+                <button className={tool} title="右に回転（⌘⇧R）" onClick={() => orient([item.id], "rotateCw", { quiet: true })}>
+                  <RotateRight size={15} />
+                </button>
+              </div>
+              <div className="flex items-center gap-1">
+                <button className={tool} title="縮小（⌘-）" onClick={() => zoomTo(scale / STEP)}>
+                  <Minus size={16} />
+                </button>
+                <button
+                  className="w-14 rounded px-1 text-center text-xs tabular-nums hover:bg-white/10"
+                  title="実寸（⌘0）"
+                  onClick={() => zoomTo(1)}
+                >
+                  {Math.round(scale * 100)}%
+                </button>
+                <button className={tool} title="拡大（⌘+）" onClick={() => zoomTo(scale * STEP)}>
+                  <Plus size={16} />
+                </button>
+                <button
+                  className={`${tool} ${zoom === "fit" ? "text-accent" : ""}`}
+                  title="全体を表示（⌘9）"
+                  onClick={() => setZoom("fit")}
+                >
+                  <Maximize size={15} />
+                </button>
+              </div>
+            </>
+          )}
+          <span className="tabular-nums text-white/50">
+            {index + 1} / {items.length}
+          </span>
+          <div className="flex items-center gap-1">
+            <button className={toggle(showStrip)} title="前後のサムネイル（T）" onClick={toggleStrip}>
+              <GalleryHorizontal size={16} />
+            </button>
+            <button className={toggle(showInfo)} title="詳細（I）" onClick={toggleInfo}>
+              <Info size={16} />
+            </button>
+            <button className={tool} title="画像のみ表示（H）" onClick={toggleBare}>
+              <EyeOff size={16} />
+            </button>
+          </div>
+          <button className="rounded p-1 hover:bg-white/10" onClick={() => openViewer(null)}>
+            <X size={18} />
           </button>
         </div>
-        <button className="rounded p-1 hover:bg-white/10" onClick={() => openViewer(null)}>
-          <X size={18} />
-        </button>
-      </div>
+      )}
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 min-w-0 flex-1">
           {item.kind === "font" ? (
@@ -326,20 +346,34 @@ export function Viewer() {
               </div>
             </div>
           )}
-          <button className={`${nav} left-4`} disabled={index === 0} onClick={() => show(index - 1)}>
-            <ChevronLeft size={24} />
-          </button>
-          <button
-            className={`${nav} right-4`}
-            disabled={index === items.length - 1}
-            onClick={() => show(index + 1)}
-          >
-            <ChevronRight size={24} />
-          </button>
+          {!bare && (
+            <>
+              <button className={`${nav} left-4`} disabled={index === 0} onClick={() => show(index - 1)}>
+                <ChevronLeft size={24} />
+              </button>
+              <button
+                className={`${nav} right-4`}
+                disabled={index === items.length - 1}
+                onClick={() => show(index + 1)}
+              >
+                <ChevronRight size={24} />
+              </button>
+            </>
+          )}
+          {hint > 0 && (
+            <div
+              key={hint}
+              role="status"
+              className="pointer-events-none absolute top-4 left-1/2 -translate-x-1/2 animate-hud rounded-full border border-white/10 bg-black/80 px-4 py-2 text-sm whitespace-nowrap text-white/90 shadow-2xl shadow-black/50 backdrop-blur"
+              style={{ animationDuration: `${HINT_MS}ms` }}
+            >
+              H で操作と情報を表示
+            </div>
+          )}
         </div>
-        {showInfo && <Details item={item} items={items} />}
+        {showInfo && !bare && <Details item={item} items={items} />}
       </div>
-      {showStrip && items.length > 1 && <Strip items={items} index={index} onPick={show} />}
+      {showStrip && !bare && items.length > 1 && <Strip items={items} index={index} onPick={show} />}
     </div>
   );
 }
@@ -422,7 +456,7 @@ function Details({ item, items }: { item: Item; items: Item[] }) {
       </div>
       <p className="mt-auto pt-2 text-[11px] leading-5 text-white/35">
         1〜5 で評価、0 で解除、Shift+数字で評価して次へ
-        <br />F お気に入り / P ピン留め / I 詳細 / T サムネイル
+        <br />F お気に入り / P ピン留め / I 詳細 / T サムネイル / H 画像のみ
         {item.kind === "image" && (
           <>
             <br />⌘⇧L / ⌘⇧R 左右に回転

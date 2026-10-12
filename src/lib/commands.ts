@@ -15,12 +15,11 @@ import {
   Heart,
   Layers,
   Pin,
-  RotateCcw,
-  RotateCw,
   Trash2,
   Undo2,
   type LucideIcon,
 } from "lucide-react";
+import { RotateLeft, RotateRight } from "./icons";
 import {
   copySelection,
   copyTags,
@@ -304,7 +303,7 @@ export const COMMANDS: Command[] = [
   {
     id: "item.rotateCcw",
     title: "左に回転",
-    icon: RotateCcw,
+    icon: RotateLeft,
     keys: ["Mod+Shift+L"],
     kinds: ["image"],
     enabled: live,
@@ -313,7 +312,7 @@ export const COMMANDS: Command[] = [
   {
     id: "item.rotateCw",
     title: "右に回転",
-    icon: RotateCw,
+    icon: RotateRight,
     keys: ["Mod+Shift+R"],
     kinds: ["image"],
     enabled: live,

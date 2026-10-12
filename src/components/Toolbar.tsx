@@ -16,13 +16,12 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
-  RotateCcw,
-  RotateCw,
   Search,
   Star,
   Trash2,
   X,
 } from "lucide-react";
+import { RotateLeft, RotateRight } from "../lib/icons";
 import { useEffect, useMemo, useState } from "react";
 import { dragRegion } from "../lib/titleBar";
 import {
@@ -524,8 +523,8 @@ function SelectionActions() {
     <div className="flex shrink-0 items-center text-fg/80">
       {rotatable && (
         <>
-          {button(<RotateCcw size={15} />, `左に回転（${comboText("Mod+Shift+L")}）`, () => orient(ids, "rotateCcw"), narrow)}
-          {button(<RotateCw size={15} />, `右に回転（${comboText("Mod+Shift+R")}）`, () => orient(ids, "rotateCw"), narrow)}
+          {button(<RotateLeft size={15} />, `左に回転（${comboText("Mod+Shift+L")}）`, () => orient(ids, "rotateCcw"), narrow)}
+          {button(<RotateRight size={15} />, `右に回転（${comboText("Mod+Shift+R")}）`, () => orient(ids, "rotateCw"), narrow)}
         </>
       )}
       {button(
