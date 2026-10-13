@@ -48,8 +48,10 @@ fn main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
             .effects(
                 EffectsBuilder::new()
                     .effect(Effect::Sidebar)
-                    // Like Finder: a plain grey while the window is in the background.
-                    .state(EffectState::FollowsWindowActiveState)
+                    // Always the plain grey a background window gets: the active
+                    // material is tinted by the desktop (blue here), which made
+                    // the whole sidebar look selected.
+                    .state(EffectState::Inactive)
                     .build(),
             )
     };
