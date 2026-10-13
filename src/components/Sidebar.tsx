@@ -713,10 +713,15 @@ export function Sidebar() {
   const openSettings = useStore((s) => s.openSettings);
   const showMenu = useMenu((s) => s.show);
 
-  const smart: { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string }[] = [
+  type Entry = { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string };
+  // Three groups (docs/SETTINGS.md): what to look at, what is marked, and the
+  // tidying up, kept at the bottom.
+  const looks: Entry[] = [
     { view: { kind: "all" }, label: "すべて", icon: <Images size={15} />, count: counts.all },
     { view: { kind: "unfiled" }, label: "未分類", icon: <Inbox size={15} />, count: counts.unfiled },
     { view: { kind: "untagged" }, label: "タグなし", icon: <Tags size={15} />, count: counts.untagged },
+  ];
+  const marks: Entry[] = [
     { view: { kind: "favorites" }, label: "お気に入り", icon: <Heart size={15} />, count: counts.favorites },
     { view: { kind: "pinned" }, label: "ピン留め", icon: <Pin size={15} />, count: counts.pinned },
     {
@@ -727,10 +732,14 @@ export function Sidebar() {
       dropId: "tray",
       title: "まとめて出力・書き出しの前に、画像を一時的に集めておく場所（B キーで追加、ここへドラッグでも）",
     },
+  ];
+  const tidying: Entry[] = [
     // Look-alikes are found by image hash: images only.
     ...(mode === "all" && usesImages ? [{ view: { kind: "similar" } as View, label: "重複の候補", icon: <Copy size={15} /> }] : []),
     { view: { kind: "trash" }, label: "ゴミ箱", icon: <Trash2 size={15} />, count: counts.trash },
   ];
+
+  const shown = (list: Entry[]) => list.filter((e) => !hidden.includes(e.view.kind));
 
   // "すべて" and "ゴミ箱" always stay (see SIDEBAR_ENTRIES).
   const hideable = (v: View) => v.kind !== "all" && v.kind !== "trash";
@@ -747,6 +756,30 @@ export function Sidebar() {
           ]
         : [];
 
+  const row = (s: Entry) => (
+    <Row
+      key={s.view.kind}
+      active={sameView(view, s.view)}
+      icon={s.icon}
+      label={s.label}
+      count={s.count}
+      dropId={s.dropId}
+      title={s.title}
+      onClick={() => setView(s.view)}
+      onContextMenu={
+        // "すべて" has nothing to offer (no "…" either).
+        hideable(s.view) || menuOf(s.view).length
+          ? (e) => {
+              const items = menuOf(s.view);
+              if (hideable(s.view))
+                items.push(...(items.length ? [{ separator: true } as const] : []), hideItem(s.view.kind));
+              showMenu(e, items);
+            }
+          : undefined
+      }
+    />
+  );
+
   return (
     <aside className="vibrant flex shrink-0 flex-col border-r border-line bg-panel" style={{ width: sidebarWidth }}>
       {/* macOS: the window buttons' row, which also moves the window. */}
@@ -755,34 +788,15 @@ export function Sidebar() {
           top, the library at the bottom. */}
       <ModeSwitch />
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-        {smart.filter((s) => !hidden.includes(s.view.kind)).map((s) => (
-          <Row
-            key={s.view.kind}
-            active={sameView(view, s.view)}
-            icon={s.icon}
-            label={s.label}
-            count={s.count}
-            dropId={s.dropId}
-            title={s.title}
-            onClick={() => setView(s.view)}
-            onContextMenu={
-              // "すべて" has nothing to offer (no "…" either).
-              hideable(s.view) || menuOf(s.view).length
-                ? (e) => {
-                    const items = menuOf(s.view);
-                    if (hideable(s.view))
-                      items.push(...(items.length ? [{ separator: true } as const] : []), hideItem(s.view.kind));
-                    showMenu(e, items);
-                  }
-                : undefined
-            }
-          />
-        ))}
+        {shown(looks).map(row)}
+        {shown(marks).length > 0 && <div className="mx-2 my-1.5 border-t border-line/60" />}
+        {shown(marks).map(row)}
         {mode === "font" && <FontFilters />}
         <FolderTree />
         <SmartFolderList />
         <TagList />
       </nav>
+      <div className="shrink-0 border-t border-line px-2 py-1">{shown(tidying).map(row)}</div>
       {hidden.length > 0 && (
         <button
           onClick={() => openSettings(ownSidebar ? "librarySidebar" : "sidebar")}
