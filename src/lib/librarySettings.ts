@@ -1,6 +1,7 @@
 // Settings stored in the library itself (library.db `settings`, see
 // docs/SETTINGS.md): the kinds it is used for, the mode it was left in and
 // the sidebar entries hidden in each mode. They travel with the library.
+// The sidebar can instead follow the app's (settings.json `sidebarHidden`).
 import { KINDS, type ItemKind } from "./api";
 import { MODES, modesFor, type Mode } from "./modes";
 
@@ -14,13 +15,18 @@ export interface LibrarySettings {
    * (`lastMode` "image" opens "すべて" narrowed to images). Read, never saved.
    */
   lastKinds: ItemKind[];
-  /** Sidebar entries hidden, per mode (ids of `SIDEBAR_ENTRIES`). */
-  hidden: Partial<Record<Mode, string[]>>;
+  /** Sidebar entries hidden, per mode; used when `sidebarOwn`. */
+  hidden: SidebarHidden;
+  /** The library has its own sidebar entries; otherwise it follows the app's. */
+  sidebarOwn: boolean;
 }
+
+/** Sidebar entries hidden, per mode (ids of `SIDEBAR_ENTRIES`). */
+export type SidebarHidden = Partial<Record<Mode, string[]>>;
 
 const ALL_KINDS = KINDS.map((k) => k.kind);
 
-export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = { modes: ALL_KINDS, lastMode: null, lastKinds: [], hidden: {} };
+export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = { modes: ALL_KINDS, lastMode: null, lastKinds: [], hidden: {}, sidebarOwn: false };
 
 /** Sidebar entries that can be hidden. "すべて" and "ゴミ箱" always stay. */
 export const SIDEBAR_ENTRIES: { id: string; label: string; modes?: Mode[] }[] = [
@@ -60,12 +66,27 @@ export function parseLibrarySettings(raw: Record<string, unknown>): LibrarySetti
     const list = from ? ids(from) : [];
     if (list.length) hidden[k] = list;
   }
+  // Libraries that hid something before the app's sidebar existed keep it as their own.
+  const sidebarOwn = raw.sidebar === "own" || (raw.sidebar === undefined && Object.keys(hidden).length > 0);
   return {
     modes: modes.length ? modes : ALL_KINDS,
     lastMode: isMode(raw.lastMode) ? raw.lastMode : isOldMode(raw.lastMode) ? "all" : null,
     lastKinds: isOldMode(raw.lastMode) ? [raw.lastMode] : [],
     hidden,
+    sidebarOwn,
   };
+}
+
+/** The app's sidebar entries (settings.json), skipping modes and entries this version doesn't know. */
+export function parseSidebarHidden(raw: unknown): SidebarHidden {
+  const known = new Set(SIDEBAR_ENTRIES.map((e) => e.id));
+  const obj = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const hidden: SidebarHidden = {};
+  for (const m of MODES) {
+    const list = strings(obj[m]).filter((id) => known.has(id));
+    if (list.length) hidden[m] = list;
+  }
+  return hidden;
 }
 
 /**

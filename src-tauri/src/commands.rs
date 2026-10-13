@@ -75,11 +75,14 @@ pub struct AppSettings {
     startup: Startup,
     /// Look for a new version a few seconds after launch.
     auto_update: bool,
+    /// Sidebar entries hidden per mode, for the libraries that follow the
+    /// app's sidebar (library.db `sidebar` is not "own"). Read by the frontend.
+    sidebar_hidden: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { startup: Startup::Last, auto_update: true }
+        Self { startup: Startup::Last, auto_update: true, sidebar_hidden: Default::default() }
     }
 }
 

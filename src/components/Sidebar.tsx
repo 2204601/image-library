@@ -42,7 +42,19 @@ import {
 import { FontFilters } from "../features/fonts/FontFilters";
 import { api, type Folder, type View } from "../lib/api";
 import { modeLabel, type Mode } from "../lib/modes";
-import { activeConditions, isHidden, listNoun, MODES, shownModes, usedModes, useStore, type ListSource } from "../store";
+import {
+  activeConditions,
+  isHidden,
+  listNoun,
+  MODES,
+  shownModes,
+  sidebarEntryLabel,
+  sidebarHidden,
+  sidebarScope,
+  usedModes,
+  useStore,
+  type ListSource,
+} from "../store";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
@@ -68,13 +80,24 @@ function saveCollapsed(root: string, c: Set<string>) {
   }
 }
 
-/** "サイドバーから隠す" for an entry of the current mode (settings → このライブラリ brings it back). */
+/**
+ * "サイドバーから隠す" for an entry of the current mode, in the settings in
+ * effect (the app's, or the library's own); the toast says which.
+ */
 function hideItem(id: string): MenuItem {
   return {
     label: "サイドバーから隠す",
     onClick: () => {
       const s = useStore.getState();
-      s.setSidebarHidden(s.mode, [...(s.librarySettings.hidden[s.mode] ?? []), id]);
+      const { mode } = s;
+      const scope = sidebarScope(s);
+      const before = sidebarHidden(s, scope)[mode] ?? [];
+      s.setSidebarHidden(mode, [...before, id], scope);
+      s.notify({
+        title: `「${sidebarEntryLabel(id)}」をサイドバーから隠しました`,
+        detail: scope === "app" ? "すべてのライブラリ（アプリ全体の設定）" : "このライブラリだけ",
+        action: { label: "元に戻す", onClick: () => useStore.getState().setSidebarHidden(mode, before, scope) },
+      });
     },
   };
 }
@@ -685,7 +708,8 @@ export function Sidebar() {
   const setView = useStore((s) => s.setView);
   const mode = useStore((s) => s.mode);
   const usesImages = useStore((s) => usedModes(s).includes("image"));
-  const hidden = useStore(useShallow((s) => s.librarySettings.hidden[s.mode] ?? []));
+  const hidden = useStore(useShallow((s) => sidebarHidden(s)[s.mode] ?? []));
+  const ownSidebar = useStore((s) => sidebarScope(s) === "library");
   const openSettings = useStore((s) => s.openSettings);
   const showMenu = useMenu((s) => s.show);
 
@@ -761,8 +785,8 @@ export function Sidebar() {
       </nav>
       {hidden.length > 0 && (
         <button
-          onClick={() => openSettings("library", "settings-sidebar")}
-          title="サイドバーに出す項目は、設定の「このライブラリ」で選べます"
+          onClick={() => openSettings(ownSidebar ? "librarySidebar" : "sidebar")}
+          title={`サイドバーに出す項目は、設定の${ownSidebar ? "ライブラリの" : "アプリ全体の"}「サイドバー」で選べます`}
           className="shrink-0 px-4 pb-1.5 text-left text-[11px] text-dim hover:text-fg"
         >
           {hidden.length} 項目を非表示（表示…）

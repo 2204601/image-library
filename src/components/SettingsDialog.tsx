@@ -27,7 +27,7 @@ const KIND_ICON: Record<Mode | ItemKind, React.ReactNode> = {
 const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
   { id: "general", label: "一般", icon: <Settings size={15} /> },
   { id: "library", label: "このライブラリ", icon: <Library size={15} /> },
-  { id: "integration", label: "連携", icon: <Puzzle size={15} /> },
+  { id: "extension", label: "連携", icon: <Puzzle size={15} /> },
 ];
 
 /** ⌘, opens the screen (or closes it); Esc closes it. */
@@ -97,7 +97,7 @@ function Dialog({ tab }: { tab: SettingsTab }) {
           <div className="h-full overflow-y-auto px-6 py-5">
             {tab === "general" && <GeneralTab />}
             {tab === "library" && <LibraryTab />}
-            {tab === "integration" && (
+            {tab === "extension" && (
               <>
                 <WebImportSettings />
                 <div className="my-6 border-t border-line" />

@@ -106,8 +106,8 @@ export const COMMANDS: Command[] = [
     keyBy: "global",
     run: () => useShortcutHelp.getState().setOpen(true),
   },
-  { id: "help.webImport", title: "ブラウザ拡張と連携…", run: (s) => s.openSettings("integration") },
-  { id: "help.claude", title: "Claude と連携…", run: (s) => s.openSettings("integration", "settings-claude") },
+  { id: "help.webImport", title: "ブラウザ拡張と連携…", run: (s) => s.openSettings("extension") },
+  { id: "help.claude", title: "Claude と連携…", run: (s) => s.openSettings("claude") },
   { id: "help.log", title: "ログを表示", run: (s) => s.run(() => api.revealLog()) },
 
   // ------------------------------------------------------------ library

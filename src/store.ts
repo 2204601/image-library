@@ -4,6 +4,7 @@ import {
   EMPTY_FILTER,
   KINDS,
   kindLabel,
+  type AppSettings,
   type Counts,
   type DuplicateEffect,
   type Filter,
@@ -26,7 +27,10 @@ import {
   DEFAULT_LIBRARY_SETTINGS,
   openingMode,
   parseLibrarySettings,
+  parseSidebarHidden,
+  SIDEBAR_ENTRIES,
   type LibrarySettings,
+  type SidebarHidden,
 } from "./lib/librarySettings";
 import { groupItems, similarSections, type GroupBy, type Section } from "./lib/grouping";
 import { warn } from "./lib/log";
@@ -130,8 +134,14 @@ export interface ExportRequest {
   title: string;
 }
 
-/** The settings screen and where in it to open. */
-export type SettingsTab = "general" | "library" | "integration";
+/**
+ * The settings screen's pages: the app's (一般 … Claude), then the open
+ * library's (概要, サイドバー). See docs/SETTINGS.md.
+ */
+export type SettingsTab = "general" | "sidebar" | "extension" | "claude" | "library" | "librarySidebar";
+
+/** Where sidebar entries are hidden: the app's settings or the open library's. */
+export type SidebarScope = "app" | "library";
 
 /** A long task shown with a progress bar (bottom right). */
 export interface Progress {
@@ -144,6 +154,8 @@ interface State {
   library: LibraryInfo | null;
   /** The open library's own settings (docs/SETTINGS.md). */
   librarySettings: LibrarySettings;
+  /** The app's settings (settings.json); null until read at launch. */
+  appSettings: AppSettings | null;
 
   mode: Mode;
   view: View;
@@ -255,8 +267,13 @@ interface State {
   setKinds: (kinds: ItemKind[]) => void;
   /** Kinds the library is used for / switches to drop or bring back a kind. */
   setUsedModes: (modes: ItemKind[]) => void;
-  /** Hides (or shows again) sidebar entries of a mode. */
-  setSidebarHidden: (mode: Mode, ids: string[]) => void;
+  /** Hides (or shows again) sidebar entries of a mode, in `scope` (default: the one in effect). */
+  setSidebarHidden: (mode: Mode, ids: string[], scope?: SidebarScope) => void;
+  /** The library gets its own sidebar entries, or follows the app's again. */
+  setSidebarOwn: (own: boolean) => void;
+  loadAppSettings: () => Promise<void>;
+  /** Changes and saves the app's settings (once read). */
+  saveAppSettings: (patch: Partial<AppSettings>) => void;
   setView: (view: View) => void;
   setSearch: (s: string) => void;
   toggleTagFilter: (id: number) => void;
@@ -480,6 +497,24 @@ const initialMode: Mode = "all";
 
 let librarySeq = 0;
 
+/**
+ * After the sidebar entries in effect changed: hiding what is open moves to
+ * "すべて"; hiding the tags (or the fonts' filters) drops their conditions.
+ */
+function leaveHidden() {
+  const s = useStore.getState();
+  const ids = sidebarHidden(s)[s.mode] ?? [];
+  const entry = entryOfView(s.view);
+  if (entry && ids.includes(entry)) s.setView({ kind: "all" });
+  if (ids.includes("section:tags") && s.tagFilter.length) s.clearTagFilter();
+  if (ids.includes("section:fontFilters") && (s.filter.fontScripts.length || s.filter.fontCategories.length)) {
+    s.setFilter({ fontScripts: [], fontCategories: [] });
+  }
+}
+
+/** The sidebar entry's name ("作業台"), for messages. */
+export const sidebarEntryLabel = (id: string) => SIDEBAR_ENTRIES.find((e) => e.id === id)?.label ?? id;
+
 /** Saves one setting of the open library, reporting failures. */
 function saveLibrarySetting(key: string, value: unknown) {
   api.setLibrarySetting(key, value).catch((e) => useStore.getState().toast(String(e), true));
@@ -491,9 +526,19 @@ export const usedModes = usedKinds;
 /** Modes the switch offers: "すべて", and the fonts when used with another kind (see `modesFor`). */
 export const shownModes = (s: { librarySettings: LibrarySettings }): Mode[] => modesFor(usedModes(s));
 
+type SidebarState = Pick<State, "library" | "librarySettings" | "appSettings">;
+
+/** Whose sidebar entries are in effect: the library's own, or the app's. */
+export const sidebarScope = (s: SidebarState): SidebarScope =>
+  s.library && s.librarySettings.sidebarOwn ? "library" : "app";
+
+/** Sidebar entries hidden in `scope` (default: the one in effect), per mode. */
+export const sidebarHidden = (s: SidebarState, scope = sidebarScope(s)): SidebarHidden =>
+  scope === "library" ? s.librarySettings.hidden : (s.appSettings?.sidebarHidden ?? {});
+
 /** Whether a sidebar entry (SIDEBAR_ENTRIES id) is hidden in the current mode. */
-export const isHidden = (s: { librarySettings: LibrarySettings; mode: Mode }, id: string) =>
-  s.librarySettings.hidden[s.mode]?.includes(id) ?? false;
+export const isHidden = (s: SidebarState & { mode: Mode }, id: string) =>
+  sidebarHidden(s)[s.mode]?.includes(id) ?? false;
 
 /** Sidebar entry a view is listed under, if it can be hidden. */
 export function entryOfView(v: View): string | null {
@@ -513,6 +558,7 @@ export function entryOfView(v: View): string | null {
 export const useStore = create<State>((set, get) => ({
   library: null,
   librarySettings: DEFAULT_LIBRARY_SETTINGS,
+  appSettings: null,
 
   mode: initialMode,
   view: { kind: "all" },
@@ -710,18 +756,49 @@ export const useStore = create<State>((set, get) => ({
       get().refresh();
     }
   },
-  setSidebarHidden: (mode, ids) => {
-    const hidden = { ...get().librarySettings.hidden, [mode]: ids };
-    set({ librarySettings: { ...get().librarySettings, hidden } });
-    saveLibrarySetting(`hidden:${mode}`, ids.length ? ids : null);
-    if (mode !== get().mode) return;
-    // Hiding what is open moves to "すべて"; hiding the tags drops their filter.
-    const entry = entryOfView(get().view);
-    if (entry && ids.includes(entry)) get().setView({ kind: "all" });
-    if (ids.includes("section:tags") && get().tagFilter.length) get().clearTagFilter();
-    if (ids.includes("section:fontFilters") && (get().filter.fontScripts.length || get().filter.fontCategories.length)) {
-      get().setFilter({ fontScripts: [], fontCategories: [] });
+  setSidebarHidden: (mode, ids, scope = sidebarScope(get())) => {
+    if (scope === "app") {
+      const app = get().appSettings;
+      if (!app) return;
+      const sidebarHidden = { ...app.sidebarHidden, [mode]: ids };
+      if (!ids.length) delete sidebarHidden[mode];
+      get().saveAppSettings({ sidebarHidden });
+    } else {
+      const hidden = { ...get().librarySettings.hidden, [mode]: ids };
+      if (!ids.length) delete hidden[mode];
+      set({ librarySettings: { ...get().librarySettings, hidden } });
+      saveLibrarySetting(`hidden:${mode}`, ids.length ? ids : null);
     }
+    leaveHidden();
+  },
+  setSidebarOwn: (own) => {
+    const ls = get().librarySettings;
+    if (!get().library || own === ls.sidebarOwn) return;
+    let hidden = ls.hidden;
+    // Starts from the app's entries, unless the library had its own before.
+    if (own && !Object.keys(hidden).length) {
+      hidden = { ...(get().appSettings?.sidebarHidden ?? {}) };
+      for (const [m, ids] of Object.entries(hidden)) saveLibrarySetting(`hidden:${m}`, ids);
+    }
+    set({ librarySettings: { ...ls, hidden, sidebarOwn: own } });
+    saveLibrarySetting("sidebar", own ? "own" : "app");
+    leaveHidden();
+  },
+  loadAppSettings: async () => {
+    try {
+      const app = await api.getAppSettings();
+      set({ appSettings: { ...app, sidebarHidden: parseSidebarHidden(app.sidebarHidden) } });
+      leaveHidden();
+    } catch (e) {
+      get().toast(String(e), true);
+    }
+  },
+  saveAppSettings: (patch) => {
+    const app = get().appSettings;
+    if (!app) return;
+    const next = { ...app, ...patch };
+    set({ appSettings: next });
+    api.setAppSettings(next).catch((e) => get().toast(String(e), true));
   },
   setView: (view) => {
     // The similar view may take a moment to prepare; don't leave the old list up.

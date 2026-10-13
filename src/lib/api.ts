@@ -36,6 +36,8 @@ export interface AppSettings {
   /** At launch: open the last library, or show the list to choose from. */
   startup: "last" | "choose";
   autoUpdate: boolean;
+  /** Sidebar entries hidden per mode, for libraries that follow the app's sidebar. */
+  sidebarHidden: Partial<Record<"all" | "font", string[]>>;
 }
 
 /**
