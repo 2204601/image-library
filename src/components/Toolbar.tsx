@@ -43,7 +43,9 @@ import { SpecimenControls } from "../features/fonts/SpecimenControls";
 import { kindsNoun } from "../lib/modes";
 import {
   fontCategoryLabel,
+  fontFeatureLabel,
   fontScriptLabel,
+  fontWeightLabel,
   KINDS,
   type Folder,
   type ItemKind,
@@ -625,6 +627,18 @@ function ActiveFilters({ count }: { count: number }) {
       key: "fontCategories",
       label: `書体: ${filter.fontCategories.map(fontCategoryLabel).join("・")}`,
       clear: () => setFilter({ fontCategories: [] }),
+    });
+  if (filter.fontWeights.length)
+    chips.push({
+      key: "fontWeights",
+      label: `太さ: ${filter.fontWeights.map(fontWeightLabel).join("・")}`,
+      clear: () => setFilter({ fontWeights: [] }),
+    });
+  if (filter.fontFeatures.length)
+    chips.push({
+      key: "fontFeatures",
+      label: `特徴: ${filter.fontFeatures.map(fontFeatureLabel).join("・")}`,
+      clear: () => setFilter({ fontFeatures: [] }),
     });
   if (filter.exts.length)
     chips.push({ key: "exts", label: `形式: ${filter.exts.join(", ")}`, clear: () => setFilter({ exts: [] }) });

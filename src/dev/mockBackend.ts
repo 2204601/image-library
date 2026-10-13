@@ -18,18 +18,37 @@ type MockItem = Omit<
   | "fontScript"
   | "fontCategory"
   | "fontCategoryUser"
+  | "fontFeatures"
   | "inTray"
 > & {
   hue: number;
   sourceUrl?: string;
   fontFamily?: string;
   fontWeight?: number;
+  /** The wght axis of a variable font; else the one weight. */
+  fontWeightMin?: number;
+  fontWeightMax?: number;
   fontScript?: string;
   fontCategory?: string | null;
   fontCategoryUser?: string | null;
+  fontFeatures?: string[];
 };
 
 const items: MockItem[] = [];
+
+/** Weight ranges of the sidebar's 太さ, as in db.rs `FONT_WEIGHTS`. */
+const FONT_WEIGHT_RANGES: [string, number, number][] = [
+  ["light", 1, 399],
+  ["regular", 400, 549],
+  ["bold", 550, 749],
+  ["black", 750, 9999],
+];
+const inWeight = (i: MockItem, key: string) => {
+  const r = FONT_WEIGHT_RANGES.find(([k]) => k === key);
+  if (!r) return false;
+  const [lo, hi] = [i.fontWeightMin ?? i.fontWeight ?? 400, i.fontWeightMax ?? i.fontWeight ?? 400];
+  return lo <= r[2] && hi >= r[1];
+};
 const folders: Omit<Folder, "count">[] = [];
 const tags: { id: number; name: string; color: string | null }[] = [];
 // `${itemId}|${folderId}` -> manual position
@@ -85,23 +104,26 @@ function seed() {
   }
   // Fonts: no pixel size, a sample as the thumbnail. Noto Sans JP comes as
   // one file per weight (grouped by family), Inter as one variable font.
-  const fontFiles: [string, string, number, string, string | null][] = [
-    ["NotoSansJP-Bold.ttf", "Noto Sans JP", 700, "ja", "gothic"],
-    ["NotoSansJP-Regular.ttf", "Noto Sans JP", 400, "ja", "gothic"],
-    ["Inter[wght].woff2", "Inter", 400, "latin", "gothic"],
-    ["Hiragino.ttc", "ヒラギノ角ゴシック", 300, "ja", "gothic"],
-    ["NotoSansJP-Light.ttf", "Noto Sans JP", 300, "ja", "gothic"],
-    ["NotoSerifJP-Regular.otf", "Noto Serif JP", 400, "ja", "mincho"],
-    ["Garamond-Regular.otf", "EB Garamond", 400, "latin", "mincho"],
-    ["JetBrainsMono-Regular.ttf", "JetBrains Mono", 400, "latin", "mono"],
-    ["keifont.ttf", "けいふぉんと", 400, "ja", null],
+  const fontFiles: [string, string, number, string, string | null, string[], [number, number]?][] = [
+    ["NotoSansJP-Bold.ttf", "Noto Sans JP", 700, "ja", "gothic", []],
+    ["NotoSansJP-Regular.ttf", "Noto Sans JP", 400, "ja", "gothic", []],
+    ["Inter[wght].woff2", "Inter", 400, "latin", "gothic", ["variable"], [100, 900]],
+    ["Hiragino.ttc", "ヒラギノ角ゴシック", 300, "ja", "gothic", []],
+    ["NotoSansJP-Light.ttf", "Noto Sans JP", 300, "ja", "gothic", []],
+    ["NotoSerifJP-Regular.otf", "Noto Serif JP", 400, "ja", "mincho", []],
+    ["Garamond-Italic.otf", "EB Garamond", 400, "latin", "mincho", ["italic"]],
+    ["JetBrainsMono-Regular.ttf", "JetBrains Mono", 400, "latin", "gothic", ["mono", "coding"]],
+    ["keifont.ttf", "けいふぉんと", 400, "ja", "hand", []],
   ];
-  for (const [i, [file, fontFamily, fontWeight, fontScript, fontCategory]] of fontFiles.entries()) {
+  for (const [i, [file, fontFamily, fontWeight, fontScript, fontCategory, fontFeatures, range]] of fontFiles.entries()) {
     items.push({
       fontFamily,
       fontWeight,
+      fontWeightMin: range?.[0] ?? fontWeight,
+      fontWeightMax: range?.[1] ?? fontWeight,
       fontScript,
       fontCategory,
+      fontFeatures,
       id: id(),
       kind: "font",
       name: file,
@@ -287,6 +309,7 @@ const view = (it: MockItem): Item => {
     fontScript: it.fontScript ?? null,
     fontCategory: it.fontCategory ?? null,
     fontCategoryUser: it.fontCategoryUser ?? null,
+    fontFeatures: it.fontFeatures ?? [],
     inTray: tray.has(it.id),
     preview: null,
     folderId,
@@ -343,6 +366,9 @@ function applyRule(r: MockItem[], rule: Rule): MockItem[] {
     r = r.filter(
       (i) => i.kind === "font" && f.fontCategories.includes(i.fontCategoryUser ?? i.fontCategory ?? "none"),
     );
+  if (f.fontWeights?.length) r = r.filter((i) => i.kind === "font" && f.fontWeights.some((k) => inWeight(i, k)));
+  if (f.fontFeatures?.length)
+    r = r.filter((i) => i.kind === "font" && f.fontFeatures.some((k) => (i.fontFeatures ?? []).includes(k)));
   if (f.exts.length) r = r.filter((i) => f.exts.map(aliases).includes(aliases(i.ext)));
   // Shape and pixel size only apply to images (fonts are 0 × 0), as in db.rs.
   const sized = f.shapes.length || [f.minWidth, f.maxWidth, f.minHeight, f.maxHeight].some((v) => v != null);
@@ -575,6 +601,15 @@ function handle(cmd: string, a: any): unknown {
         fontCategories: countBy(
           live().filter((i) => i.kind === "font"),
           (i) => i.fontCategoryUser ?? i.fontCategory ?? "none",
+        ),
+        fontWeights: Object.fromEntries(
+          FONT_WEIGHT_RANGES.map(([k]) => [k, live().filter((i) => i.kind === "font" && inWeight(i, k)).length]).filter(
+            ([, n]) => n,
+          ),
+        ),
+        fontFeatures: countBy(
+          live().flatMap((i) => (i.kind === "font" ? (i.fontFeatures ?? []).map((k) => ({ k })) : [])),
+          (x) => x.k,
         ),
       };
     }

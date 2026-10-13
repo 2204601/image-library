@@ -92,14 +92,33 @@ export const FONT_CATEGORIES: { key: string; label: string }[] = [
   { key: "mincho", label: "明朝・セリフ" },
   { key: "gothic", label: "ゴシック・サンセリフ" },
   { key: "maru", label: "丸ゴシック" },
-  { key: "brush", label: "筆・手書き" },
+  { key: "slab", label: "スラブセリフ" },
+  { key: "brush", label: "筆書体" },
+  { key: "hand", label: "手書き" },
   { key: "display", label: "デザイン" },
-  { key: "mono", label: "等幅" },
   { key: "none", label: "未分類" },
+];
+
+/** Weight ranges (db.rs `FONT_WEIGHTS`); a variable font is in every range its wght axis spans. */
+export const FONT_WEIGHTS: { key: string; label: string; range: string }[] = [
+  { key: "light", label: "細い", range: "〜399" },
+  { key: "regular", label: "標準", range: "400〜549" },
+  { key: "bold", label: "太い", range: "550〜749" },
+  { key: "black", label: "極太", range: "750〜" },
+];
+
+/** Features a font has any number of (fonts.rs `FEATURES`). */
+export const FONT_FEATURES: { key: string; label: string }[] = [
+  { key: "mono", label: "等幅" },
+  { key: "coding", label: "プログラミング向け" },
+  { key: "variable", label: "可変フォント" },
+  { key: "italic", label: "イタリック・斜体" },
 ];
 
 export const fontScriptLabel = (k: string) => FONT_SCRIPTS.find((x) => x.key === k)?.label ?? k;
 export const fontCategoryLabel = (k: string) => FONT_CATEGORIES.find((x) => x.key === k)?.label ?? k;
+export const fontWeightLabel = (k: string) => FONT_WEIGHTS.find((x) => x.key === k)?.label ?? k;
+export const fontFeatureLabel = (k: string) => FONT_FEATURES.find((x) => x.key === k)?.label ?? k;
 
 /** A font's typeface style: the user's choice, else the guess, else "none". */
 export const fontCategoryOf = (item: Pick<Item, "fontCategory" | "fontCategoryUser">) =>
@@ -141,6 +160,8 @@ export interface Item {
   /** Fonts: typeface style guessed from the font (null = can't tell) and the user's correction. */
   fontCategory: string | null;
   fontCategoryUser: string | null;
+  /** Fonts: features (see FONT_FEATURES), empty until read. */
+  fontFeatures: string[];
   /** On the work tray (作業台). */
   inTray: boolean;
   filePath: string;
@@ -197,9 +218,11 @@ export interface Filter {
    * kinds picked when it was saved.
    */
   kinds: ItemKind[];
-  /** Fonts of any of these writing systems / styles (sidebar, under "フォント"). */
+  /** Fonts of any of these writing systems / styles / weight ranges / features (the font mode's sidebar). */
   fontScripts: string[];
   fontCategories: string[];
+  fontWeights: string[];
+  fontFeatures: string[];
   exts: string[];
   shapes: Shape[];
   minWidth: number | null;
@@ -218,6 +241,8 @@ export const EMPTY_FILTER: Filter = {
   kinds: [],
   fontScripts: [],
   fontCategories: [],
+  fontWeights: [],
+  fontFeatures: [],
   exts: [],
   shapes: [],
   minWidth: null,
@@ -280,6 +305,9 @@ export interface Counts {
   /** Fonts not in the trash by writing system and by style ("none" = unknown). */
   fontScripts: Record<string, number>;
   fontCategories: Record<string, number>;
+  /** ... by weight range (a variable font under every range it spans) and by feature. */
+  fontWeights: Record<string, number>;
+  fontFeatures: Record<string, number>;
 }
 
 export interface Folder {

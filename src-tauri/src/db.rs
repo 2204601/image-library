@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 17;
+const SCHEMA_VERSION: i32 = 18;
 
 const SETTINGS_TABLE: &str = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
@@ -294,6 +294,18 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
              CREATE INDEX idx_item_tags_tag ON item_tags(tag_id);",
         )
     })?;
+    // A font's weight range (the `wght` axis of a variable font) and features
+    // (fonts.rs `FEATURES`, comma-separated), for the sidebar's 太さ and 特徴.
+    // NULL features = not read yet, see `missing_font_meta`, which also
+    // re-guesses the style: 等幅 became a feature, and 筆・手書き was split.
+    step(18, &|c| {
+        add_column(c, "items", "font_weight_min", "INTEGER")?;
+        add_column(c, "items", "font_weight_max", "INTEGER")?;
+        add_column(c, "items", "font_features", "TEXT")?;
+        c.execute("UPDATE items SET font_category = NULL WHERE font_category = 'mono'", [])?;
+        c.execute("UPDATE items SET font_category_user = NULL WHERE font_category_user = 'mono'", [])?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -374,6 +386,8 @@ pub struct Item {
     /// user's correction, which wins. See `fonts::CATEGORIES`.
     pub font_category: Option<String>,
     pub font_category_user: Option<String>,
+    /// Fonts: features ("mono", "coding", ...), see `fonts::FEATURES`. Empty until read.
+    pub font_features: Vec<String>,
     /// On the work tray (作業台).
     pub in_tray: bool,
     /// Similar view only: which group of look-alikes the item belongs to.
@@ -441,6 +455,10 @@ pub struct Filter {
     /// under "フォント"). "none" = style unknown. Either one limits the list to fonts.
     pub font_scripts: Vec<String>,
     pub font_categories: Vec<String>,
+    /// Fonts of any of these weight ranges (`FONT_WEIGHTS`) / with any of
+    /// these features (`fonts::FEATURES`). Either one limits the list to fonts.
+    pub font_weights: Vec<String>,
+    pub font_features: Vec<String>,
     /// File types, e.g. "jpg" (also matches .jpeg), "png".
     pub exts: Vec<String>,
     /// Any of these shapes. Square = sides within 5% of each other.
@@ -527,7 +545,7 @@ const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items
      (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id), \
      items.rotation, items.flipped, items.kind, items.source_url, items.font_family, items.font_weight, \
      items.font_script, items.font_category, items.font_category_user, \
-     EXISTS (SELECT 1 FROM tray WHERE tray.item_id = items.id)";
+     EXISTS (SELECT 1 FROM tray WHERE tray.item_id = items.id), items.font_features";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     let tag_ids: Option<String> = r.get(16)?;
@@ -561,6 +579,10 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
         font_category: r.get(24)?,
         font_category_user: r.get(25)?,
         in_tray: r.get(26)?,
+        font_features: r
+            .get::<_, Option<String>>(27)?
+            .map(|s| s.split(',').filter(|f| !f.is_empty()).map(str::to_string).collect())
+            .unwrap_or_default(),
         group: None,
         distance: None,
     })
@@ -610,6 +632,23 @@ pub fn canonical_ext(ext: &str) -> String {
 
 /// A font's typeface style as filtered and counted: the user's, else the guess, else "none".
 const FONT_CATEGORY: &str = "COALESCE(items.font_category_user, items.font_category, 'none')";
+/// The weights a font covers; fonts read before the range was stored have their one weight.
+const FONT_WEIGHT_MIN: &str = "COALESCE(items.font_weight_min, items.font_weight)";
+const FONT_WEIGHT_MAX: &str = "COALESCE(items.font_weight_max, items.font_weight)";
+
+/// Weight ranges of the sidebar's 太さ: 細い, 標準, 太い, 極太 (CSS weights, inclusive).
+pub const FONT_WEIGHTS: &[(&str, u32, u32)] = &[("light", 1, 399), ("regular", 400, 549), ("bold", 550, 749), ("black", 750, 9999)];
+
+/// SQL: the font's weight range overlaps the named one (false for unknown names).
+fn font_weight_where(key: &str) -> String {
+    match FONT_WEIGHTS.iter().find(|(k, _, _)| *k == key) {
+        Some((_, lo, hi)) => format!("({FONT_WEIGHT_MIN} <= {hi} AND {FONT_WEIGHT_MAX} >= {lo})"),
+        None => "0".into(),
+    }
+}
+
+/// SQL: the font has the feature (an argument `?`, matched as a whole word).
+const FONT_FEATURE_WHERE: &str = "instr(',' || IFNULL(items.font_features, '') || ',', ',' || ? || ',') > 0";
 
 /// Adds the WHERE clauses for `rule`.
 fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql>>) {
@@ -660,6 +699,15 @@ fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql
             placeholders(f.font_categories.len())
         ));
         args.extend(f.font_categories.iter().map(|v| Box::new(v.clone()) as Box<dyn ToSql>));
+    }
+    if !f.font_weights.is_empty() {
+        let ranges: Vec<String> = f.font_weights.iter().map(|k| font_weight_where(k)).collect();
+        wheres.push(format!("(items.kind = 'font' AND ({}))", ranges.join(" OR ")));
+    }
+    if !f.font_features.is_empty() {
+        let has: Vec<&str> = f.font_features.iter().map(|_| FONT_FEATURE_WHERE).collect();
+        wheres.push(format!("(items.kind = 'font' AND ({}))", has.join(" OR ")));
+        args.extend(f.font_features.iter().map(|v| Box::new(v.clone()) as Box<dyn ToSql>));
     }
     if !f.exts.is_empty() {
         let exts: Vec<String> = f.exts.iter().flat_map(|e| ext_aliases(e)).collect();
@@ -899,7 +947,9 @@ pub fn missing_phashes(conn: &Connection) -> DbResult<Vec<(String, String)>> {
 /// Fonts whose details haven't been read yet (imported by a version that
 /// didn't store them all), trash included: (id, file name, extension).
 pub fn missing_font_meta(conn: &Connection) -> DbResult<Vec<(String, String, String)>> {
-    let mut stmt = conn.prepare("SELECT id, file_name, lower(ext) FROM items WHERE kind = 'font' AND font_script IS NULL")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, file_name, lower(ext) FROM items WHERE kind = 'font' AND (font_script IS NULL OR font_features IS NULL)",
+    )?;
     let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
     rows.collect()
 }
@@ -908,10 +958,20 @@ pub fn set_font_meta(conn: &mut Connection, metas: &[(String, crate::fonts::Font
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare(
-            "UPDATE items SET font_family = ?2, font_weight = ?3, font_script = ?4, font_category = ?5 WHERE id = ?1",
+            "UPDATE items SET font_family = ?2, font_weight = ?3, font_script = ?4, font_category = ?5,
+               font_weight_min = ?6, font_weight_max = ?7, font_features = ?8 WHERE id = ?1",
         )?;
         for (id, m) in metas {
-            stmt.execute(params![id, m.family, m.weight, m.script, m.category])?;
+            stmt.execute(params![
+                id,
+                m.family,
+                m.weight,
+                m.script,
+                m.category,
+                m.weight_min,
+                m.weight_max,
+                m.features_text()
+            ])?;
         }
     }
     tx.commit()
@@ -957,8 +1017,8 @@ pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
 pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
     tx.execute(
         "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview, kind,
-           font_family, font_weight, font_script, font_category)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+           font_family, font_weight, font_script, font_category, font_weight_min, font_weight_max, font_features)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         params![
             it.id,
             it.name,
@@ -977,7 +1037,10 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
             it.font.as_ref().map(|f| &f.family),
             it.font.as_ref().map(|f| f.weight),
             it.font.as_ref().map(|f| f.script),
-            it.font.as_ref().and_then(|f| f.category)
+            it.font.as_ref().and_then(|f| f.category),
+            it.font.as_ref().map(|f| f.weight_min),
+            it.font.as_ref().map(|f| f.weight_max),
+            it.font.as_ref().map(|f| f.features_text())
         ],
     )?;
     Ok(())
@@ -1327,6 +1390,10 @@ pub struct Counts {
     /// Fonts not in the trash by writing system, and by typeface style ("none" = unknown).
     pub font_scripts: BTreeMap<String, i64>,
     pub font_categories: BTreeMap<String, i64>,
+    /// Fonts not in the trash by weight range (`FONT_WEIGHTS`; a variable
+    /// font counts under every range it spans) and by feature.
+    pub font_weights: BTreeMap<String, i64>,
+    pub font_features: BTreeMap<String, i64>,
 }
 
 /// SQL fragment keeping rows of `kind` (any kind when None), with the kind
@@ -1353,6 +1420,29 @@ pub fn counts(conn: &Connection, kind: Option<Kind>) -> DbResult<Counts> {
     };
     let font_scripts = by("items.font_script")?;
     let font_categories = by(FONT_CATEGORY)?;
+    // One SUM per range / feature, of fonts whose details were read.
+    let sums = |terms: &[(&str, String)]| -> DbResult<BTreeMap<String, i64>> {
+        let cols: Vec<String> = terms.iter().map(|(_, t)| format!("SUM({t})")).collect();
+        let sql = format!(
+            "SELECT {} FROM items WHERE deleted_at IS NULL AND kind = 'font' AND font_script IS NOT NULL",
+            cols.join(", ")
+        );
+        let mut stmt = conn.prepare_cached(&sql)?;
+        stmt.query_row([], |r| {
+            terms
+                .iter()
+                .enumerate()
+                .map(|(i, (k, _))| Ok((k.to_string(), r.get::<_, Option<i64>>(i)?.unwrap_or(0))))
+                .collect()
+        })
+    };
+    let weight_terms: Vec<(&str, String)> = FONT_WEIGHTS.iter().map(|(k, _, _)| (*k, font_weight_where(k))).collect();
+    let feature_terms: Vec<(&str, String)> = crate::fonts::FEATURES
+        .iter()
+        .map(|k| (*k, format!("instr(',' || IFNULL(items.font_features, '') || ',', ',{k},') > 0")))
+        .collect();
+    let font_weights = sums(&weight_terms)?.into_iter().filter(|(_, n)| *n > 0).collect();
+    let font_features = sums(&feature_terms)?.into_iter().filter(|(_, n)| *n > 0).collect();
     let (of_kind, arg) = kind_where(kind, 1, "items");
     conn.query_row(
         &format!(
@@ -1379,6 +1469,8 @@ pub fn counts(conn: &Connection, kind: Option<Kind>) -> DbResult<Counts> {
                 kinds,
                 font_scripts,
                 font_categories,
+                font_weights,
+                font_features,
             })
         },
     )
@@ -2107,6 +2199,8 @@ mod tests {
                 kinds: BTreeMap::from([(Kind::Image, 2)]),
                 font_scripts: BTreeMap::new(),
                 font_categories: BTreeMap::new(),
+                font_weights: BTreeMap::new(),
+                font_features: BTreeMap::new(),
             }
         );
 
@@ -2672,6 +2766,26 @@ mod tests {
         set_font_category(&conn, &s(&["d"]), None).unwrap();
         conn.execute("UPDATE items SET font_category = NULL WHERE id = 'd'", []).unwrap();
         assert_eq!(find(&conn, f(|f| f.font_categories = vec!["none".into()])), s(&["d"]), "unknown style");
+
+        // Weight ranges: a variable font spanning 300-700 is light, regular and bold at once;
+        // a font read before the range was stored has its one weight.
+        conn.execute("UPDATE items SET font_weight = 400, font_weight_min = 300, font_weight_max = 700, font_features = 'mono,coding' WHERE id = 'd'", []).unwrap();
+        assert_eq!(find(&conn, f(|f| f.font_weights = vec!["light".into()])), s(&["d"]));
+        assert_eq!(find(&conn, f(|f| f.font_weights = vec!["bold".into()])), s(&["d"]));
+        assert!(find(&conn, f(|f| f.font_weights = vec!["black".into()])).is_empty());
+        assert!(find(&conn, f(|f| f.font_weights = vec!["nope".into()])).is_empty());
+        assert_eq!(find(&conn, f(|f| f.font_features = vec!["coding".into()])), s(&["d"]));
+        assert_eq!(find(&conn, f(|f| f.font_features = vec!["italic".into(), "mono".into()])), s(&["d"]), "any of");
+        assert!(find(&conn, f(|f| f.font_features = vec!["italic".into()])).is_empty());
+        assert!(find(&conn, f(|f| f.font_features = vec!["mon".into()])).is_empty(), "whole words");
+        let c = counts(&conn, None).unwrap();
+        assert_eq!(c.font_weights, BTreeMap::from([("light".to_string(), 1), ("regular".to_string(), 1), ("bold".to_string(), 1)]));
+        assert_eq!(c.font_features, BTreeMap::from([("mono".to_string(), 1), ("coding".to_string(), 1)]));
+        let mut query = q(View::All);
+        query.filter = f(|f| f.font_features = vec!["mono".into()]);
+        assert_eq!(query_items(&conn, &query).unwrap()[0].font_features, vec!["mono", "coding"]);
+        conn.execute("UPDATE items SET font_weight_min = NULL, font_weight_max = NULL WHERE id = 'd'", []).unwrap();
+        assert_eq!(counts(&conn, None).unwrap().font_weights, BTreeMap::from([("regular".to_string(), 1)]));
         assert_eq!(
             list_exts(&conn, None).unwrap(),
             vec![("png".to_string(), 2), ("jpg".to_string(), 1), ("tif".to_string(), 1)]

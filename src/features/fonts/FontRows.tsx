@@ -7,7 +7,7 @@ import { memo, useEffect, useState } from "react";
 // fine because everything is used at render time, not at load.
 import { onItemPointerDown, rowSelection, showItemMenu, Stars, type CellProps } from "../../components/Grid";
 import { ChangePulse } from "../../components/ActionHud";
-import { fontCategoryLabel, fontCategoryOf, fontScriptLabel, type Item } from "../../lib/api";
+import { fontCategoryLabel, fontCategoryOf, fontFeatureLabel, fontScriptLabel, type Item } from "../../lib/api";
 import { useStore } from "../../store";
 import { type FontListPreview } from "./api";
 import { fontChars, fontPreview, holdFont, loadFont } from "./loader";
@@ -124,6 +124,11 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
             {fontCategoryLabel(category)}
             {item.fontCategoryUser && " ✎"}
           </span>
+          {item.fontFeatures.map((k) => (
+            <span key={k} className="rounded bg-white/8 px-1.5 py-px">
+              {fontFeatureLabel(k)}
+            </span>
+          ))}
           <span className="uppercase">{item.ext}</span>
         </span>
       </div>
