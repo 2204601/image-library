@@ -202,10 +202,8 @@ interface State {
   /** Bumped to ask the inspector to focus the item name field. */
   renameItemSeq: number;
   picker: "move" | "goto" | null;
-  /** The settings screen (⌘,) is open, on this tab. */
+  /** The settings screen (⌘,) is open, on this page. */
   settingsTab: SettingsTab | null;
-  /** Part of the tab to scroll to (element id), once. */
-  settingsAnchor: string | null;
   /** A browser extension asks to connect; `code` is also shown in the extension. */
   /** `extension`: the asking extension's id (chrome://extensions shows it). */
   pairRequest: { id: string; code: string; extension: string } | null;
@@ -310,7 +308,7 @@ interface State {
   setRenamingFolder: (id: string | null) => void;
   requestItemRename: () => void;
   setPicker: (p: State["picker"]) => void;
-  openSettings: (tab: SettingsTab | null, anchor?: string) => void;
+  openSettings: (tab: SettingsTab | null) => void;
   setPairRequest: (r: State["pairRequest"]) => void;
   setSimilarLevel: (l: SimilarLevel) => void;
   /** Marks `id` as the copy to keep in its group. */
@@ -532,9 +530,11 @@ type SidebarState = Pick<State, "library" | "librarySettings" | "appSettings">;
 export const sidebarScope = (s: SidebarState): SidebarScope =>
   s.library && s.librarySettings.sidebarOwn ? "library" : "app";
 
+const NOTHING_HIDDEN: SidebarHidden = {};
+
 /** Sidebar entries hidden in `scope` (default: the one in effect), per mode. */
 export const sidebarHidden = (s: SidebarState, scope = sidebarScope(s)): SidebarHidden =>
-  scope === "library" ? s.librarySettings.hidden : (s.appSettings?.sidebarHidden ?? {});
+  scope === "library" ? s.librarySettings.hidden : (s.appSettings?.sidebarHidden ?? NOTHING_HIDDEN);
 
 /** Whether a sidebar entry (SIDEBAR_ENTRIES id) is hidden in the current mode. */
 export const isHidden = (s: SidebarState & { mode: Mode }, id: string) =>
@@ -592,7 +592,6 @@ export const useStore = create<State>((set, get) => ({
   renameItemSeq: 0,
   picker: null,
   settingsTab: null,
-  settingsAnchor: null,
   pairRequest: null,
   similarLevel: (["strict", "standard", "loose"] as const).find((l) => l === load("similarLevel")) ?? "standard",
   keepPick: new Set(),
@@ -976,7 +975,7 @@ export const useStore = create<State>((set, get) => ({
   setRenamingFolder: (renamingFolder) => set({ renamingFolder }),
   requestItemRename: () => set({ renameItemSeq: get().renameItemSeq + 1, inspectorOpen: true }),
   setPicker: (picker) => set({ picker }),
-  openSettings: (settingsTab, anchor) => set({ settingsTab, settingsAnchor: anchor ?? null }),
+  openSettings: (settingsTab) => set({ settingsTab }),
   setPairRequest: (pairRequest) => set({ pairRequest }),
   setSimilarLevel: (similarLevel) => {
     set({ similarLevel, keepPick: new Set(), selected: new Set(), anchor: null, focus: null });

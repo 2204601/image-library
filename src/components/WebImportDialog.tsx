@@ -1,9 +1,9 @@
-// "ブラウザ拡張と連携" (the settings screen's 連携 tab): turns the local server
+// "ブラウザ拡張と連携" (the settings screen's ブラウザ拡張 page): turns the local server
 // for the Chrome extension on or off (src-tauri/src/webimport.rs) and walks
 // through loading the extension. Also the dialog an extension's connection
 // request opens.
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Check, Copy, FolderOpen, Link2, Puzzle } from "lucide-react";
+import { Check, ChevronRight, Copy, FolderOpen, Link2, Puzzle } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type WebImportStatus } from "../lib/api";
 import { useStore } from "../store";
@@ -20,6 +20,7 @@ async function copy(text: string) {
 export function WebImportSettings() {
   const [status, setStatus] = useState<WebImportStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showSteps, setShowSteps] = useState(false);
   const isMac = navigator.userAgent.includes("Mac");
 
   useEffect(() => {
@@ -53,6 +54,7 @@ export function WebImportSettings() {
   };
 
   const on = status?.enabled ?? false;
+  const ready = !!status?.extensionDir;
 
   return (
     <div>
@@ -92,60 +94,84 @@ export function WebImportSettings() {
           </span>
         </label>
 
-        {on && (
+        {on && ready && (
+          // Set up already: the steps fold away behind the state.
+          <div className="mt-5 rounded-lg border border-line bg-bg/40 p-3 text-[13px]">
+            <div className="flex items-center gap-2">
+              <Check size={14} className="shrink-0 text-emerald-500" />
+              <span className="flex-1 font-medium">拡張機能のフォルダは用意済み</span>
+              <button
+                disabled={busy}
+                onClick={() => act(api.installExtension)}
+                className="flex h-7 items-center gap-1.5 rounded-md border border-line px-2.5 text-xs enabled:hover:bg-white/5 disabled:opacity-40"
+              >
+                <FolderOpen size={13} />
+                もう一度用意する
+              </button>
+            </div>
+            <PathRow path={status!.extensionDir!} />
+            <p className="mt-1.5 text-xs text-dim">
+              アプリを更新したときは「もう一度用意する」を押し、Chrome の拡張機能の画面で再読み込み（↻）を押してください。
+            </p>
+            <button
+              onClick={() => setShowSteps(!showSteps)}
+              aria-expanded={showSteps}
+              className="mt-2 flex items-center gap-1 text-xs text-dim hover:text-fg"
+            >
+              <ChevronRight size={13} className={`transition-transform ${showSteps ? "rotate-90" : ""}`} />
+              Chrome への入れ方と接続の手順
+            </button>
+          </div>
+        )}
+
+        {on && (!ready || showSteps) && (
           <ol className="mt-5 space-y-4 text-[13px]">
             <Step n={1} title="拡張機能を Chrome に入れる">
-              <div className="flex flex-wrap items-center gap-2">
+              {!ready && (
                 <button
                   disabled={busy}
                   onClick={() => act(api.installExtension)}
-                  className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 font-medium text-white enabled:hover:brightness-110 disabled:opacity-40"
+                  className="mb-2 flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 font-medium text-white enabled:hover:brightness-110 disabled:opacity-40"
                 >
                   <FolderOpen size={14} />
-                  {status?.extensionDir ? "もう一度用意する" : "拡張機能のフォルダを用意して表示"}
+                  拡張機能のフォルダを用意して表示
                 </button>
-                {status?.extensionDir && (
-                  <span className="flex items-center gap-1 text-xs text-dim">
-                    <Check size={13} className="text-emerald-500" /> 用意済み
-                  </span>
-                )}
-              </div>
-              {status?.extensionDir && <PathRow path={status.extensionDir} />}
-              <ol className="mt-2 list-decimal space-y-0.5 pl-4 text-xs text-dim">
+              )}
+              <ol className="list-decimal space-y-0.5 pl-4 text-xs text-dim">
                 <li>
                   Chrome で <Code text="chrome://extensions" /> を開く（Edge は <Code text="edge://extensions" />）
                 </li>
                 <li>右上の「デベロッパー モード」をオンにする</li>
                 <li>
-                  「パッケージ化されていない拡張機能を読み込む」で、上のフォルダを選ぶ
+                  「パッケージ化されていない拡張機能を読み込む」で、{ready ? "上の" : "用意した"}フォルダを選ぶ
                   {isMac ? "（⌘⇧G でパスを貼り付けると早い）" : "（アドレス欄にパスを貼り付けると早い）"}
                 </li>
               </ol>
-              <p className="mt-1.5 text-xs text-dim">
-                アプリを更新したときは「もう一度用意する」を押し、Chrome
-                の拡張機能の画面で再読み込み（↻）を押してください。
-              </p>
             </Step>
             <Step n={2} title="アプリと接続する">
-              <p className="text-xs text-dim">上のフォルダから入れた拡張機能は、そのまま接続されます。</p>
+              <p className="text-xs text-dim">用意したフォルダから入れた拡張機能は、そのまま接続されます。</p>
               <p className="mt-1 text-xs text-dim">
                 別の場所から入れた拡張機能や、つながらないときは、ツールバーの拡張機能のアイコン →
                 <span className="text-fg">「アプリと接続」</span>
                 を押してください。このアプリに確認が出るので、番号が同じなら「許可する」を押します。
               </p>
             </Step>
-            <Step n={3} title="使い方">
-              <ul className="list-disc space-y-0.5 pl-4 text-xs text-dim">
-                <li>ツールバーの拡張機能のアイコンで、保存先のフォルダと付けるタグを選ぶ</li>
-                <li>
-                  画像を右クリック →「Stockroom に保存」。{isMac ? "Option" : "Alt"}{" "}
-                  を押しながら右クリックすると、すぐに保存
-                </li>
-                <li>アイコンの「このページの画像を一覧して保存…」で、大きさ・形式で絞り込んでまとめて保存</li>
-                <li>アイコンの「スクリーンショットを保存」で、いまブラウザに見えている範囲を画像にして保存</li>
-              </ul>
-            </Step>
           </ol>
+        )}
+
+        {on && (
+          <div className="mt-5 text-[13px]">
+            <div className="mb-1.5 font-medium">使い方</div>
+            <ul className="list-disc space-y-0.5 pl-4 text-xs text-dim">
+              <li>ツールバーの拡張機能のアイコンで、保存先のフォルダと付けるタグを選ぶ</li>
+              <li>
+                画像を右クリック →「Stockroom に保存」。{isMac ? "Option" : "Alt"}{" "}
+                を押しながら右クリックすると、すぐに保存
+              </li>
+              <li>アイコンの「このページの画像を一覧して保存…」で、大きさ・形式で絞り込んでまとめて保存</li>
+              <li>アイコンの「スクリーンショットを保存」で、いまブラウザに見えている範囲を画像にして保存</li>
+            </ul>
+          </div>
         )}
       </div>
 
