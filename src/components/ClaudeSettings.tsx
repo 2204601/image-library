@@ -1,5 +1,4 @@
-// "Claude と連携" (the settings screen's 連携 tab, below the browser
-// extension): turns the MCP server on or off (src-tauri/src/mcp/), shows
+// "Claude と連携" (the settings screen's Claude page): turns the MCP server on or off (src-tauri/src/mcp/), shows
 // what to paste into Claude Code / Claude Desktop, and lists the changes made
 // from Claude so they can be undone (src-tauri/src/changes.rs).
 import { ask } from "@tauri-apps/plugin-dialog";
@@ -55,7 +54,7 @@ export function ClaudeSettings() {
   const on = status?.enabled ?? false;
 
   return (
-    <div id="settings-claude" className="scroll-mt-4">
+    <div>
       <div className="mb-4">
         <div className="flex items-center gap-2 font-semibold">
           <Bot size={16} className="text-accent" />

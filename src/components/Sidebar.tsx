@@ -42,7 +42,19 @@ import {
 import { FontFilters } from "../features/fonts/FontFilters";
 import { api, type Folder, type View } from "../lib/api";
 import { modeLabel, type Mode } from "../lib/modes";
-import { activeConditions, isHidden, listNoun, MODES, shownModes, usedModes, useStore, type ListSource } from "../store";
+import {
+  activeConditions,
+  isHidden,
+  listNoun,
+  MODES,
+  shownModes,
+  sidebarEntryLabel,
+  sidebarHidden,
+  sidebarScope,
+  usedModes,
+  useStore,
+  type ListSource,
+} from "../store";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { LibrarySwitcher } from "./LibrarySwitcher";
 import { startPointerDrag } from "./DragLayer";
@@ -68,13 +80,24 @@ function saveCollapsed(root: string, c: Set<string>) {
   }
 }
 
-/** "サイドバーから隠す" for an entry of the current mode (settings → このライブラリ brings it back). */
+/**
+ * "サイドバーから隠す" for an entry of the current mode, in the settings in
+ * effect (the app's, or the library's own); the toast says which.
+ */
 function hideItem(id: string): MenuItem {
   return {
     label: "サイドバーから隠す",
     onClick: () => {
       const s = useStore.getState();
-      s.setSidebarHidden(s.mode, [...(s.librarySettings.hidden[s.mode] ?? []), id]);
+      const { mode } = s;
+      const scope = sidebarScope(s);
+      const before = sidebarHidden(s, scope)[mode] ?? [];
+      s.setSidebarHidden(mode, [...before, id], scope);
+      s.notify({
+        title: `「${sidebarEntryLabel(id)}」をサイドバーから隠しました`,
+        detail: scope === "app" ? "すべてのライブラリ（アプリ全体の設定）" : "このライブラリだけ",
+        action: { label: "元に戻す", onClick: () => useStore.getState().setSidebarHidden(mode, before, scope) },
+      });
     },
   };
 }
@@ -685,14 +708,20 @@ export function Sidebar() {
   const setView = useStore((s) => s.setView);
   const mode = useStore((s) => s.mode);
   const usesImages = useStore((s) => usedModes(s).includes("image"));
-  const hidden = useStore(useShallow((s) => s.librarySettings.hidden[s.mode] ?? []));
+  const hidden = useStore(useShallow((s) => sidebarHidden(s)[s.mode] ?? []));
+  const ownSidebar = useStore((s) => sidebarScope(s) === "library");
   const openSettings = useStore((s) => s.openSettings);
   const showMenu = useMenu((s) => s.show);
 
-  const smart: { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string }[] = [
+  type Entry = { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string };
+  // Three groups (docs/SETTINGS.md): what to look at, what is marked, and the
+  // tidying up, kept at the bottom.
+  const looks: Entry[] = [
     { view: { kind: "all" }, label: "すべて", icon: <Images size={15} />, count: counts.all },
     { view: { kind: "unfiled" }, label: "未分類", icon: <Inbox size={15} />, count: counts.unfiled },
     { view: { kind: "untagged" }, label: "タグなし", icon: <Tags size={15} />, count: counts.untagged },
+  ];
+  const marks: Entry[] = [
     { view: { kind: "favorites" }, label: "お気に入り", icon: <Heart size={15} />, count: counts.favorites },
     { view: { kind: "pinned" }, label: "ピン留め", icon: <Pin size={15} />, count: counts.pinned },
     {
@@ -703,10 +732,14 @@ export function Sidebar() {
       dropId: "tray",
       title: "まとめて出力・書き出しの前に、画像を一時的に集めておく場所（B キーで追加、ここへドラッグでも）",
     },
+  ];
+  const tidying: Entry[] = [
     // Look-alikes are found by image hash: images only.
     ...(mode === "all" && usesImages ? [{ view: { kind: "similar" } as View, label: "重複の候補", icon: <Copy size={15} /> }] : []),
     { view: { kind: "trash" }, label: "ゴミ箱", icon: <Trash2 size={15} />, count: counts.trash },
   ];
+
+  const shown = (list: Entry[]) => list.filter((e) => !hidden.includes(e.view.kind));
 
   // "すべて" and "ゴミ箱" always stay (see SIDEBAR_ENTRIES).
   const hideable = (v: View) => v.kind !== "all" && v.kind !== "trash";
@@ -723,6 +756,30 @@ export function Sidebar() {
           ]
         : [];
 
+  const row = (s: Entry) => (
+    <Row
+      key={s.view.kind}
+      active={sameView(view, s.view)}
+      icon={s.icon}
+      label={s.label}
+      count={s.count}
+      dropId={s.dropId}
+      title={s.title}
+      onClick={() => setView(s.view)}
+      onContextMenu={
+        // "すべて" has nothing to offer (no "…" either).
+        hideable(s.view) || menuOf(s.view).length
+          ? (e) => {
+              const items = menuOf(s.view);
+              if (hideable(s.view))
+                items.push(...(items.length ? [{ separator: true } as const] : []), hideItem(s.view.kind));
+              showMenu(e, items);
+            }
+          : undefined
+      }
+    />
+  );
+
   return (
     <aside className="vibrant flex shrink-0 flex-col border-r border-line bg-panel" style={{ width: sidebarWidth }}>
       {/* macOS: the window buttons' row, which also moves the window. */}
@@ -731,38 +788,19 @@ export function Sidebar() {
           top, the library at the bottom. */}
       <ModeSwitch />
       <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-        {smart.filter((s) => !hidden.includes(s.view.kind)).map((s) => (
-          <Row
-            key={s.view.kind}
-            active={sameView(view, s.view)}
-            icon={s.icon}
-            label={s.label}
-            count={s.count}
-            dropId={s.dropId}
-            title={s.title}
-            onClick={() => setView(s.view)}
-            onContextMenu={
-              // "すべて" has nothing to offer (no "…" either).
-              hideable(s.view) || menuOf(s.view).length
-                ? (e) => {
-                    const items = menuOf(s.view);
-                    if (hideable(s.view))
-                      items.push(...(items.length ? [{ separator: true } as const] : []), hideItem(s.view.kind));
-                    showMenu(e, items);
-                  }
-                : undefined
-            }
-          />
-        ))}
+        {shown(looks).map(row)}
+        {shown(marks).length > 0 && <div className="mx-2 my-1.5 border-t border-line/60" />}
+        {shown(marks).map(row)}
         {mode === "font" && <FontFilters />}
         <FolderTree />
         <SmartFolderList />
         <TagList />
       </nav>
+      <div className="shrink-0 border-t border-line px-2 py-1">{shown(tidying).map(row)}</div>
       {hidden.length > 0 && (
         <button
-          onClick={() => openSettings("library", "settings-sidebar")}
-          title="サイドバーに出す項目は、設定の「このライブラリ」で選べます"
+          onClick={() => openSettings(ownSidebar ? "librarySidebar" : "sidebar")}
+          title={`サイドバーに出す項目は、設定の${ownSidebar ? "ライブラリの" : "アプリ全体の"}「サイドバー」で選べます`}
           className="shrink-0 px-4 pb-1.5 text-left text-[11px] text-dim hover:text-fg"
         >
           {hidden.length} 項目を非表示（表示…）

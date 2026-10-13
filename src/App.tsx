@@ -56,6 +56,7 @@ export default function App() {
       .then((lib) => lib && useStore.getState().setLibrary(lib))
       .catch((e) => useStore.getState().toast(String(e), true))
       .finally(() => setReady(true));
+    useStore.getState().loadAppSettings();
     loadAppVersion();
     return scheduleUpdateCheck();
   }, []);

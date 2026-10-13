@@ -1,16 +1,31 @@
-// The settings screen (⌘,), see docs/SETTINGS.md: the whole app (一般), the
-// open library's own settings (このライブラリ, stored in its library.db) and
-// the browser extension (連携). Changes are saved as they are made.
-import { FileText, FolderInput, FolderOpen, Image as ImageIcon, Library, Puzzle, Settings, Shapes, Type, X } from "lucide-react";
+// The settings screen (⌘,), see docs/SETTINGS.md: the app's pages (一般,
+// サイドバー, ブラウザ拡張, Claude; settings.json and this PC), then the open
+// library's (概要, サイドバー; stored in its library.db). Changes are saved as
+// they are made.
+import {
+  Bot,
+  FileText,
+  FolderInput,
+  FolderOpen,
+  Image as ImageIcon,
+  Info,
+  Library,
+  PanelLeft,
+  Puzzle,
+  Settings,
+  Shapes,
+  Type,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { transferAllOfKind } from "../lib/actions";
 import { api, formatBytes, KINDS, kindLabel, type AppSettings, type ItemKind } from "../lib/api";
-import { sidebarEntriesOf } from "../lib/librarySettings";
-import { modeLabel, modesFor, type Mode } from "../lib/modes";
+import { sidebarEntriesOf, type SidebarHidden } from "../lib/librarySettings";
+import { MODES, modeLabel, modesFor, type Mode } from "../lib/modes";
 import { isMac } from "../lib/shortcuts";
 import { appVersion, checkForUpdate } from "../lib/update";
-import { usedModes, useStore, type SettingsTab } from "../store";
+import { sidebarHidden, usedModes, useStore, type SettingsTab } from "../store";
 import { WebImportSettings } from "./WebImportDialog";
 import { composing } from "../lib/ime";
 import { ClaudeSettings } from "./ClaudeSettings";
@@ -24,10 +39,20 @@ const KIND_ICON: Record<Mode | ItemKind, React.ReactNode> = {
   file: <FileText size={14} />,
 };
 
-const TABS: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
+type Page = { id: SettingsTab; label: string; icon: React.ReactNode };
+
+/** Saved for the app (settings.json and this PC). */
+const APP_PAGES: Page[] = [
   { id: "general", label: "一般", icon: <Settings size={15} /> },
-  { id: "library", label: "このライブラリ", icon: <Library size={15} /> },
-  { id: "integration", label: "連携", icon: <Puzzle size={15} /> },
+  { id: "sidebar", label: "サイドバー", icon: <PanelLeft size={15} /> },
+  { id: "extension", label: "ブラウザ拡張", icon: <Puzzle size={15} /> },
+  { id: "claude", label: "Claude", icon: <Bot size={15} /> },
+];
+
+/** Saved in the open library (library.db). */
+const LIBRARY_PAGES: Page[] = [
+  { id: "library", label: "概要", icon: <Info size={15} /> },
+  { id: "librarySidebar", label: "サイドバー", icon: <PanelLeft size={15} /> },
 ];
 
 /** ⌘, opens the screen (or closes it); Esc closes it. */
@@ -59,15 +84,22 @@ export function SettingsDialog() {
 
 function Dialog({ tab }: { tab: SettingsTab }) {
   const openSettings = useStore((s) => s.openSettings);
-  const anchor = useStore((s) => s.settingsAnchor);
+  const library = useStore((s) => s.library);
   const close = () => openSettings(null);
 
-  // Opened for one part of a tab (e.g. the sidebar entries): bring it into view.
-  useEffect(() => {
-    if (!anchor) return;
-    requestAnimationFrame(() => document.getElementById(anchor)?.scrollIntoView({ block: "start" }));
-    useStore.setState({ settingsAnchor: null });
-  }, [anchor]);
+  const pageButton = (p: Page) => (
+    <button
+      key={p.id}
+      onClick={() => openSettings(p.id)}
+      aria-current={tab === p.id}
+      className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-left ${
+        tab === p.id ? "bg-accent/25 text-white" : "text-dim hover:bg-white/5 hover:text-fg"
+      }`}
+    >
+      {p.icon}
+      {p.label}
+    </button>
+  );
 
   return (
     <div data-modal className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
@@ -77,33 +109,27 @@ function Dialog({ tab }: { tab: SettingsTab }) {
         className="flex h-[min(620px,88vh)] w-[760px] max-w-[94vw] animate-zoom-in overflow-hidden rounded-xl border border-line bg-panel shadow-2xl"
         onPointerDown={(e) => e.stopPropagation()}
       >
-        <nav className="flex w-44 shrink-0 flex-col gap-0.5 border-r border-line bg-bg/40 p-2">
+        <nav className="flex w-48 shrink-0 flex-col gap-0.5 border-r border-line bg-bg/40 p-2">
           <div className="px-2 pt-1 pb-2 text-base font-semibold">設定</div>
-          {TABS.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => openSettings(t.id)}
-              aria-current={tab === t.id}
-              className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-left ${
-                tab === t.id ? "bg-accent/25 text-white" : "text-dim hover:bg-white/5 hover:text-fg"
-              }`}
-            >
-              {t.icon}
-              {t.label}
-            </button>
-          ))}
+          <NavHeading title="アプリ全体" />
+          {APP_PAGES.map(pageButton)}
+          {/* Only with a library open: its settings are stored in it. */}
+          {library && (
+            <>
+              <div className="mx-2 my-2 border-t border-line" />
+              <NavHeading title={`ライブラリ「${library.name}」`} sub="このライブラリに保存" />
+              {LIBRARY_PAGES.map(pageButton)}
+            </>
+          )}
         </nav>
         <div className="relative min-w-0 flex-1">
           <div className="h-full overflow-y-auto px-6 py-5">
-            {tab === "general" && <GeneralTab />}
-            {tab === "library" && <LibraryTab />}
-            {tab === "integration" && (
-              <>
-                <WebImportSettings />
-                <div className="my-6 border-t border-line" />
-                <ClaudeSettings />
-              </>
-            )}
+            {tab === "general" && <GeneralPage />}
+            {tab === "sidebar" && <AppSidebarPage />}
+            {tab === "extension" && <WebImportSettings />}
+            {tab === "claude" && <ClaudeSettings />}
+            {tab === "library" && <LibraryPage />}
+            {tab === "librarySidebar" && <LibrarySidebarPage />}
           </div>
           <button
             onClick={close}
@@ -114,6 +140,17 @@ function Dialog({ tab }: { tab: SettingsTab }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function NavHeading({ title, sub }: { title: string; sub?: string }) {
+  return (
+    <div className="px-2 pt-1 pb-1">
+      <div className="truncate text-[11px] font-semibold text-dim" title={title}>
+        {title}
+      </div>
+      {sub && <div className="text-[10px] text-dim/70">{sub}</div>}
     </div>
   );
 }
@@ -159,17 +196,9 @@ function Check({
 
 // ------------------------------------------------------------- 一般
 
-function GeneralTab() {
-  const [app, setApp] = useState<AppSettings | null>(null);
-  useEffect(() => {
-    api.getAppSettings().then(setApp, (e) => useStore.getState().toast(String(e), true));
-  }, []);
-  const save = (patch: Partial<AppSettings>) => {
-    if (!app) return;
-    const next = { ...app, ...patch };
-    setApp(next);
-    api.setAppSettings(next).catch((e) => useStore.getState().toast(String(e), true));
-  };
+function GeneralPage() {
+  const app = useStore((s) => s.appSettings);
+  const save = useStore((s) => s.saveAppSettings);
   const radio = (value: AppSettings["startup"], label: string, hint: string) => (
     <label className="flex cursor-pointer items-start gap-2.5 py-1">
       <input
@@ -217,13 +246,11 @@ function GeneralTab() {
 
 // ----------------------------------------------------- このライブラリ
 
-function LibraryTab() {
+function LibraryPage() {
   const library = useStore((s) => s.library);
   const kinds = useStore((s) => s.counts.kinds);
   const used = useStore(useShallow(usedModes));
-  const hidden = useStore((s) => s.librarySettings.hidden);
   const setUsedModes = useStore((s) => s.setUsedModes);
-  const setSidebarHidden = useStore((s) => s.setSidebarHidden);
   const [size, setSize] = useState<number | null>(null);
   useEffect(() => {
     if (library) api.librarySize().then(setSize, () => setSize(null));
@@ -301,34 +328,111 @@ function LibraryTab() {
         </p>
       )}
 
-      <Heading
-        id="settings-sidebar"
-        title="サイドバーの項目"
-        sub="チェックを外した項目はサイドバーに出しません。表示を隠すだけで、作業台へ追加（B キー）などの操作はそのまま使えます。「すべて」と「ゴミ箱」はいつも出ます"
+    </div>
+  );
+}
+
+// ------------------------------------------------------------ サイドバー
+
+/** One column of checks per mode; `onChange` gets the mode's new hidden entries. */
+function SidebarChecks({
+  modes,
+  hidden,
+  onChange,
+}: {
+  modes: Mode[];
+  hidden: SidebarHidden;
+  /** Without it the checks are shown, not changed (the app's, from a library). */
+  onChange?: (mode: Mode, ids: string[]) => void;
+}) {
+  return (
+    <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${modes.length}, minmax(0, 1fr))` }}>
+      {modes.map((m) => {
+        const off = hidden[m] ?? [];
+        return (
+          <div key={m}>
+            {modes.length > 1 && (
+              <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-dim">
+                {KIND_ICON[m]}
+                {modeLabel(m)}
+              </div>
+            )}
+            {sidebarEntriesOf(m).map((e) => (
+              <Check
+                key={e.id}
+                checked={!off.includes(e.id)}
+                disabled={!onChange}
+                onChange={(show) => onChange?.(m, show ? off.filter((x) => x !== e.id) : [...off, e.id])}
+              >
+                {e.label}
+              </Check>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const SIDEBAR_SUB =
+  "チェックを外した項目はサイドバーに出しません。表示を隠すだけで、作業台へ追加（B キー）などの操作はそのまま使えます。「すべて」と「ゴミ箱」はいつも出ます";
+
+function AppSidebarPage() {
+  const hidden = useStore((s) => sidebarHidden(s, "app"));
+  const loaded = useStore((s) => s.appSettings !== null);
+  const setSidebarHidden = useStore((s) => s.setSidebarHidden);
+  return (
+    <div>
+      <Heading title="サイドバーの項目" sub={`すべてのライブラリの既定です。${SIDEBAR_SUB}`} />
+      {loaded && <SidebarChecks modes={MODES} hidden={hidden} onChange={(m, ids) => setSidebarHidden(m, ids, "app")} />}
+      <p className="mt-4 text-xs text-dim">
+        ライブラリごとに変えるときは、そのライブラリを開いて、設定のライブラリの「サイドバー」で「このライブラリだけの設定」を選びます。
+      </p>
+    </div>
+  );
+}
+
+function LibrarySidebarPage() {
+  const library = useStore((s) => s.library);
+  const own = useStore((s) => s.librarySettings.sidebarOwn);
+  const hidden = useStore((s) => sidebarHidden(s));
+  const modes = useStore(useShallow((s) => modesFor(usedModes(s))));
+  const setSidebarOwn = useStore((s) => s.setSidebarOwn);
+  const setSidebarHidden = useStore((s) => s.setSidebarHidden);
+  const openSettings = useStore((s) => s.openSettings);
+  if (!library) return <p className="mt-8 text-center text-dim">ライブラリを開いていません</p>;
+
+  const radio = (value: boolean, label: string, hint: string) => (
+    <label className="flex cursor-pointer items-start gap-2.5 py-1">
+      <input
+        type="radio"
+        name="sidebarOwn"
+        className="mt-0.5 size-4 shrink-0 accent-[var(--color-accent)]"
+        checked={own === value}
+        onChange={() => setSidebarOwn(value)}
       />
-      <div className="grid gap-4" style={{ gridTemplateColumns: `repeat(${modesFor(used).length}, minmax(0, 1fr))` }}>
-        {modesFor(used).map((m) => {
-          const off = hidden[m] ?? [];
-          return (
-            <div key={m}>
-              {modesFor(used).length > 1 && (
-                <div className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-dim">
-                  {KIND_ICON[m]}
-                  {modeLabel(m)}
-                </div>
-              )}
-              {sidebarEntriesOf(m).map((e) => (
-                <Check
-                  key={e.id}
-                  checked={!off.includes(e.id)}
-                  onChange={(show) => setSidebarHidden(m, show ? off.filter((x) => x !== e.id) : [...off, e.id])}
-                >
-                  {e.label}
-                </Check>
-              ))}
-            </div>
-          );
-        })}
+      <span>
+        {label}
+        <span className="mt-0.5 block text-xs text-dim">{hint}</span>
+      </span>
+    </label>
+  );
+
+  return (
+    <div>
+      <Heading title="サイドバーの項目" sub={SIDEBAR_SUB} />
+      {radio(false, "アプリ全体の設定を使う", "どのライブラリでも同じ項目を出します。この PC の設定です")}
+      {radio(true, "このライブラリだけの設定", "ライブラリに保存され、ほかの PC で開いても同じ項目を出します")}
+      <div className={`mt-3 rounded-lg border border-line p-3 ${own ? "" : "bg-bg/40"}`}>
+        <SidebarChecks modes={modes} hidden={hidden} onChange={own ? setSidebarHidden : undefined} />
+        {!own && (
+          <button
+            onClick={() => openSettings("sidebar")}
+            className="mt-2 text-xs text-accent underline-offset-2 hover:underline"
+          >
+            アプリ全体の設定を開く
+          </button>
+        )}
       </div>
     </div>
   );
