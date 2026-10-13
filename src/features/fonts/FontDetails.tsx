@@ -1,6 +1,6 @@
 // The details panel's rows for a font, and the typeface style picker.
 import { useEffect, useState } from "react";
-import { FONT_CATEGORIES, fontCategoryLabel, fontScriptLabel, type Item } from "../../lib/api";
+import { FONT_CATEGORIES, fontCategoryLabel, fontFeatureLabel, fontScriptLabel, type Item } from "../../lib/api";
 import { useStore } from "../../store";
 import { fontApi, type FontFaceInfo } from "./api";
 
@@ -75,6 +75,7 @@ export function FontDetails({ item }: { item: Item }) {
       {row("ファミリー", f.family || "—")}
       {item.fontScript && row("言語", fontScriptLabel(item.fontScript))}
       {row("書体", <FontCategorySelect fonts={[item]} />)}
+      {item.fontFeatures.length > 0 && row("特徴", item.fontFeatures.map(fontFeatureLabel).join("・"))}
       {faces.length > 1
         ? row(
             `フォント（${faces.length}）`,

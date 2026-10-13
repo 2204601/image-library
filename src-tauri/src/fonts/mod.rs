@@ -360,24 +360,55 @@ pub struct FontMeta {
     pub family: String,
     /// 100 (thin) to 900 (black).
     pub weight: u32,
+    /// The weights the font covers: the `wght` axis of a variable font, else
+    /// `weight` twice. The sidebar's 太さ counts a variable font under every
+    /// range it spans.
+    pub weight_min: u32,
+    pub weight_max: u32,
     /// Writing system: see `SCRIPTS`.
     pub script: &'static str,
     /// Typeface style (明朝 / ゴシック ...), None when it can't be told: see `CATEGORIES`.
     pub category: Option<&'static str>,
+    /// Traits a font has any number of, in `FEATURES` order: see `features`.
+    pub features: Vec<&'static str>,
+}
+
+impl FontMeta {
+    /// The features as stored in the DB ("mono,coding"; "" = none).
+    pub fn features_text(&self) -> String {
+        self.features.join(",")
+    }
 }
 
 /// Writing systems a font is filed under: 日本語, 欧文, 中国語, 韓国語, その他.
 pub const SCRIPTS: &[&str] = &["ja", "latin", "zh", "ko", "other"];
-/// Typeface styles: 明朝・セリフ, ゴシック・サンセリフ, 丸ゴシック, 筆・手書き, デザイン, 等幅.
-pub const CATEGORIES: &[&str] = &["mincho", "gothic", "maru", "brush", "display", "mono"];
+/// Typeface styles: 明朝・セリフ, ゴシック・サンセリフ, 丸ゴシック, スラブセリフ,
+/// 筆書体, 手書き, デザイン. Monospace is a feature, not a style (a monospaced
+/// font is still a gothic or a mincho).
+pub const CATEGORIES: &[&str] = &["mincho", "gothic", "maru", "slab", "brush", "hand", "display"];
+/// Features: 等幅, プログラミング向け, 可変フォント, イタリック・斜体.
+pub const FEATURES: &[&str] = &["mono", "coding", "variable", "italic"];
 
 pub fn meta(sfnt: &[u8]) -> Result<FontMeta, String> {
     let font = face_ref(sfnt, 0)?;
+    // Some fonts leave the weight class 0: regular, as far as anyone can tell.
+    let weight = match font.attributes().weight.value().round() as u32 {
+        0 => 400,
+        w => w,
+    };
+    let wght = font.axes().iter().find(|a| a.tag() == skrifa::raw::types::Tag::new(b"wght"));
+    let (weight_min, weight_max) = match wght {
+        Some(a) => (a.min_value().round() as u32, a.max_value().round() as u32),
+        None => (weight, weight),
+    };
     Ok(FontMeta {
         family: base_family(&font),
-        weight: font.attributes().weight.value().round() as u32,
+        weight,
+        weight_min,
+        weight_max,
         script: script(&font),
         category: category(&font),
+        features: features(&font),
     })
 }
 
@@ -445,6 +476,12 @@ pub fn strip_style(family: &str) -> String {
     if out.is_empty() { family.trim().to_string() } else { out }
 }
 
+/// Whether the font has kana (a Japanese font, whatever else it covers).
+fn has_kana(font: &FontRef) -> bool {
+    let cmap = font.charmap();
+    (0x3041..=0x30ff).filter(|&c| char::from_u32(c).is_some_and(|ch| cmap.map(ch).is_some())).count() >= 40
+}
+
 /// The writing system the font is made for, from the characters it has and
 /// the code pages it claims (fonts for one CJK language often carry the
 /// others' kana or hanzi too).
@@ -505,16 +542,23 @@ fn category(font: &FontRef) -> Option<&'static str> {
     let (text, words) = name_words(font);
     let word = |ws: &[&str]| words.iter().any(|w| ws.contains(&w.as_str()));
     let has = |ss: &[&str]| ss.iter().any(|s| text.contains(s));
-    if word(&["mono", "monospace", "monospaced", "code"]) || has(&["等幅"]) {
-        return Some("mono");
-    }
     if word(&["maru", "rounded", "round"]) || has(&["丸ゴ", "まる", "ラウンド"]) {
         return Some("maru");
     }
-    if word(&["kaisho", "gyosho", "sosho", "kyokasho", "fude", "brush", "script", "hand", "handwriting", "calligraphy"])
-        || has(&["筆", "楷書", "行書", "草書", "隷書", "教科書", "手書", "手描"])
+    if word(&["slab", "egyptian", "egyptienne", "clarendon"]) || has(&["スラブ"]) {
+        return Some("slab");
+    }
+    // Brush and formal scripts (calligraphy) before casual handwriting: a
+    // "hand-brushed" font is a brush one.
+    if word(&["kaisho", "gyosho", "sosho", "reisho", "kyokasho", "fude", "brush", "script", "calligraphy", "calligraphic"])
+        || has(&["筆", "楷書", "行書", "草書", "隷書", "教科書", "書道"])
     {
         return Some("brush");
+    }
+    if word(&["hand", "handwriting", "handwritten", "handwrite", "pen", "marker", "crayon", "chalk", "comic", "tegaki"])
+        || has(&["手書", "手描", "てがき", "ペン字", "鉛筆", "クレヨン", "マーカー", "チョーク"])
+    {
+        return Some("hand");
     }
     if word(&["mincho", "serif", "song", "ming", "antiqua"]) && !word(&["sans"]) || has(&["明朝", "宋"]) {
         return Some("mincho");
@@ -526,30 +570,31 @@ fn category(font: &FontRef) -> Option<&'static str> {
         return Some("display");
     }
 
-    let fixed = font.post().is_ok_and(|p| p.is_fixed_pitch() != 0);
     let (panose, class) = font
         .os2()
         .map(|t| (t.panose_10().to_vec(), (t.s_family_class() >> 8) as u8))
         .unwrap_or_default();
-    let (family_kind, serif, proportion) = (panose.first().copied(), panose.get(1).copied(), panose.get(3).copied());
-    if fixed || (family_kind == Some(2) && proportion == Some(9)) {
-        return Some("mono");
-    }
+    let (family_kind, serif) = (panose.first().copied(), panose.get(1).copied());
     match (family_kind, class) {
-        (Some(3), _) | (_, 10) => return Some("brush"),
+        (_, 10) => return Some("brush"),
+        // Hand-written, by tool: flat nib, pressure point, engraved and
+        // brushes are calligraphy; ball pens, rough and felt tips are handwriting.
+        (Some(3), _) => return Some(if matches!(serif, Some(2..=4 | 6 | 9)) { "brush" } else { "hand" }),
         (Some(4 | 5), _) | (_, 12) => return Some("display"),
+        (_, 5) => return Some("slab"),
         _ => {}
     }
     // Fonts that leave the family class empty (most free Japanese fonts) tend
-    // to carry leftover PANOSE serif values too: not trusted then.
-    if class == 0 {
+    // to carry leftover PANOSE serif values too: not trusted then, except
+    // for fonts without kana (Latin coding fonts fill in PANOSE alone).
+    if class == 0 && (family_kind != Some(2) || has_kana(font)) {
         return None;
     }
     if family_kind == Some(2) && serif == Some(15) {
         return Some("maru");
     }
     match class {
-        1..=7 => Some("mincho"),
+        1..=4 | 7 => Some("mincho"),
         8 => Some("gothic"),
         _ => match (family_kind, serif) {
             (Some(2), Some(2..=10)) => Some("mincho"),
@@ -557,6 +602,60 @@ fn category(font: &FontRef) -> Option<&'static str> {
             _ => None,
         },
     }
+}
+
+/// Advance width of `c` in font units, if the font has it.
+fn advance(font: &FontRef, c: char) -> Option<u16> {
+    let gid = font.charmap().map(c)?;
+    font.hmtx().ok()?.advance(gid)
+}
+
+/// Monospaced: the font says so (post / PANOSE), or its Latin letters are
+/// all as wide as each other. Japanese coding fonts (half-width Latin,
+/// full-width kana) rarely set the flag, so the widths are measured too.
+fn is_mono(font: &FontRef) -> bool {
+    if font.post().is_ok_and(|p| p.is_fixed_pitch() != 0) {
+        return true;
+    }
+    let panose = font.os2().map(|t| t.panose_10().to_vec()).unwrap_or_default();
+    if panose.first() == Some(&2) && panose.get(3) == Some(&9) {
+        return true;
+    }
+    let widths: Option<Vec<u16>> = "iMWa.1".chars().map(|c| advance(font, c)).collect();
+    widths.is_some_and(|w| w[0] > 0 && w.iter().all(|&x| x == w[0]))
+}
+
+const CODING_WORDS: &[&str] = &[
+    "code", "coding", "hack", "jetbrains", "cascadia", "consolas", "menlo", "monaco", "inconsolata", "ricty", "plemol",
+    "udev", "moralerspace", "sarasa", "cica", "myrica", "bizin", "firge", "iosevka", "monaspace", "commit", "victor",
+    "terminal", "console",
+];
+
+/// Features: 等幅 (`mono`), プログラミング向け (`coding`: a monospaced font
+/// named as one, with the half-to-full width ratio of Japanese coding fonts,
+/// or with a slashed / dotted zero on offer), 可変 (`variable`), 斜体 (`italic`).
+fn features(font: &FontRef) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    let mono = is_mono(font);
+    if mono {
+        out.push("mono");
+        let (_, words) = name_words(font);
+        let named = words.iter().any(|w| CODING_WORDS.contains(&w.as_str()));
+        let half_full = matches!((advance(font, 'a'), advance(font, 'あ')), (Some(h), Some(f)) if h > 0 && f == h * 2);
+        let zero = font.gsub().ok().and_then(|g| g.feature_list().ok()).is_some_and(|l| {
+            l.feature_records().iter().any(|r| r.feature_tag() == skrifa::raw::types::Tag::new(b"zero"))
+        });
+        if named || half_full || zero {
+            out.push("coding");
+        }
+    }
+    if !font.axes().is_empty() {
+        out.push("variable");
+    }
+    if font.attributes().style != skrifa::attribute::Style::Normal {
+        out.push("italic");
+    }
+    out
 }
 
 /// Every face, and the characters of face `index`.
@@ -772,6 +871,9 @@ pub mod tests {
         let face = &faces(&ttf).unwrap()[0];
         let wght = face.axes.iter().find(|a| a.tag == "wght").expect("a weight axis");
         assert!(wght.min < wght.default && wght.default <= wght.max);
+        let m = meta(&ttf).unwrap();
+        assert!(m.features.contains(&"variable"));
+        assert_eq!((m.weight_min, m.weight_max), (wght.min.round() as u32, wght.max.round() as u32));
         assert!(face.instances.len() >= 2, "named styles: {:?}", face.instances);
         // A plain font has neither.
         let Some(plain) = system_font(SINGLE) else { return };
@@ -802,22 +904,37 @@ pub mod tests {
     /// The OS's own fonts fill in their classification, so the guesses can be checked.
     #[test]
     fn tells_scripts_and_styles() {
-        let cases: &[(&[&str], &str, Option<&str>)] = &[
-            (&["/System/Library/Fonts/ヒラギノ明朝 ProN.ttc", "C:\\Windows\\Fonts\\yumin.ttf"], "ja", Some("mincho")),
-            (&["/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc"], "ja", Some("maru")),
-            (&["/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", "C:\\Windows\\Fonts\\msgothic.ttc"], "ja", Some("gothic")),
-            (&["/System/Library/Fonts/Supplemental/Times New Roman.ttf", "C:\\Windows\\Fonts\\times.ttf"], "latin", Some("mincho")),
-            (&["/System/Library/Fonts/Supplemental/Arial.ttf", "C:\\Windows\\Fonts\\arial.ttf"], "latin", Some("gothic")),
-            (&["/System/Library/Fonts/Supplemental/Courier New.ttf", "C:\\Windows\\Fonts\\cour.ttf"], "latin", Some("mono")),
-            (&["/System/Library/Fonts/Supplemental/Apple Chancery.ttf"], "latin", Some("brush")),
-            (&["/System/Library/Fonts/AppleSDGothicNeo.ttc", "C:\\Windows\\Fonts\\malgun.ttf"], "ko", Some("gothic")),
+        // (paths, script, style, monospaced)
+        let cases: &[(&[&str], &str, Option<&str>, bool)] = &[
+            (&["/System/Library/Fonts/ヒラギノ明朝 ProN.ttc", "C:\\Windows\\Fonts\\yumin.ttf"], "ja", Some("mincho"), false),
+            (&["/System/Library/Fonts/ヒラギノ丸ゴ ProN W4.ttc"], "ja", Some("maru"), false),
+            (&["/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc", "C:\\Windows\\Fonts\\msgothic.ttc"], "ja", Some("gothic"), false),
+            (&["/System/Library/Fonts/Supplemental/Times New Roman.ttf", "C:\\Windows\\Fonts\\times.ttf"], "latin", Some("mincho"), false),
+            (&["/System/Library/Fonts/Supplemental/Arial.ttf", "C:\\Windows\\Fonts\\arial.ttf"], "latin", Some("gothic"), false),
+            (&["/System/Library/Fonts/Supplemental/Courier New.ttf", "C:\\Windows\\Fonts\\cour.ttf"], "latin", Some("slab"), true),
+            (&["/System/Library/Fonts/Menlo.ttc", "C:\\Windows\\Fonts\\consola.ttf"], "latin", Some("gothic"), true),
+            (&["/System/Library/Fonts/Supplemental/Apple Chancery.ttf"], "latin", Some("brush"), false),
+            (&["/System/Library/Fonts/AppleSDGothicNeo.ttc", "C:\\Windows\\Fonts\\malgun.ttf"], "ko", Some("gothic"), false),
         ];
-        for (paths, script, category) in cases {
+        for (paths, script, category, mono) in cases {
             let Some(data) = system_font(paths) else { continue };
             let m = meta(&data).unwrap();
-            assert_eq!((m.script, m.category), (*script, *category), "{}", paths[0]);
+            assert_eq!((m.script, m.category, m.features.contains(&"mono")), (*script, *category, *mono), "{}", paths[0]);
+            // A plain (not variable, upright) font spans its one weight.
+            if !m.features.contains(&"variable") {
+                assert_eq!((m.weight_min, m.weight_max), (m.weight, m.weight), "{}", paths[0]);
+            }
+        }
+        // Menlo and Consolas are coding fonts by name; Courier is a typewriter face.
+        for (paths, coding) in [
+            (&["/System/Library/Fonts/Menlo.ttc", "C:\\Windows\\Fonts\\consola.ttf"][..], true),
+            (&["/System/Library/Fonts/Supplemental/Courier New.ttf", "C:\\Windows\\Fonts\\cour.ttf"][..], false),
+        ] {
+            let Some(data) = system_font(paths) else { continue };
+            assert_eq!(meta(&data).unwrap().features.contains(&"coding"), coding, "{}", paths[0]);
         }
     }
+
 
     #[test]
     fn rejects_garbage() {

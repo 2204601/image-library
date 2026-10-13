@@ -488,7 +488,15 @@ pub fn compute_missing_font_meta(lib: &Mutex<Option<Library>>) -> Result<usize, 
                 .map_err(|e| e.to_string())
                 .and_then(|d| fonts::to_sfnt(&d, ext))
                 .and_then(|s| fonts::meta(&s))
-                .unwrap_or(fonts::FontMeta { family: String::new(), weight: 400, script: "other", category: None });
+                .unwrap_or(fonts::FontMeta {
+                    family: String::new(),
+                    weight: 400,
+                    weight_min: 400,
+                    weight_max: 400,
+                    script: "other",
+                    category: None,
+                    features: Vec::new(),
+                });
             (id.clone(), meta)
         })
         .collect();

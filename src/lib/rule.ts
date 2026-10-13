@@ -1,5 +1,16 @@
 // Helpers for describing filters / smart folder rules in the UI.
-import { fontCategoryLabel, fontScriptLabel, formatBytes, kindLabel, type Filter, type Rule, type Shape, type Tag } from "./api";
+import {
+  fontCategoryLabel,
+  fontFeatureLabel,
+  fontScriptLabel,
+  fontWeightLabel,
+  formatBytes,
+  kindLabel,
+  type Filter,
+  type Rule,
+  type Shape,
+  type Tag,
+} from "./api";
 
 export const SHAPE_LABEL: Record<Shape, string> = {
   landscape: "横長",
@@ -77,6 +88,8 @@ export function describeRule(rule: Rule, tags: Tag[]): string[] {
   if (rule.minRating) out.push(`★${rule.minRating}以上`);
   if (f.fontScripts?.length) out.push(`言語: ${f.fontScripts.map(fontScriptLabel).join("・")}`);
   if (f.fontCategories?.length) out.push(`書体: ${f.fontCategories.map(fontCategoryLabel).join("・")}`);
+  if (f.fontWeights?.length) out.push(`太さ: ${f.fontWeights.map(fontWeightLabel).join("・")}`);
+  if (f.fontFeatures?.length) out.push(`特徴: ${f.fontFeatures.map(fontFeatureLabel).join("・")}`);
   if (f.exts.length) out.push(`形式: ${f.exts.join(", ")}`);
   if (f.shapes.length) out.push(f.shapes.map((s) => SHAPE_LABEL[s]).join("・"));
   const dims = describeDims(f);

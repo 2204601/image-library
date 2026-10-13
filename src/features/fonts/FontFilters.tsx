@@ -1,11 +1,12 @@
-// Sidebar sections of the font mode: writing system and typeface style, on
-// top of the open view (like tags). A click shows only that one (again:
-// all); ⌘ / Shift + click adds or removes one.
+// Sidebar sections of the font mode: writing system, typeface style, weight
+// and features, on top of the open view (like tags). Within a section a
+// click shows only that one (again: all) and ⌘ / Shift + click adds or
+// removes one (any of); the sections combine (all of).
 import { X } from "lucide-react";
 // Sidebar supplies the row and section chrome and renders this: the import
 // cycle is fine because everything is used at render time, not at load.
 import { Row, Section } from "../../components/Sidebar";
-import { FONT_CATEGORIES, FONT_SCRIPTS } from "../../lib/api";
+import { FONT_CATEGORIES, FONT_FEATURES, FONT_SCRIPTS, FONT_WEIGHTS } from "../../lib/api";
 import { useStore } from "../../store";
 
 /** Clicking a filter row: only this one (again: none); ⌘ / Shift adds or removes it. */
@@ -20,11 +21,13 @@ export function FontFilters() {
   const counts = useStore((s) => s.counts);
   const fontScripts = useStore((s) => s.filter.fontScripts);
   const fontCategories = useStore((s) => s.filter.fontCategories);
+  const fontWeights = useStore((s) => s.filter.fontWeights);
+  const fontFeatures = useStore((s) => s.filter.fontFeatures);
   const setFilter = useStore((s) => s.setFilter);
 
   const group = (
     title: string,
-    items: { key: string; label: string }[],
+    items: { key: string; label: string; range?: string }[],
     counted: Record<string, number>,
     on: string[],
     set: (v: string[]) => void,
@@ -48,7 +51,7 @@ export function FontFilters() {
             key={x.key}
             active={on.includes(x.key)}
             icon={<span className="block h-1.5 w-1.5 rounded-full bg-current" />}
-            label={x.label}
+            label={x.range ? `${x.label}　${x.range}` : x.label}
             count={counted[x.key] ?? 0}
             title="クリックでこれだけを表示（⌘・Shift+クリックで追加）"
             onClick={(e) => set(pickFrom(on, x.key, isAdd(e)))}
@@ -62,6 +65,8 @@ export function FontFilters() {
     <>
       {group("言語", FONT_SCRIPTS, counts.fontScripts, fontScripts, (v) => setFilter({ fontScripts: v }))}
       {group("書体", FONT_CATEGORIES, counts.fontCategories, fontCategories, (v) => setFilter({ fontCategories: v }))}
+      {group("太さ", FONT_WEIGHTS, counts.fontWeights, fontWeights, (v) => setFilter({ fontWeights: v }))}
+      {group("特徴", FONT_FEATURES, counts.fontFeatures, fontFeatures, (v) => setFilter({ fontFeatures: v }))}
     </>
   );
 }

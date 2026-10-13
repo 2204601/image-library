@@ -430,6 +430,8 @@ export function activeConditions(s: {
     // The kind filter shows on the toolbar itself, not as a condition.
     (f.fontScripts.length ? 1 : 0) +
     (f.fontCategories.length ? 1 : 0) +
+    (f.fontWeights.length ? 1 : 0) +
+    (f.fontFeatures.length ? 1 : 0) +
     (f.exts.length ? 1 : 0) +
     (f.shapes.length ? 1 : 0) +
     (f.minWidth != null || f.maxWidth != null || f.minHeight != null || f.maxHeight != null ? 1 : 0) +
@@ -505,8 +507,12 @@ function leaveHidden() {
   const entry = entryOfView(s.view);
   if (entry && ids.includes(entry)) s.setView({ kind: "all" });
   if (ids.includes("section:tags") && s.tagFilter.length) s.clearTagFilter();
-  if (ids.includes("section:fontFilters") && (s.filter.fontScripts.length || s.filter.fontCategories.length)) {
-    s.setFilter({ fontScripts: [], fontCategories: [] });
+  const f = s.filter;
+  if (
+    ids.includes("section:fontFilters") &&
+    (f.fontScripts.length || f.fontCategories.length || f.fontWeights.length || f.fontFeatures.length)
+  ) {
+    s.setFilter({ fontScripts: [], fontCategories: [], fontWeights: [], fontFeatures: [] });
   }
 }
 
@@ -619,6 +625,8 @@ export const useStore = create<State>((set, get) => ({
     kinds: {},
     fontScripts: {},
     fontCategories: {},
+    fontWeights: {},
+    fontFeatures: {},
   },
   rev: 0,
 
