@@ -58,4 +58,5 @@ npm test               # Rust のユニットテスト + 型チェック
 | [MCP.md](docs/MCP.md) | Claude との連携 |
 | [SETTINGS.md](docs/SETTINGS.md) | 設定画面とライブラリごとの設定 |
 | [MENUS.md](docs/MENUS.md) | メニューの構成 |
+| [UI.md](docs/UI.md) | 画面の原則（表示を切り替えても操作の位置を変えない） |
 | [ROADMAP.md](docs/ROADMAP.md) | 今後の予定 |
