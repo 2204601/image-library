@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 19;
+const SCHEMA_VERSION: i32 = 20;
 
 const SETTINGS_TABLE: &str = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
@@ -317,6 +317,12 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
                created_at INTEGER NOT NULL
              )",
         )
+    })?;
+    // Fonts of different widths are families of their own (fonts.rs `with_width`):
+    // read them again (NULL features = not read yet, see `missing_font_meta`).
+    step(20, &|c| {
+        c.execute("UPDATE items SET font_features = NULL WHERE kind = 'font'", [])?;
+        Ok(())
     })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(

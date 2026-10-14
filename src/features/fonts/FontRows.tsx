@@ -41,13 +41,26 @@ function useFontRow(id: string) {
   return { family, preview, failed, style };
 }
 
+/** "44 スタイル" on a family row (family view), nothing on a single font. */
+function FamilyCount({ item }: { item: Item }) {
+  if (!item.familyIds || item.familyIds.length < 2) return null;
+  return (
+    <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[11px] text-accent" title="このファミリーのスタイル数。操作は全部に効きます">
+      {item.familyIds.length} スタイル
+    </span>
+  );
+}
+
 /** List row of a font: family and style, then a sample line drawn in the font. */
 export function FontListCells({ item }: { item: Item }) {
   const { family, preview, failed, style } = useFontRow(item.id);
   return (
     <>
       <span className="flex w-36 shrink-0 flex-col leading-tight" title={item.name}>
-        <span className="truncate text-[13px]">{item.fontFamily || item.name}</span>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <span className="truncate text-[13px]">{item.fontFamily || item.name}</span>
+          <FamilyCount item={item} />
+        </span>
         <span className="truncate text-[11px] text-dim">{style || item.name}</span>
       </span>
       {failed ? (
@@ -113,6 +126,7 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
       <ChangePulse id={item.id} className="rounded-md" />
       <div className="flex min-w-0 items-baseline gap-2 text-xs">
         <span className="truncate text-[13px] font-medium">{item.fontFamily || item.name}</span>
+        <FamilyCount item={item} />
         <span className="shrink-0 text-dim">{style}</span>
         <span className="min-w-0 truncate text-dim/70">{item.name}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-dim">

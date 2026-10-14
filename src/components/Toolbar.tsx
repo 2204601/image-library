@@ -3,14 +3,12 @@ import {
   ArrowUpNarrowWide,
   ChevronDown,
   CopyCheck,
-  Download,
   Filter as FilterIcon,
   FolderInput,
   FolderSearch,
   ImagePlus,
   LayoutGrid,
   Minus,
-  MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
   PanelRightClose,
@@ -21,20 +19,16 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { RotateLeft, RotateRight } from "../lib/icons";
 import { useEffect, useMemo, useState } from "react";
 import { dragRegion } from "../lib/titleBar";
 import {
   clearDismissedDuplicates,
   clearTray,
-  deleteSelection,
   emptyTrash,
-  exportSelection,
   exportTray,
   importFilesDialog,
   importFolderDialog,
   keepPlan,
-  orient,
   reviewDuplicates,
   sheetFromTray,
   similarGroups,
@@ -56,11 +50,10 @@ import {
 } from "../lib/api";
 import { colorHex } from "../lib/colors";
 import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
-import { appliesTo, command } from "../lib/commands";
+import { command } from "../lib/commands";
 import { comboText } from "../lib/shortcuts";
 import { useShallow } from "zustand/react/shallow";
 import { activeConditions, listKinds, shownKinds, usedModes, useStore, type Mode } from "../store";
-import { showItemMenu } from "./Grid";
 import { composing } from "../lib/ime";
 import { FilterBar } from "./FilterBar";
 import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
@@ -207,7 +200,6 @@ export function Toolbar() {
               <span className="shrink-0 text-xs font-normal text-dim tabular-nums">{count} 件</span>
             )}
           </h1>
-          {selectedCount > 0 && !isTrash && <SelectionActions />}
           <div className="flex-1" />
           <InspectorToggle className="hidden @max-xl:flex" />
         </div>
@@ -489,55 +481,6 @@ function KindFilter() {
           else setKinds(on && picked.length === 1 ? [] : [kind]);
         });
       })}
-    </div>
-  );
-}
-
-/**
- * Operations on the selection, next to the "N 件を選択中" chip so they stay
- * at hand with the inspector closed (docs/MENUS.md §7). "…" opens the same
- * menu as a right-click; below @3xl there is only room for it and the trash.
- */
-function SelectionActions() {
-  const selected = useStore((s) => s.selected);
-  const items = useStore((s) => s.items);
-  // Images only (in "すべて", when only images are selected).
-  const rotatable = useStore((s) => appliesTo(command("item.rotateCw"), s));
-  const ids = [...selected];
-  const button = (icon: React.ReactNode, title: string, onClick: (e: React.MouseEvent) => void, extra = "") => (
-    <button
-      title={title}
-      aria-label={title}
-      onClick={onClick}
-      className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-md hover:bg-white/10 ${extra}`}
-    >
-      {icon}
-    </button>
-  );
-  const narrow = "@max-3xl:hidden";
-  const more = (e: React.MouseEvent) => {
-    const index = items.findIndex((i) => i.id === ids[0]);
-    if (index < 0) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    showItemMenu({ clientX: r.left, clientY: r.bottom + 4 }, items[index], index);
-  };
-  return (
-    <div className="flex shrink-0 items-center text-fg/80">
-      {rotatable && (
-        <>
-          {button(<RotateLeft size={15} />, `左に回転（${comboText("Mod+Shift+L")}）`, () => orient(ids, "rotateCcw"), narrow)}
-          {button(<RotateRight size={15} />, `右に回転（${comboText("Mod+Shift+R")}）`, () => orient(ids, "rotateCw"), narrow)}
-        </>
-      )}
-      {button(
-        <FolderInput size={15} />,
-        `フォルダへ移動…（${comboText("Mod+Shift+J")}）`,
-        () => useStore.getState().setPicker("move"),
-        narrow,
-      )}
-      {button(<Download size={15} />, `書き出し…（${comboText("Mod+E")}）`, () => exportSelection(ids), narrow)}
-      {button(<MoreHorizontal size={15} />, "そのほかの操作", more)}
-      {button(<Trash2 size={15} />, `ゴミ箱へ移動（${comboText("Mod+Backspace")}）`, () => deleteSelection(ids), "text-danger")}
     </div>
   );
 }

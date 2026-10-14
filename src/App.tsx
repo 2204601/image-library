@@ -11,6 +11,7 @@ import { Grid } from "./components/Grid";
 import { Inspector } from "./components/Inspector";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
+import { SelectionBar } from "./components/SelectionBar";
 import { ActionHud } from "./components/ActionHud";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
@@ -195,9 +196,10 @@ export default function App() {
             <Sidebar />
             {sidebarOpen && <ResizeHandle panel="sidebar" onResizing={setResizing} />}
           </div>
-          <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
+          <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
             <Toolbar />
             <Grid />
+            <SelectionBar />
           </main>
           <div
             className={`relative flex shrink-0 overflow-hidden ${resizing ? "" : "transition-[width] duration-200 ease-out"}`}

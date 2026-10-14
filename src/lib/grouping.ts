@@ -4,9 +4,9 @@
 // section, so layouts and navigation keep working on plain indices.
 import { KINDS, type Folder, type Item, type Tag } from "./api";
 
-export type GroupBy = "none" | "kind" | "rating" | "tag" | "folder" | "family";
+export type GroupBy = "none" | "kind" | "rating" | "tag" | "folder" | "family" | "familyOne";
 
-export const GROUP_BYS: GroupBy[] = ["none", "kind", "rating", "tag", "folder", "family"];
+export const GROUP_BYS: GroupBy[] = ["none", "kind", "rating", "tag", "folder", "family", "familyOne"];
 
 export interface Section {
   /** Index of the first item, and one past the last. */
@@ -91,6 +91,7 @@ export function groupItems(items: Item[], by: GroupBy, tags: Tag[], folders: Fol
     ]);
   }
   if (by === "family") return byFamily(items);
+  if (by === "familyOne") return oneByFamily(items);
   return build([
     ...folderPaths(folders).map(({ folder, path }) => ({
       items: items.filter((i) => i.folderId === folder.id),
@@ -122,4 +123,31 @@ function byFamily(items: Item[]): Grouped {
     })),
     { items: items.filter((i) => i.kind !== "font"), title: "フォント以外" },
   ]);
+}
+
+/** How far a font is from "the" regular of its family: upright and near 400 first. */
+function regularness(i: Item): number {
+  return Math.abs((i.fontWeight ?? 400) - 400) + (/italic|oblique|イタリック/i.test(i.name) ? 1000 : 0);
+}
+
+/**
+ * One row per font family: its regular (the style nearest 400, upright), with
+ * `familyIds` listing every font of the family so operations on the row reach
+ * them all. Families by name, anything else last.
+ */
+function oneByFamily(items: Item[]): Grouped {
+  const families = new Map<string, Item[]>();
+  for (const i of items) {
+    if (i.kind !== "font") continue;
+    const f = i.fontFamily || "";
+    if (!families.has(f)) families.set(f, []);
+    families.get(f)!.push(i);
+  }
+  const names = [...families.keys()].sort((a, b) => (!a ? 1 : !b ? -1 : a.localeCompare(b, "ja")));
+  const rows: Item[] = names.map((f) => {
+    const members = families.get(f)!;
+    const rep = members.reduce((best, i) => (regularness(i) < regularness(best) ? i : best));
+    return { ...rep, familyIds: [rep.id, ...members.filter((m) => m !== rep).map((m) => m.id)] };
+  });
+  return { items: [...rows, ...items.filter((i) => i.kind !== "font")], sections: [] };
 }

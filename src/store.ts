@@ -75,7 +75,7 @@ export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
 /** Groupings of each mode. */
 export const MODE_GROUPS: Record<Mode, GroupBy[]> = {
   all: ["none", "kind", "rating", "tag", "folder"],
-  font: ["none", "rating", "tag", "folder", "family"],
+  font: ["none", "rating", "tag", "folder", "familyOne", "family"],
 };
 
 /** What the grid shows under each thumbnail. */
@@ -491,6 +491,14 @@ let anchorAt: number | null = null;
 /** Display index of item `id`: `at` when it is there, else its first place. */
 function indexOf(items: Item[], id: string, at: number | null | undefined): number {
   return at != null && items[at]?.id === id ? at : items.findIndex((i) => i.id === id);
+}
+
+/** `ids` plus, for each family row among `items` (family view), all its fonts. */
+function withFamilies(ids: Iterable<string>, items: Item[]): Set<string> {
+  const out = new Set(ids);
+  if (!items.some((i) => i.familyIds)) return out;
+  for (const i of items) if (i.familyIds && out.has(i.id)) i.familyIds.forEach((m) => out.add(m));
+  return out;
 }
 
 /** The display list and its sections for the current view / grouping. */
@@ -1061,7 +1069,7 @@ export const useStore = create<State>((set, get) => ({
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
       const smartFolders = allSmart.filter((sf) => smartFolderInMode(sf, mode));
       const { items, sections } = arrange({ view, groupBy: get().groupBy, rawItems, tags, folders });
-      const present = new Set(items.map((i) => i.id));
+      const present = new Set(items.flatMap((i) => i.familyIds ?? [i.id]));
       const selected = new Set([...get().selected].filter((id) => present.has(id)));
       // Drop filters / views pointing at things that no longer exist.
       const tagIds = new Set(tags.map((t) => t.id));
@@ -1121,23 +1129,24 @@ export const useStore = create<State>((set, get) => ({
     const a = mode === "range" && anchor !== null ? indexOf(items, anchor, anchorAt) : -1;
     if (mode === "range" && a >= 0 && b >= 0) {
       const [lo, hi] = a < b ? [a, b] : [b, a];
-      set({ selected: new Set(items.slice(lo, hi + 1).map((i) => i.id)), focus: id });
+      set({ selected: withFamilies(items.slice(lo, hi + 1).map((i) => i.id), items), focus: id });
       return;
     }
     anchorAt = b >= 0 ? b : null;
     if (mode === "toggle") {
       const next = new Set(selected);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      const own = withFamilies([id], items);
+      if (next.has(id)) own.forEach((m) => next.delete(m));
+      else own.forEach((m) => next.add(m));
       set({ selected: next, anchor: id, focus: id });
     } else {
-      set({ selected: new Set([id]), anchor: id, focus: id });
+      set({ selected: withFamilies([id], items), anchor: id, focus: id });
     }
   },
   setSelection: (ids) => {
     const last = ids.at(-1) ?? null;
     anchorAt = null;
-    set({ selected: new Set(ids), anchor: last, focus: last });
+    set({ selected: withFamilies(ids, get().items), anchor: last, focus: last });
   },
   openViewer: (viewer) => set({ viewer }),
 

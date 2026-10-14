@@ -416,7 +416,27 @@ pub fn meta(sfnt: &[u8]) -> Result<FontMeta, String> {
 /// "ぼくたちのゴシック２ボールド") so their styles still group together. Free
 /// fonts do this even in the typographic family name.
 fn base_family(font: &FontRef) -> String {
-    strip_style(&name(font, &[StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME]))
+    let family = strip_style(&name(font, &[StringId::TYPOGRAPHIC_FAMILY_NAME, StringId::FAMILY_NAME]));
+    let style = name(font, &[StringId::TYPOGRAPHIC_SUBFAMILY_NAME, StringId::SUBFAMILY_NAME]);
+    with_width(&family, &style)
+}
+
+/// Width words in the order they are looked for (longer first), as spelled in a style name.
+const WIDTH_WORDS: &[&str] = &[
+    "UltraCondensed", "ExtraCondensed", "SemiCondensed", "Condensed", "Compressed", "Narrow",
+    "SemiExpanded", "ExtraExpanded", "UltraExpanded", "Expanded", "Extended", "Wide",
+];
+
+/// Adds the width of a style ("Compressed Thin" → "Compressed") to the family, so
+/// widths that look nothing alike (ヒカリ角ゴ Compressed / Extended) are families
+/// of their own. The normal width, and a family that already names it, stay as they are.
+pub fn with_width(family: &str, style: &str) -> String {
+    let squeezed: String = style.chars().filter(|c| !matches!(c, ' ' | '-' | '_')).collect();
+    let lower_family = family.to_ascii_lowercase();
+    match WIDTH_WORDS.iter().find(|w| squeezed.to_ascii_lowercase().contains(&w.to_ascii_lowercase())) {
+        Some(w) if !lower_family.contains(&w.to_ascii_lowercase()) => format!("{family} {w}"),
+        _ => family.to_string(),
+    }
 }
 
 const STYLE_WORDS: &[&str] = &[
@@ -902,6 +922,20 @@ pub mod tests {
     }
 
     /// The OS's own fonts fill in their classification, so the guesses can be checked.
+    #[test]
+    fn widths_make_families() {
+        for (family, style, to) in [
+            ("ヒカリ角ゴ", "Compressed Thin", "ヒカリ角ゴ Compressed"),
+            ("ヒカリ角ゴ", "Wide ExtraLight", "ヒカリ角ゴ Wide"),
+            ("ヒカリ角ゴ", "Normal Thin", "ヒカリ角ゴ"),
+            ("Roboto", "Semi Condensed Bold", "Roboto SemiCondensed"),
+            ("Roboto Condensed", "Condensed Bold", "Roboto Condensed"),
+            ("Noto Sans JP", "Bold", "Noto Sans JP"),
+        ] {
+            assert_eq!(with_width(family, style), to, "{family} {style}");
+        }
+    }
+
     #[test]
     fn tells_scripts_and_styles() {
         // (paths, script, style, monospaced)
