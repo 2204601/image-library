@@ -59,4 +59,7 @@ npm test               # Rust のユニットテスト + 型チェック
 | [SETTINGS.md](docs/SETTINGS.md) | 設定画面とライブラリごとの設定 |
 | [MENUS.md](docs/MENUS.md) | メニューの構成 |
 | [UI.md](docs/UI.md) | 画面の原則（表示を切り替えても操作の位置を不必要に変えない） |
+| [NAVIGATION.md](docs/NAVIGATION.md) | サイドバーとツールバーの役割（場所・絞り込み・表示） |
+| [MODES.md](docs/MODES.md) | モードを分ける（ストックとフォント） |
+| [FONT_UI.md](docs/FONT_UI.md) | フォントの画面（見本・グループ分け・シェルフ・比較） |
 | [ROADMAP.md](docs/ROADMAP.md) | 今後の予定 |
