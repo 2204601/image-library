@@ -54,6 +54,23 @@ export function Sample({
   );
 }
 
+/**
+ * The font lacks more than half of `text` (spaces aside): it would come out
+ * mostly in a system font, e.g. Japanese text in an English font.
+ */
+export function mostlyMissing(text: string, has: Set<number> | null): boolean {
+  if (!has) return false;
+  let total = 0;
+  let missing = 0;
+  for (const ch of text) {
+    const c = ch.codePointAt(0)!;
+    if (neutral(c)) continue;
+    total++;
+    if (!has.has(c)) missing++;
+  }
+  return missing * 2 > total;
+}
+
 /** How many characters of `text` the font lacks. */
 export function countMissing(text: string, has: Set<number> | null): number {
   if (!has) return 0;

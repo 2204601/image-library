@@ -176,6 +176,8 @@ interface State {
   /** Font specimen layout: the text every font shows ("" = each font's own sample) and its size in px. */
   specimenText: string;
   specimenSize: number;
+  /** Fonts lacking most of `specimenText` show their own sample instead (an English font with Japanese text). */
+  specimenFallback: boolean;
   inspectorOpen: boolean;
   sidebarOpen: boolean;
   /** Widths of the sidebar and the details panel (px), dragged at their edge. */
@@ -290,6 +292,7 @@ interface State {
   setThumbSize: (n: number) => void;
   setSpecimenText: (text: string) => void;
   setSpecimenSize: (px: number) => void;
+  setSpecimenFallback: (on: boolean) => void;
   toggleInspector: () => void;
   toggleSidebar: () => void;
   /** Sets a panel's width (kept within its limits, see PANEL_WIDTH). */
@@ -596,6 +599,7 @@ export const useStore = create<State>((set, get) => ({
   layout: loadLayout(initialMode),
   specimenText: load("specimenText") ?? "",
   specimenSize: loadNumber("specimenSize", 40),
+  specimenFallback: load("specimenFallback") !== "false",
   showInfo: { name: true, dims: true, rating: true, meta: false, ...loadJson("showInfo") },
   groupBy: loadGroupBy(initialMode),
   viewerInfo: load("viewerInfo") === "true",
@@ -869,6 +873,10 @@ export const useStore = create<State>((set, get) => ({
   setSort: (sort, desc) => {
     set({ sort, desc });
     get().refresh();
+  },
+  setSpecimenFallback: (specimenFallback) => {
+    set({ specimenFallback });
+    persist("specimenFallback", String(specimenFallback));
   },
   setSpecimenText: (specimenText) => {
     set({ specimenText });
