@@ -1,7 +1,8 @@
 // Sidebar sections of the font mode: writing system, typeface style, weight
 // and features, on top of the open view (like tags). Within a section a
 // click shows only that one (again: all) and ⌘ / Shift + click adds or
-// removes one (any of); the sections combine (all of).
+// removes one (any of); the sections combine (all of). 言語 lists only the
+// scripts there are fonts of; the others list every row, 0 included.
 import { X } from "lucide-react";
 // Sidebar supplies the row and section chrome and renders this: the import
 // cycle is fine because everything is used at render time, not at load.
@@ -27,12 +28,14 @@ export function FontFilters() {
 
   const group = (
     title: string,
-    items: { key: string; label: string; range?: string }[],
+    items: { key: string; label: string; names?: string; range?: string }[],
     counted: Record<string, number>,
     on: string[],
     set: (v: string[]) => void,
+    // Fixed lists show every row, 0 included, so what can be told is plain.
+    every = true,
   ) => {
-    const shown = items.filter((x) => counted[x.key] || on.includes(x.key));
+    const shown = every ? items : items.filter((x) => counted[x.key] || on.includes(x.key));
     return (
       <Section
         title={title}
@@ -51,9 +54,18 @@ export function FontFilters() {
             key={x.key}
             active={on.includes(x.key)}
             icon={<span className="block h-1.5 w-1.5 rounded-full bg-current" />}
-            label={x.range ? `${x.label}　${x.range}` : x.label}
+            label={
+              x.names ? (
+                <>
+                  {x.label}
+                  <span className="ml-2 text-xs text-dim">{x.names}</span>
+                </>
+              ) : (
+                x.label
+              )
+            }
             count={counted[x.key] ?? 0}
-            title="クリックでこれだけを表示（⌘・Shift+クリックで追加）"
+            title={`${x.range ? `太さ ${x.range}。` : ""}クリックでこれだけを表示（⌘・Shift+クリックで追加）`}
             onClick={(e) => set(pickFrom(on, x.key, isAdd(e)))}
           />
         ))}
@@ -63,7 +75,7 @@ export function FontFilters() {
 
   return (
     <>
-      {group("言語", FONT_SCRIPTS, counts.fontScripts, fontScripts, (v) => setFilter({ fontScripts: v }))}
+      {group("言語", FONT_SCRIPTS, counts.fontScripts, fontScripts, (v) => setFilter({ fontScripts: v }), false)}
       {group("書体", FONT_CATEGORIES, counts.fontCategories, fontCategories, (v) => setFilter({ fontCategories: v }))}
       {group("太さ", FONT_WEIGHTS, counts.fontWeights, fontWeights, (v) => setFilter({ fontWeights: v }))}
       {group("特徴", FONT_FEATURES, counts.fontFeatures, fontFeatures, (v) => setFilter({ fontFeatures: v }))}

@@ -100,11 +100,11 @@ export const FONT_CATEGORIES: { key: string; label: string }[] = [
 ];
 
 /** Weight ranges (db.rs `FONT_WEIGHTS`); a variable font is in every range its wght axis spans. */
-export const FONT_WEIGHTS: { key: string; label: string; range: string }[] = [
-  { key: "light", label: "細い", range: "〜399" },
-  { key: "regular", label: "標準", range: "400〜549" },
-  { key: "bold", label: "太い", range: "550〜749" },
-  { key: "black", label: "極太", range: "750〜" },
+export const FONT_WEIGHTS: { key: string; label: string; names: string; range: string }[] = [
+  { key: "light", label: "細い", names: "Thin–Light", range: "〜399" },
+  { key: "regular", label: "標準", names: "Regular–Medium", range: "400〜549" },
+  { key: "bold", label: "太い", names: "SemiBold–Bold", range: "550〜749" },
+  { key: "black", label: "極太", names: "ExtraBold–Black", range: "750〜" },
 ];
 
 /** Features a font has any number of (fonts.rs `FEATURES`). */
