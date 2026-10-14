@@ -11,7 +11,7 @@ import { fontCategoryLabel, fontCategoryOf, fontFeatureLabel, fontScriptLabel, t
 import { useStore } from "../../store";
 import { type FontListPreview } from "./api";
 import { fontChars, fontPreview, holdFont, loadFont } from "./loader";
-import { Sample } from "./Sample";
+import { mostlyMissing, Sample } from "./Sample";
 
 /** Loads the font and its sample line for a row; `failed` when either can't be had. */
 function useFontRow(id: string) {
@@ -69,12 +69,14 @@ export function FontListCells({ item }: { item: Item }) {
 /**
  * Specimen layout: a font as a row with its name and a sample line at the
  * chosen size, in the text typed above the list (or the font's own sample).
- * Characters the font lacks are marked.
+ * Characters the font lacks are marked; a font lacking most of them shows its
+ * own sample instead (unless turned off in the pattern menu).
  */
 export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
   const { item, index, selected, focused, dimmed, width, height, reorderable, insert, flags } = props;
   const text = useStore((s) => s.specimenText);
   const size = useStore((s) => s.specimenSize);
+  const fallback = useStore((s) => s.specimenFallback);
   const { family, preview, failed, style } = useFontRow(item.id);
   const [has, setHas] = useState<Set<number> | null>(null);
 
@@ -92,6 +94,8 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
     };
   }, [item.id, typed]);
 
+  // Mostly red text in a system font says little about the font: its own sample instead.
+  const swapped = typed && fallback && !!preview && mostlyMissing(text, has);
   const category = fontCategoryOf(item);
   return (
     <div
@@ -112,6 +116,14 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
         <span className="shrink-0 text-dim">{style}</span>
         <span className="min-w-0 truncate text-dim/70">{item.name}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-dim">
+          {swapped && (
+            <span
+              className="rounded bg-accent/15 px-1.5 py-px text-accent"
+              title="入力した文字の半分以上がこのフォントに無いため、このフォントの見本で表示しています（「パターン」のメニューで切り替え）"
+            >
+              {item.fontScript === "latin" ? "欧文見本" : "フォントの見本"}
+            </span>
+          )}
           {flags && item.pinnedAt !== null && <Pin size={11} className="text-accent" fill="currentColor" />}
           {flags && item.inTray && <Layers size={11} className="text-emerald-400" />}
           {flags && item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
@@ -136,8 +148,8 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
         <span className="text-dim">見本を表示できません</span>
       ) : (
         <Sample
-          text={typed ? text : (preview?.sample ?? "")}
-          has={typed ? has : null}
+          text={typed && !swapped ? text : (preview?.sample ?? "")}
+          has={typed && !swapped ? has : null}
           style={{ fontFamily: family ? `"${family}"` : undefined, fontSize: size, lineHeight: 1.15 }}
           className={`block truncate whitespace-pre transition-opacity duration-200 ${
             family && preview ? "opacity-100" : "opacity-0"

@@ -30,10 +30,17 @@ export function SpecimenControls() {
 
   const showPresets = (e: React.MouseEvent<HTMLButtonElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
-    useMenu.getState().show(
-      { clientX: r.left, clientY: r.bottom + 4 },
-      PRESETS.map((p) => ({ label: p.label, hint: p.text, checked: p.text === text, onClick: () => setText(p.text) })),
-    );
+    const { specimenFallback, setSpecimenFallback } = useStore.getState();
+    useMenu.getState().show({ clientX: r.left, clientY: r.bottom + 4 }, [
+      ...PRESETS.map((p) => ({ label: p.label, hint: p.text, checked: p.text === text, onClick: () => setText(p.text) })),
+      { separator: true },
+      {
+        label: "足りないフォントは各フォントの見本で",
+        hint: "半分以上の字が無いとき",
+        checked: specimenFallback,
+        onClick: () => setSpecimenFallback(!specimenFallback),
+      },
+    ]);
   };
 
   return (
