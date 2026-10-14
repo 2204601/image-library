@@ -60,7 +60,7 @@
 | 層 | 場所 | 中身 |
 |---|---|---|
 | 共通基盤（core） | `src/lib/*`, `src/store.ts`, `src/components/*` | ライブラリ・DB・取り込み・フォルダ・タグ・スマートフォルダ・検索・一覧の骨組み（Grid / Sidebar / Toolbar / Inspector / Viewer）・Updater |
-| | `src-tauri/src/{db,import,library,search,webimport,loopback,changes,proxy,transfer,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、変更の記録と取り消し、ライブラリ間のコピー・移動、共通コマンド |
+| | `src-tauri/src/{db,import,library,search,webimport,share,loopback,changes,proxy,transfer,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、フォルダの共有、変更の記録と取り消し、ライブラリ間のコピー・移動、共通コマンド |
 | | `src-tauri/src/mcp/` | Claude からの整理（MCP サーバー、`--mcp` の中継）。`docs/MCP.md` |
 | フォント | `src/features/fonts/` | フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、サイドバーの言語・書体（`FontFilters.tsx`）、見本の文字と大きさ（`SpecimenControls.tsx`） |
 | | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`） |
@@ -83,6 +83,8 @@ features 側が core の部品（`Row` / `Section`、`CellProps` / `showItemMenu
   リリースビルドは `panic = "abort"` なので、確保の失敗やパニックはアプリごと落ちる
 - SVG の `<image href>` は `data:` URL だけを読む（`formats::svg_options`）。PDF は中身を確かめてから iframe に出す（`files::is_pdf`）
 - Windows のバックグラウンドの Office 変換は、Web から保存したもの（`source_url` あり）を対象にしない
+- フォルダの共有（`share.rs`）だけは LAN から届く。GET だけで、どの要求も共有したフォルダの中のものかを確かめてから返す。
+  ファイルは `Content-Security-Policy: sandbox` 付きで返し（SVG の中のスクリプトを動かさない）、ページの文字はすべて `textContent` で入れる
 - Web ビューの CSP は `tauri.conf.json` の `security.csp`。外のリソースを読み込む機能を足すときは、ここにも足す
   （開発時は `devCsp`）
 

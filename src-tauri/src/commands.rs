@@ -7,6 +7,7 @@ use crate::db::{self, Counts, Folder, Item, ItemQuery, SelectionInfo, Tag};
 use crate::import::{self, ImportSummary, Source};
 use crate::library::{Holder, Library};
 use crate::mcp;
+use crate::share;
 use crate::webimport;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -23,6 +24,8 @@ pub struct AppState {
     pub web: Mutex<WebServer>,
     /// Organizing from Claude (mcp/).
     pub mcp: Mutex<McpServer>,
+    /// Folders shared on the local network (share.rs).
+    pub share: Mutex<ShareServer>,
     /// Extensions waiting for the user to allow them to connect: id -> answer.
     pairing: Mutex<std::collections::HashMap<String, std::sync::mpsc::Sender<bool>>>,
 }
@@ -37,6 +40,13 @@ pub struct WebServer {
 #[derive(Default)]
 pub struct McpServer {
     server: Option<mcp::Server>,
+    /// Why the server couldn't start.
+    error: Option<String>,
+}
+
+#[derive(Default)]
+pub struct ShareServer {
+    server: Option<share::Server>,
     /// Why the server couldn't start.
     error: Option<String>,
 }
@@ -266,6 +276,8 @@ fn activate(app: &AppHandle, state: &AppState, mut lib: Library) -> CmdResult<Li
         s.remember(&lib.root, true);
     })?;
     *state.lib.lock().unwrap() = Some(lib);
+    // The folders this library shares (none: the port is closed).
+    apply_share(app);
     Ok(info)
 }
 
@@ -1257,6 +1269,142 @@ pub async fn reset_mcp_token(app: AppHandle) -> CmdResult<McpStatus> {
     .map_err(err)?
 }
 
+// -------------------------------------------------------- folder sharing
+
+struct ShareHost(AppHandle);
+
+impl share::Host for ShareHost {
+    fn library(&self) -> &Mutex<Option<Library>> {
+        &self.0.state::<AppState>().inner().lib
+    }
+}
+
+/// Runs the server while the open library shares a folder, and only then:
+/// it is the one server other devices can reach.
+fn apply_share(app: &AppHandle) {
+    let state = app.state::<AppState>();
+    let sharing = state.lib.lock().unwrap().as_ref().is_some_and(|lib| share::list(&lib.conn).is_ok_and(|s| !s.is_empty()));
+    let mut srv = state.share.lock().unwrap();
+    if !sharing {
+        *srv = ShareServer::default(); // closes the port
+        return;
+    }
+    if srv.server.is_some() {
+        return;
+    }
+    match share::Server::start(std::net::Ipv4Addr::UNSPECIFIED, share::PORT, std::sync::Arc::new(ShareHost(app.clone()))) {
+        Ok(server) => *srv = ShareServer { server: Some(server), error: None },
+        Err(e) => {
+            log::warn!("folder sharing: {e}");
+            srv.error = Some(e);
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareStatus {
+    running: bool,
+    port: u16,
+    /// Why the server isn't running although a folder is shared.
+    error: Option<String>,
+    shares: Vec<ShareInfo>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareInfo {
+    #[serde(flatten)]
+    share: share::Share,
+    /// The folder's place in the sidebar ("旅行 / 京都").
+    path: String,
+    /// The URL at each address of this PC, the likeliest first (`share::lan_hosts`).
+    urls: Vec<String>,
+}
+
+fn share_state(app: &AppHandle) -> CmdResult<ShareStatus> {
+    let state = app.state::<AppState>();
+    let (shares, folders) = with_lib(&state, |lib| {
+        Ok((share::list(&lib.conn).map_err(err)?, db::list_folders(&lib.conn, None).map_err(err)?))
+    })?;
+    let hosts = if shares.is_empty() { vec![] } else { share::lan_hosts() };
+    let path = |id: &str| {
+        let mut names = vec![];
+        let mut cur = folders.iter().find(|f| f.id == id);
+        while let Some(f) = cur {
+            names.push(f.name.as_str());
+            cur = f.parent_id.as_deref().and_then(|p| folders.iter().find(|f| f.id == p));
+        }
+        names.reverse();
+        names.join(" / ")
+    };
+    let srv = state.share.lock().unwrap();
+    Ok(ShareStatus {
+        running: srv.server.is_some(),
+        port: share::PORT,
+        error: srv.error.clone(),
+        shares: shares
+            .into_iter()
+            .map(|s| ShareInfo {
+                path: path(&s.folder_id),
+                urls: hosts.iter().map(|h| share::url(h, share::PORT, &s.token)).collect(),
+                share: s,
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command]
+pub async fn share_status(app: AppHandle) -> CmdResult<ShareStatus> {
+    // Looking up the PC's addresses can take a moment (macOS asks for its name).
+    tauri::async_runtime::spawn_blocking(move || share_state(&app)).await.map_err(err)?
+}
+
+/// Shares a folder (keeping its URL if it already is) or stops sharing it.
+#[tauri::command]
+pub async fn set_folder_share(app: AppHandle, folder_id: String, on: bool) -> CmdResult<ShareStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        with_lib(&app.state::<AppState>(), |lib| {
+            if on {
+                share::start(&lib.conn, &folder_id).map(drop).map_err(err)
+            } else {
+                share::stop(&lib.conn, &folder_id).map_err(err)
+            }
+        })?;
+        apply_share(&app);
+        share_state(&app)
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn set_share_download(app: AppHandle, folder_id: String, on: bool) -> CmdResult<ShareStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        with_lib(&app.state::<AppState>(), |lib| share::set_download(&lib.conn, &folder_id, on).map_err(err))?;
+        share_state(&app)
+    })
+    .await
+    .map_err(err)?
+}
+
+#[tauri::command]
+pub async fn stop_all_shares(app: AppHandle) -> CmdResult<ShareStatus> {
+    tauri::async_runtime::spawn_blocking(move || {
+        with_lib(&app.state::<AppState>(), |lib| share::stop_all(&lib.conn).map_err(err))?;
+        apply_share(&app);
+        share_state(&app)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// A URL as a QR code (SVG), for a phone's camera.
+#[tauri::command]
+pub fn share_qr(text: String) -> CmdResult<String> {
+    share::qr_svg(&text)
+}
+
 /// Changes made from Claude (changes.rs), newest first.
 #[tauri::command]
 pub fn list_changes(state: State<AppState>) -> CmdResult<Vec<changes::Change>> {
@@ -1304,8 +1452,11 @@ pub fn rename_folder(state: State<AppState>, id: String, name: String) -> CmdRes
 }
 
 #[tauri::command]
-pub fn delete_folder(state: State<AppState>, id: String) -> CmdResult<()> {
-    with_lib(&state, |lib| db::delete_folder(&lib.conn, &id).map_err(err))
+pub fn delete_folder(app: AppHandle, state: State<AppState>, id: String) -> CmdResult<()> {
+    with_lib(&state, |lib| db::delete_folder(&lib.conn, &id).map_err(err))?;
+    // Its share (and its subfolders') went with it.
+    apply_share(&app);
+    Ok(())
 }
 
 #[tauri::command]

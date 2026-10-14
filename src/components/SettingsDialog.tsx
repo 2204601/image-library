@@ -14,6 +14,7 @@ import {
   Puzzle,
   Settings,
   Shapes,
+  Share2,
   Type,
   X,
 } from "lucide-react";
@@ -29,6 +30,7 @@ import { sidebarHidden, usedModes, useStore, type SettingsTab } from "../store";
 import { WebImportSettings } from "./WebImportDialog";
 import { composing } from "../lib/ime";
 import { ClaudeSettings } from "./ClaudeSettings";
+import { ShareSettings } from "./ShareDialog";
 
 export const SETTINGS_KEY = isMac ? "⌘," : "Ctrl+,";
 
@@ -53,6 +55,7 @@ const APP_PAGES: Page[] = [
 const LIBRARY_PAGES: Page[] = [
   { id: "library", label: "概要", icon: <Info size={15} /> },
   { id: "librarySidebar", label: "サイドバー", icon: <PanelLeft size={15} /> },
+  { id: "libraryShare", label: "フォルダの共有", icon: <Share2 size={15} /> },
 ];
 
 /** ⌘, opens the screen (or closes it); Esc closes it. */
@@ -130,6 +133,7 @@ function Dialog({ tab }: { tab: SettingsTab }) {
             {tab === "claude" && <ClaudeSettings />}
             {tab === "library" && <LibraryPage />}
             {tab === "librarySidebar" && <LibrarySidebarPage />}
+            {tab === "libraryShare" && <ShareSettings />}
           </div>
           <button
             onClick={close}

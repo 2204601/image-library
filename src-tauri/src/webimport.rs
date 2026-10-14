@@ -281,7 +281,7 @@ fn import_one(
 }
 
 /// `a=1&b=x%20y` -> [("a", "1"), ("b", "x y")]. `+` is a space (URLSearchParams).
-fn parse_query(q: &str) -> Vec<(String, String)> {
+pub(crate) fn parse_query(q: &str) -> Vec<(String, String)> {
     q.split('&')
         .filter(|s| !s.is_empty())
         .map(|pair| {
