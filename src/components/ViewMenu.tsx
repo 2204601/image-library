@@ -25,7 +25,8 @@ export const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
   { key: "rating", label: "評価", hint: "★5 から未評価まで" },
   { key: "tag", label: "タグ", hint: "複数のタグがあるものは各タグに出る" },
   { key: "folder", label: "フォルダ", hint: "「すべて」やサブフォルダ表示で便利" },
-  { key: "family", label: "ファミリー", hint: "同じフォントの太さ違いをまとめる（細い順）" },
+  { key: "familyOne", label: "ファミリー（1件にまとめる）", hint: "太さ違いを 1 行に。Regular を代表に出し、操作は全部に効く" },
+  { key: "family", label: "ファミリー別に並べる", hint: "同じフォントの太さ違いを見出しでまとめる（細い順）" },
 ];
 
 /** Every layout; each mode offers its own subset (MODE_LAYOUTS). */

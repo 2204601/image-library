@@ -162,6 +162,8 @@ export interface Item {
   fontCategoryUser: string | null;
   /** Fonts: features (see FONT_FEATURES), empty until read. */
   fontFeatures: string[];
+  /** Family view only: every font the row stands for (the row's own id first). */
+  familyIds?: string[];
   /** On the work tray (作業台). */
   inTray: boolean;
   filePath: string;
