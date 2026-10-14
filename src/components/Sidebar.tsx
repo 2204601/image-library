@@ -716,8 +716,6 @@ export function Sidebar() {
   const mode = useStore((s) => s.mode);
   const usesImages = useStore((s) => usedModes(s).includes("image"));
   const hidden = useStore(useShallow((s) => sidebarHidden(s)[s.mode] ?? []));
-  const ownSidebar = useStore((s) => sidebarScope(s) === "library");
-  const openSettings = useStore((s) => s.openSettings);
   const showMenu = useMenu((s) => s.show);
 
   type Entry = { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string };
@@ -804,15 +802,6 @@ export function Sidebar() {
         <TagList />
       </nav>
       <div className="shrink-0 border-t border-line px-2 py-1">{shown(tidying).map(row)}</div>
-      {hidden.length > 0 && (
-        <button
-          onClick={() => openSettings(ownSidebar ? "librarySidebar" : "sidebar")}
-          title={`サイドバーに出す項目は、設定の${ownSidebar ? "ライブラリの" : "アプリ全体の"}「サイドバー」で選べます`}
-          className="shrink-0 px-4 pb-1.5 text-left text-[11px] text-dim hover:text-fg"
-        >
-          {hidden.length} 項目を非表示（表示…）
-        </button>
-      )}
       <button
         onClick={() => useShortcutHelp.getState().setOpen(true)}
         className="flex shrink-0 items-center gap-2 border-t border-line px-4 py-2 text-xs text-dim hover:bg-white/5 hover:text-fg"
