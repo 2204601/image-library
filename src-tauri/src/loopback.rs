@@ -1,6 +1,7 @@
 //! A small HTTP server on 127.0.0.1, shared by the browser extension's
-//! server (webimport.rs) and the MCP server (mcp/). Each request is handled
-//! on its own thread; dropping the `Listener` closes the port.
+//! server (webimport.rs) and the MCP server (mcp/). Folder sharing (share.rs)
+//! listens on the local network with it too. Each request is handled on its
+//! own thread; dropping the `Listener` closes the port.
 
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -22,10 +23,19 @@ impl Listener {
         port: u16,
         handle: impl Fn(tiny_http::Request, u16) + Send + Sync + 'static,
     ) -> Result<Self, String> {
+        Self::start_on(std::net::Ipv4Addr::LOCALHOST, port, handle)
+    }
+
+    /// `start` on another address: `0.0.0.0` is every network the PC is on.
+    pub fn start_on(
+        ip: std::net::Ipv4Addr,
+        port: u16,
+        handle: impl Fn(tiny_http::Request, u16) + Send + Sync + 'static,
+    ) -> Result<Self, String> {
         // Restarting (a new key) can come right after the old server let go of the port.
         let started = std::time::Instant::now();
         let http = loop {
-            match tiny_http::Server::http(("127.0.0.1", port)) {
+            match tiny_http::Server::http((ip, port)) {
                 Ok(h) => break h,
                 Err(e)
                     if started.elapsed() < CLOSE_WAIT
@@ -35,7 +45,7 @@ impl Listener {
                 }
                 Err(e) => {
                     return Err(format!(
-                        "127.0.0.1:{port} で待ち受けできませんでした（ほかのアプリが使用中の可能性があります）: {e}"
+                        "{ip}:{port} で待ち受けできませんでした（ほかのアプリが使用中の可能性があります）: {e}"
                     ))
                 }
             }

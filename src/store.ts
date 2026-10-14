@@ -138,7 +138,14 @@ export interface ExportRequest {
  * The settings screen's pages: the app's (一般 … Claude), then the open
  * library's (概要, サイドバー). See docs/SETTINGS.md.
  */
-export type SettingsTab = "general" | "sidebar" | "extension" | "claude" | "library" | "librarySidebar";
+export type SettingsTab =
+  | "general"
+  | "sidebar"
+  | "extension"
+  | "claude"
+  | "library"
+  | "librarySidebar"
+  | "libraryShare";
 
 /** Where sidebar entries are hidden: the app's settings or the open library's. */
 export type SidebarScope = "app" | "library";
@@ -219,6 +226,8 @@ interface State {
   sheet: Item[] | null;
   /** The "別のライブラリへ" dialog: selected items, or every item of a kind. */
   transfer: TransferRequest | null;
+  /** The folder the share dialog is open for (share.rs). */
+  sharing: string | null;
   /** The export dialog (書き出し…). */
   exporting: ExportRequest | null;
 
@@ -316,6 +325,7 @@ interface State {
   setReview: (r: DuplicateReview | null) => void;
   setSheet: (items: Item[] | null) => void;
   setTransfer: (t: TransferRequest | null) => void;
+  setSharing: (folderId: string | null) => void;
   setExporting: (r: ExportRequest | null) => void;
   refresh: () => Promise<void>;
 
@@ -605,6 +615,7 @@ export const useStore = create<State>((set, get) => ({
   review: null,
   sheet: null,
   transfer: null,
+  sharing: null,
   exporting: null,
 
   items: [],
@@ -999,6 +1010,7 @@ export const useStore = create<State>((set, get) => ({
   setReview: (review) => set({ review }),
   setSheet: (sheet) => set({ sheet }),
   setTransfer: (transfer) => set({ transfer }),
+  setSharing: (sharing) => set({ sharing }),
   setExporting: (exporting) => set({ exporting }),
 
   refresh: async () => {

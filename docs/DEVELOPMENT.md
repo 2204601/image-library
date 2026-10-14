@@ -13,6 +13,7 @@ npm run tauri build    # 配布用ビルド（.dmg / -setup.exe。署名鍵が�
 - 画像・フォント・ファイルの分け方（モード）と、共通基盤と種類ごとのコードの境界は [ARCHITECTURE.md](ARCHITECTURE.md) にまとめてある。
 - テスト用ライブラリの生成：`npm run seed -- /path/to/Test.library 10000`
   （1 万枚の取り込み 約 6 秒、検索+並び替えクエリ 約 6ms ／ Apple Silicon・release ビルド）
+- フォルダの共有の開発：`cargo run --manifest-path src-tauri/Cargo.toml --example shareserver -- /path/to/Test.library [フォルダ名]` でアプリなしに共有サーバーを起動し、表示された URL をブラウザで開く（ポートはアプリの 41640 ではなく 41650）。ページは `src-tauri/src/share.html` で、ビルドし直すと反映される
 - ブラウザ拡張の開発：`cargo run --manifest-path src-tauri/Cargo.toml --example webserver -- /path/to/Test.library` でアプリなしに受付サーバーを起動し（`extension/config.json` に接続キーを書く。「アプリと接続」は確認なしで許可する）、Chrome で `extension/` を読み込む。アプリと同時に動かせるよう、ポートはアプリの 41620 ではなく 41630（ほかのポートは `-- <library> <拡張のフォルダ> 41699` のように指定。`config.json` にそのポートが書かれる）。拡張機能のファイルを変えたら `chrome://extensions` で再読み込み
 
 ## 構成
@@ -43,13 +44,16 @@ src-tauri/src/
   webimport.rs          ブラウザ拡張の受付サーバー（127.0.0.1、接続キー必須、「アプリと接続」の確認）
   mcp/                  Claude からの整理：MCP サーバー（127.0.0.1、トークン必須）、ツール、`--mcp` の stdio 中継
   changes.rs            Claude がした変更の記録と取り消し
-  loopback.rs           127.0.0.1 の待ち受け（受付サーバーと MCP で共通）
+  share.rs              フォルダの共有：LAN への待ち受け（見るだけ、URL の秘密の文字列が鍵）、`shares` テーブル、アドレス・QR コード
+  share.html            フォルダの共有の閲覧ページ（スマホ向け、1 ファイル。share.rs に埋め込む）
+  loopback.rs           HTTP の待ち受け（受付サーバー・MCP・フォルダの共有で共通）
   commands.rs           フロントから呼ぶコマンド（共通）
   appdirs.rs            アプリのフォルダ（旧名 Image Library のフォルダからの移し替え）
 src-tauri/windows/hooks.nsh  Windows インストーラの追加処理（旧名のアプリのアンインストール）
 src-tauri/examples/seed.rs  テストデータ生成
 src-tauri/examples/webserver.rs  アプリなしで拡張の受付サーバーを起動（拡張の開発用）
 src-tauri/examples/mcpserver.rs  アプリなしで MCP サーバーを起動（Claude からの整理の開発用）
+src-tauri/examples/shareserver.rs  アプリなしでフォルダの共有を起動（閲覧ページの開発用）
 extension/              Chrome 拡張（Manifest V3、ビルド不要）。アプリに同梱され、「フォルダを用意」で書き出される
   background.js         右クリックメニュー・スクリーンショット・保存結果の表示
   content.js            Alt+右クリックで即保存

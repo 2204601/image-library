@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 18;
+const SCHEMA_VERSION: i32 = 19;
 
 const SETTINGS_TABLE: &str = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
@@ -305,6 +305,18 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         c.execute("UPDATE items SET font_category = NULL WHERE font_category = 'mono'", [])?;
         c.execute("UPDATE items SET font_category_user = NULL WHERE font_category_user = 'mono'", [])?;
         Ok(())
+    })?;
+    // Folders shared read-only on the local network (share.rs): the secret in
+    // the folder's URL, and whether its files may be downloaded.
+    step(19, &|c| {
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS shares (
+               folder_id  TEXT PRIMARY KEY REFERENCES folders(id) ON DELETE CASCADE,
+               token      TEXT NOT NULL UNIQUE,
+               download   INTEGER NOT NULL DEFAULT 1,
+               created_at INTEGER NOT NULL
+             )",
+        )
     })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
@@ -1535,6 +1547,8 @@ pub struct Folder {
     pub name: String,
     pub count: i64,
     pub color: Option<String>,
+    /// Shared on the local network (share.rs).
+    pub shared: bool,
 }
 
 /// Every folder; `count` is its live items (of `kind`, when given).
@@ -1544,7 +1558,8 @@ pub fn list_folders(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<Folde
         "SELECT f.id, f.parent_id, f.name,
            (SELECT COUNT(*) FROM item_folders x JOIN items i ON i.id = x.item_id
             WHERE x.folder_id = f.id AND i.deleted_at IS NULL AND {of_kind}),
-           f.color
+           f.color,
+           EXISTS (SELECT 1 FROM shares s WHERE s.folder_id = f.id)
          FROM folders f ORDER BY f.sort_order IS NULL, f.sort_order, f.name COLLATE NOCASE"
     ))?;
     let rows = stmt.query_map([arg.as_ref()], |r| {
@@ -1554,6 +1569,7 @@ pub fn list_folders(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<Folde
             name: r.get(2)?,
             count: r.get(3)?,
             color: r.get(4)?,
+            shared: r.get(5)?,
         })
     })?;
     rows.collect()

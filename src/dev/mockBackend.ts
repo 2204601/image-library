@@ -49,7 +49,7 @@ const inWeight = (i: MockItem, key: string) => {
   const [lo, hi] = [i.fontWeightMin ?? i.fontWeight ?? 400, i.fontWeightMax ?? i.fontWeight ?? 400];
   return lo <= r[2] && hi >= r[1];
 };
-const folders: Omit<Folder, "count">[] = [];
+const folders: Omit<Folder, "count" | "shared">[] = [];
 const tags: { id: number; name: string; color: string | null }[] = [];
 // `${itemId}|${folderId}` -> manual position
 const itemFolders = new Map<string, number>();
@@ -479,6 +479,28 @@ const claudeChanges = [
   { id: 1, at: Date.now() - 120_000, source: "mcp", summary: "タグを付けました（「京都」4 件、「東京」2 件）", undone: false },
 ];
 
+// Shared folders: folder id -> download allowed (share.rs).
+const shares = new Map<string, { token: string; download: boolean; createdAt: number }>();
+
+function shareStatus() {
+  const path = (fid: string): string => {
+    const f = folders.find((x) => x.id === fid);
+    return !f ? "" : f.parentId ? `${path(f.parentId)} / ${f.name}` : f.name;
+  };
+  for (const fid of [...shares.keys()]) if (!folders.some((f) => f.id === fid)) shares.delete(fid);
+  return {
+    running: shares.size > 0,
+    port: 41640,
+    error: null,
+    shares: [...shares].map(([folderId, s]) => ({
+      folderId,
+      ...s,
+      path: path(folderId),
+      urls: [`http://192.168.1.23:41640/s/${s.token}/`, `http://Mock-Mac.local:41640/s/${s.token}/`],
+    })),
+  };
+}
+
 function mcpStatus() {
   const on = mcp.enabled;
   return {
@@ -815,6 +837,24 @@ function handle(cmd: string, a: any): unknown {
       return { ...webImport };
     case "answer_web_pair":
       return null;
+    case "share_status":
+      return shareStatus();
+    case "set_folder_share":
+      if (!a.on) shares.delete(a.folderId);
+      else if (!shares.has(a.folderId))
+        shares.set(a.folderId, { token: `mock${id()}`, download: true, createdAt: Date.now() });
+      return shareStatus();
+    case "set_share_download": {
+      const s = shares.get(a.folderId);
+      if (s) s.download = a.on;
+      return shareStatus();
+    }
+    case "stop_all_shares":
+      shares.clear();
+      return shareStatus();
+    case "share_qr":
+      // A stand-in: a framed square, not a code a camera can read.
+      return '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10" fill="#fff"/><rect x="1" y="1" width="8" height="8" fill="none" stroke="#000"/></svg>';
     case "mcp_status":
       return mcpStatus();
     case "set_mcp":
@@ -836,7 +876,11 @@ function handle(cmd: string, a: any): unknown {
       webImport.extensionDir = "/Users/mock/Library/Application Support/com.local.stockroom/chrome-extension";
       return webImport.extensionDir;
     case "list_folders":
-      return folders.map((f) => ({ ...f, count: ofKind(a.kind)(live()).filter((i) => inFolder(i.id, f.id)).length }));
+      return folders.map((f) => ({
+        ...f,
+        count: ofKind(a.kind)(live()).filter((i) => inFolder(i.id, f.id)).length,
+        shared: shares.has(f.id),
+      }));
     case "place_folder":
       return placeFolder(a.id, a.parentId ?? null, a.before ?? null);
     case "shift_folder": {

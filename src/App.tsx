@@ -20,6 +20,7 @@ import { TransferDialog } from "./components/TransferDialog";
 import { PairDialog } from "./components/WebImportDialog";
 import { SettingsDialog } from "./components/SettingsDialog";
 import { ExportDialog } from "./components/ExportDialog";
+import { ShareDialog } from "./components/ShareDialog";
 import { Welcome } from "./components/Welcome";
 import { importClipboardFiles, importPaths, undoChanges } from "./lib/actions";
 import { api, type Change, type ImportSummary } from "./lib/api";
@@ -232,6 +233,7 @@ export default function App() {
       <SheetDialog />
       <TransferDialog />
       <ExportDialog />
+      <ShareDialog />
       <SettingsDialog />
       <PairDialog />
       <ShortcutHelp />

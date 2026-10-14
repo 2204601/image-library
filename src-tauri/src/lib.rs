@@ -12,6 +12,7 @@ pub mod mcp;
 pub mod orient;
 pub mod proxy;
 pub mod search;
+pub mod share;
 pub mod sheet;
 pub mod similar;
 pub mod transfer;
@@ -197,6 +198,11 @@ pub fn run() {
             mcp_status,
             set_mcp,
             reset_mcp_token,
+            share_status,
+            set_folder_share,
+            set_share_download,
+            stop_all_shares,
+            share_qr,
             list_changes,
             undo_change,
             list_folders,
