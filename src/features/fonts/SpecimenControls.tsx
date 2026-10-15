@@ -57,6 +57,7 @@ export function SpecimenControls() {
         <button title={`${size.what}を小さく（⌘-）`} onClick={() => zoom("view.zoomOut")} className={step}>
           <Minus size={13} />
         </button>
+        {/* Narrow toolbar: the − / + steps alone, so the typed text keeps its room. */}
         <Slider
           min={size.min}
           max={size.max}
@@ -64,7 +65,7 @@ export function SpecimenControls() {
           value={size.value}
           onChange={(e) => size.set(Number(e.target.value))}
           title={`${size.what}の大きさ（⌘+ / ⌘-）`}
-          className="mx-1 w-24"
+          className="mx-1 w-24 @max-2xl:hidden"
         />
         <button title={`${size.what}を大きく（⌘+）`} onClick={() => zoom("view.zoomIn")} className={step}>
           <Plus size={13} />
@@ -136,11 +137,12 @@ function PatternMenu({ name, text, own }: { name: string; text: string; own: str
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
         // Fixed width: the name changes, the controls beside it don't move.
-        className={`flex h-full w-48 items-center gap-1.5 border-l border-line px-2 text-left hover:text-fg ${
+        // Narrower with the toolbar, where the name alone stands for it.
+        className={`flex h-full w-48 items-center @max-3xl:w-32 gap-1.5 border-l border-line px-2 text-left hover:text-fg ${
           open ? "text-fg" : "text-dim"
         }`}
       >
-        <span className="shrink-0">パターン</span>
+        <span className="shrink-0 @max-3xl:hidden">パターン</span>
         <span className="min-w-0 flex-1 truncate text-fg">{name}</span>
         <ChevronDown size={12} className="shrink-0" />
       </button>
