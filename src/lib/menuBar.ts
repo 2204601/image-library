@@ -217,8 +217,8 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
       "評価",
       [0, 1, 2, 3, 4, 5].map((n) => cmd(`item.rate${n}`)),
     ),
-    // In "すべて", greyed out unless only images are listed or selected (`appliesTo`).
-    ...(mode === "all" && usedModes(s).includes("image")
+    // In the stock, greyed out unless only images are listed or selected (`appliesTo`).
+    ...(mode === "stock" && usedModes(s).includes("image")
       ? [
           submenu("回転・反転", [
             cmd("item.rotateCcw"),
@@ -237,7 +237,7 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
   ]);
 
   const view = submenu("表示", [
-    // "すべて" and the fonts when both are offered; ⌘1 / ⌘2 stay those of MODES.
+    // The stock and the fonts when both are offered; ⌘1 / ⌘2 stay those of MODES.
     ...(modes.length > 1 ? [...modes.map((m) => cmd(`mode.${m}`)), sep()] : []),
     submenu(
       "レイアウト",
@@ -261,7 +261,7 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
     ),
     submenu("並び順", [
       // Kept in the menu and greyed out: what the list holds changes without a rebuild.
-      ...SORTS.filter((o) => !o.only || (mode === "all" && usedModes(s).includes(o.only))).map((o) =>
+      ...SORTS.filter((o) => !o.only || (mode === "stock" && usedModes(s).includes(o.only))).map((o) =>
         live(
           () => o.label,
           () => st().setSort(o.key, st().desc),

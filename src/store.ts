@@ -22,7 +22,19 @@ import {
 } from "./lib/api";
 import { fontApi } from "./features/fonts/api";
 import { filesApi, onFileThumbs } from "./features/files/api";
-import { listIs, modeKind, modesFor, queryKinds, ruleKinds, usedKinds, type KindState, type Mode } from "./lib/modes";
+import {
+  kindsNoun,
+  listIs,
+  modeLabel,
+  modeOf,
+  MODES,
+  modesFor,
+  queryKinds,
+  ruleKinds,
+  usedKinds,
+  type KindState,
+  type Mode,
+} from "./lib/modes";
 import {
   DEFAULT_LIBRARY_SETTINGS,
   openingMode,
@@ -38,10 +50,11 @@ import { MAX_OWN_PATTERNS } from "./features/fonts/patterns";
 import { notifyIfAway } from "./lib/osNotify";
 
 /**
- * What the app shows: every kind ("all") or the fonts. Everything (the list,
- * counts, folders, tags, smart folders) is of the current mode; each mode
- * remembers its own layout and grouping. Inside "すべて", the kind filter
- * (`filter.kinds`) narrows the list to some kinds (see `listKinds`).
+ * What the app shows: the stock (images and files) or the fonts
+ * (docs/MODES.md). Everything (the list, counts, folders, tags, smart
+ * folders, the shelf) is of the current mode; each mode remembers its own
+ * layout and grouping. Inside the stock, the kind filter (`filter.kinds`)
+ * narrows the list to some kinds (see `listKinds`).
  */
 export { MODES, type Mode } from "./lib/modes";
 // The kinds a list holds (lib/modes.ts), used across the components.
@@ -69,15 +82,15 @@ export type Layout = "justified" | "grid" | "waterfall" | "list" | "specimen";
 
 /** Layouts of each mode, the first being its default. */
 export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
-  // Images keep their shape; fonts and files take a fixed one (layouts.ts `aspect`).
-  all: ["justified", "waterfall", "grid", "list"],
+  // Images keep their shape; files take a fixed one (layouts.ts `aspect`).
+  stock: ["justified", "waterfall", "grid", "list"],
   // No list for fonts: the specimen with small text does its job (docs/FONT_UI.md).
   font: ["specimen", "grid"],
 };
 
 /** Groupings of each mode. */
 export const MODE_GROUPS: Record<Mode, GroupBy[]> = {
-  all: ["none", "kind", "rating", "tag", "folder"],
+  stock: ["none", "kind", "rating", "tag", "folder"],
   // Fonts are always one row per family (▸ opens its styles), so no family grouping.
   font: ["none", "category", "script", "rating", "tag", "folder"],
 };
@@ -286,7 +299,7 @@ interface State {
   setLibrary: (lib: LibraryInfo | null) => Promise<void>;
   /** Switches mode; starts in "all" with no conditions, on the mode's own layout and grouping. */
   setMode: (mode: Mode) => void;
-  /** Narrows "すべて" to these kinds (none = every kind the library is used for). */
+  /** Narrows the stock to these kinds (none = every kind of it the library is used for). */
   setKinds: (kinds: ItemKind[]) => void;
   /** Kinds the library is used for / switches to drop or bring back a kind. */
   setUsedModes: (modes: ItemKind[]) => void;
@@ -421,23 +434,20 @@ const loadJson = (key: string): object => {
 };
 
 /**
- * The mode's saved layout, else its default. "すべて" falls back to what the
- * image mode of earlier versions had (and the "layout" key from before modes).
+ * The mode's saved layout, else its default. The stock falls back to what
+ * "すべて" had, then the image mode of earlier versions (and the "layout"
+ * key from before modes).
  */
 const loadLayout = (mode: Mode): Layout => {
-  const keys = mode === "all" ? ["layout:all", "layout:image", "layout"] : [`layout:${mode}`];
+  const keys = mode === "stock" ? ["layout:stock", "layout:all", "layout:image", "layout"] : [`layout:${mode}`];
   const saved = keys.map(load).find((v) => v !== null);
   return MODE_LAYOUTS[mode].find((l) => l === saved) ?? MODE_LAYOUTS[mode][0];
 };
 const loadGroupBy = (mode: Mode): GroupBy => {
-  const keys = mode === "all" ? ["groupBy:all", "groupBy:image", "groupBy"] : [`groupBy:${mode}`];
+  const keys = mode === "stock" ? ["groupBy:stock", "groupBy:all", "groupBy:image", "groupBy"] : [`groupBy:${mode}`];
   const saved = keys.map(load).find((v) => v !== null);
   return MODE_GROUPS[mode].find((g) => g === saved) ?? "none";
 };
-
-/** Smart folders of a mode: any in "すべて"; in a kind's mode, those that can hold the kind. */
-export const smartFolderInMode = (sf: SmartFolder, mode: Mode) =>
-  mode === "all" || !sf.rule.filter.kinds?.length || sf.rule.filter.kinds.includes(mode);
 
 /** Conditions only images have (shape, pixel size), cleared when the list isn't of images alone. */
 const IMAGE_ONLY: Partial<Filter> = { shapes: [], minWidth: null, maxWidth: null, minHeight: null, maxHeight: null };
@@ -541,7 +551,7 @@ function rearrange(s: State, patch: Partial<State>): Partial<State> {
 }
 
 // The mode comes from the library being opened (setLibrary).
-const initialMode: Mode = "all";
+const initialMode: Mode = "stock";
 
 let librarySeq = 0;
 
@@ -575,7 +585,7 @@ function saveLibrarySetting(key: string, value: unknown) {
 /** Kinds the open library is used for, in `KINDS` order. */
 export const usedModes = usedKinds;
 
-/** Modes the switch offers: "すべて", and the fonts when used with another kind (see `modesFor`). */
+/** Modes the switch offers: those with kinds the library is used for (see `modesFor`). */
 export const shownModes = (s: { librarySettings: LibrarySettings }): Mode[] => modesFor(usedModes(s));
 
 type SidebarState = Pick<State, "library" | "librarySettings" | "appSettings">;
@@ -713,9 +723,9 @@ export const useStore = create<State>((set, get) => ({
       }
       if (seq !== librarySeq) return; // another library was opened meanwhile
     }
-    // Left in the image or file mode of an earlier version: "すべて" of that kind,
-    // remembered as "すべて" from now on.
-    const filter = { ...EMPTY_FILTER, kinds: mode === "all" ? librarySettings.lastKinds : [] };
+    // Left in the image or file mode of an earlier version: the stock of that
+    // kind, remembered as the stock from now on.
+    const filter = { ...EMPTY_FILTER, kinds: mode === "stock" ? librarySettings.lastKinds : [] };
     if (library && librarySettings.lastKinds.length) {
       librarySettings = { ...librarySettings, lastKinds: [] };
       saveLibrarySetting("lastMode", mode);
@@ -999,9 +1009,9 @@ export const useStore = create<State>((set, get) => ({
   currentRule: () => {
     const s = get();
     const { search, tagFilter, tagMatchAll, minRating, filter } = s;
-    // The kinds picked are a condition like the others; a rule made in the font
-    // mode keeps to fonts (see `smartFolderInMode`).
-    const kinds: ItemKind[] = s.mode === "font" ? ["font"] : filter.kinds;
+    // The kinds picked are a condition like the others (the smart folder is of
+    // the mode it is made in, which keeps it to the mode's kinds).
+    const kinds: ItemKind[] = s.mode === "font" ? [] : filter.kinds;
     return { search, tagIds: tagFilter, tagMatchAll, minRating, filter: { ...filter, kinds } };
   },
   startEditSmart: (sf) => {
@@ -1016,7 +1026,7 @@ export const useStore = create<State>((set, get) => ({
       minRating: sf.rule.minRating,
       // The kinds go to the kind filter (in the font mode, they are its own). Shape and
       // pixel size only match images, so a rule with them shows as of images.
-      filter: { ...EMPTY_FILTER, ...sf.rule.filter, kinds: get().mode === "all" ? ruleKinds(sf.rule.filter) : [] },
+      filter: { ...EMPTY_FILTER, ...sf.rule.filter, kinds: get().mode === "stock" ? ruleKinds(sf.rule.filter) : [] },
       filterOpen: true,
       selected: new Set(),
     });
@@ -1102,7 +1112,7 @@ export const useStore = create<State>((set, get) => ({
         }
         dismissedGroups = await api.countDismissedDuplicates();
       }
-      const [rawItems, folders, tags, counts, allSmart, exts, shelf] = await Promise.all([
+      const [rawItems, folders, tags, counts, smartFolders, exts, shelf] = await Promise.all([
         api.queryItems({
           view,
           search,
@@ -1116,11 +1126,11 @@ export const useStore = create<State>((set, get) => ({
           sort,
           desc,
         }),
-        api.listFolders(modeKind(mode)),
-        api.listTags(modeKind(mode)),
-        api.getCounts(modeKind(mode)),
-        api.listSmartFolders(modeKind(mode)),
-        api.listExts(modeKind(mode)),
+        api.listFolders(mode),
+        api.listTags(mode),
+        api.getCounts(mode),
+        api.listSmartFolders(mode),
+        api.listExts(mode),
         // The mode's shelf, whatever the view and conditions.
         api.queryItems({
           view: { kind: "tray" },
@@ -1136,7 +1146,6 @@ export const useStore = create<State>((set, get) => ({
         }),
       ]);
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
-      const smartFolders = allSmart.filter((sf) => smartFolderInMode(sf, mode));
       const { items, sections } = arrange({ ...get(), view, rawItems, tags, folders });
       const present = new Set(rowIds(items));
       const selected = new Set([...get().selected].filter((id) => present.has(id)));
@@ -1291,6 +1300,7 @@ export const useStore = create<State>((set, get) => ({
     if (since !== undefined) notifyIfAway(since, title, detail);
     if (s.failed.length) warn("import failures", s.failed);
     notifyUnusedKinds(s.kinds ?? {});
+    notifyOtherMode(s.kinds ?? {});
     if (s.kinds?.file) filesApi.prepareThumbs().catch(() => {});
   },
 }));
@@ -1323,6 +1333,26 @@ export function notifyUnusedKinds(kinds: Partial<Record<ItemKind, number>>) {
       duration: 12000,
     });
   }
+}
+
+/**
+ * After an import: tells about items that went to the other mode (fonts
+ * dropped in the stock, images in the fonts), with a button to go there.
+ * Kinds the library isn't used for are `notifyUnusedKinds`'s.
+ */
+export function notifyOtherMode(kinds: Partial<Record<ItemKind, number>>) {
+  const s = useStore.getState();
+  const used = usedModes(s);
+  const other = MODES.find((m) => m !== s.mode)!;
+  const arrived = KINDS.filter((k) => modeOf(k.kind) === other && used.includes(k.kind) && (kinds[k.kind] ?? 0) > 0);
+  if (!arrived.length) return;
+  const n = arrived.reduce((a, k) => a + (kinds[k.kind] ?? 0), 0);
+  s.notify({
+    title: `${kindsNoun(arrived.map((k) => k.kind))} ${n} 件は「${modeLabel(other)}」に入りました`,
+    detail: "フォルダやタグは、ストックとフォントで別々です",
+    action: { label: `${modeLabel(other)}を開く`, onClick: () => useStore.getState().setMode(other) },
+    duration: 10000,
+  });
 }
 
 export function currentFolderId(): string | null {

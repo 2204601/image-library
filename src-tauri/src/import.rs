@@ -518,18 +518,24 @@ fn commit(
     // Target folder (None = unfiled) -> item ids, in import order.
     // The flag marks already-known items, which only fill an empty spot.
     let mut placed: Vec<(Option<String>, bool, Vec<String>)> = Vec::new();
-    let mut folder_cache: HashMap<Vec<String>, String> = HashMap::new();
+    let mut folder_cache: HashMap<(db::Mode, Vec<String>), String> = HashMap::new();
     let tx = conn.transaction()?;
+    // A folder holds its mode's items only (docs/MODES.md): the others go to
+    // the top of their own mode.
+    let target_mode = match folder_id {
+        Some(f) => db::folder_mode(&tx, f)?,
+        None => None,
+    };
     let base = db::now_ms();
     for (i, (o, dirs)) in outcomes.into_iter().enumerate() {
         let known = matches!(o, Outcome::Duplicate(_));
-        let id = match o {
+        let (id, mode) = match o {
             Outcome::New(item) => {
                 // Offset by index so the import order is preserved when sorting.
                 db::insert_item(&tx, &item, base + i as i64)?;
                 summary.imported += 1;
                 *summary.kinds.entry(item.kind).or_default() += 1;
-                item.id
+                (item.id, db::Mode::of(item.kind))
             }
             Outcome::Duplicate(id) => {
                 summary.duplicates += 1;
@@ -538,7 +544,8 @@ fn commit(
                 }
                 // Re-importing something from the trash brings it back.
                 db::restore_items(&tx, std::slice::from_ref(&id))?;
-                id
+                let mode = db::item_mode(&tx, &id)?.unwrap_or_default();
+                (id, mode)
             }
             Outcome::Failed(msg) => {
                 summary.failed.push(msg);
@@ -546,13 +553,13 @@ fn commit(
             }
         };
         // Recreate the source directory structure under the target folder.
-        let mut folder = folder_id.map(str::to_owned);
+        let mut folder = folder_id.filter(|_| target_mode == Some(mode)).map(str::to_owned);
         for depth in 1..=dirs.len() {
-            let key = dirs[..depth].to_vec();
+            let key = (mode, dirs[..depth].to_vec());
             let next = match folder_cache.get(&key) {
                 Some(f) => f.clone(),
                 None => {
-                    let f = db::find_or_create_folder(&tx, folder.as_deref(), &dirs[depth - 1])?;
+                    let f = db::find_or_create_folder(&tx, folder.as_deref(), &dirs[depth - 1], mode)?;
                     folder_cache.insert(key, f.clone());
                     f
                 }
@@ -619,7 +626,7 @@ mod tests {
 
         let target = {
             let g = lib.lock().unwrap();
-            db::create_folder(&g.as_ref().unwrap().conn, "F", None).unwrap()
+            db::create_folder(&g.as_ref().unwrap().conn, "F", None, db::Mode::Stock).unwrap()
         };
         let calls = AtomicUsize::new(0);
         let sum = run(&lib, files, Some(target.clone()), |_, _| {
@@ -856,6 +863,26 @@ mod tests {
         let sum = run(&lib, sources, None, |_, _| {}).unwrap();
         assert_eq!(sum.imported, 1);
         assert_eq!(sum.failed.len(), 1, "{:?}", sum.failed);
+    }
+
+    #[test]
+    fn drops_into_a_folder_only_what_is_of_its_mode() {
+        let Some(ttf) = fonts::tests::system_font(fonts::tests::SINGLE) else { return };
+        let (_tmp, lib) = setup();
+        let folder = {
+            let g = lib.lock().unwrap();
+            db::create_folder(&g.as_ref().unwrap().conn, "画像", None, db::Mode::Stock).unwrap()
+        };
+        let sources = vec![
+            Source::Bytes { name: "Sample.ttf".into(), data: ttf },
+            Source::Bytes { name: "square.png".into(), data: png_bytes(DynamicImage::ImageRgb8(RgbImage::new(8, 8))) },
+        ];
+        run(&lib, sources, Some(folder.clone()), |_, _| {}).unwrap();
+        let g = lib.lock().unwrap();
+        let all = db::query_items(&g.as_ref().unwrap().conn, &db::ItemQuery::default()).unwrap();
+        let folder_of = |kind| all.iter().find(|i| i.kind == kind).unwrap().folder_id.clone();
+        assert_eq!(folder_of(db::Kind::Image), Some(folder));
+        assert_eq!(folder_of(db::Kind::Font), None, "the font stays unfiled, in its own mode");
     }
 
     #[test]

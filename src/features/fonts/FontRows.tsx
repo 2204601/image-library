@@ -1,5 +1,5 @@
-// Rows of the list for fonts: the cells of the shared list layout ("すべて"),
-// the specimen layout's row and the font grid's tile. All draw the sample in
+// Rows of the list for fonts: the specimen layout's row and the font grid's
+// tile. All draw the sample in
 // the font itself, loaded only while the row is on screen (see loader.ts).
 import { ChevronRight, Heart, Layers, Pin } from "lucide-react";
 import { memo, useEffect, useState } from "react";
@@ -78,34 +78,6 @@ function FamilyCount({ item }: { item: Item }) {
     <span className="shrink-0 rounded bg-accent/15 px-1.5 py-px text-[11px] text-accent" title="このファミリーのスタイル数。操作は全部に効きます">
       {item.familyIds.length} スタイル
     </span>
-  );
-}
-
-/** List row of a font: family and style, then a sample line drawn in the font. */
-export function FontListCells({ item }: { item: Item }) {
-  const { family, preview, failed, style } = useFontRow(item.id);
-  return (
-    <>
-      <span className="flex w-36 shrink-0 flex-col leading-tight" title={item.name}>
-        <span className="flex min-w-0 items-center gap-1.5">
-          <span className="truncate text-[13px]">{item.fontFamily || item.name}</span>
-          <FamilyCount item={item} />
-        </span>
-        <span className="truncate text-[11px] text-dim">{style || item.name}</span>
-      </span>
-      {failed ? (
-        <span className="min-w-0 flex-1 truncate text-dim">見本を表示できません</span>
-      ) : (
-        <span
-          className={`min-w-0 flex-1 truncate text-[20px] leading-none transition-opacity duration-200 ${
-            family && preview ? "opacity-100" : "opacity-0"
-          }`}
-          style={{ fontFamily: family ? `"${family}"` : undefined }}
-        >
-          {preview?.sample}
-        </span>
-      )}
-    </>
   );
 }
 

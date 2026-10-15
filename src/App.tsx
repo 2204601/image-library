@@ -31,7 +31,7 @@ import { dragRegion } from "./lib/titleBar";
 import { loadAppVersion, scheduleUpdateCheck } from "./lib/update";
 import { installMenuBar } from "./lib/menuBar";
 import { openGuarded } from "./lib/libraryLock";
-import { notifyUnusedKinds, useStore } from "./store";
+import { notifyOtherMode, notifyUnusedKinds, useStore } from "./store";
 
 /** Sidebar folder under a native file drag (position is in physical pixels). */
 function folderAt(pos: { x: number; y: number }): string | null {
@@ -90,6 +90,7 @@ export default function App() {
           kind: added ? "success" : "info",
         });
         notifyUnusedKinds(kinds);
+        notifyOtherMode(kinds);
         added = known = 0;
         kinds = {};
       }, 800);

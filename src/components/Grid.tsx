@@ -16,7 +16,7 @@ import {
 } from "../lib/actions";
 import { command, isEnabled, runKey } from "../lib/commands";
 import { applicable, commandIcon, commandItem } from "../lib/menuItems";
-import { FontListCells, FontTile, SpecimenRow } from "../features/fonts/FontRows";
+import { FontTile, SpecimenRow } from "../features/fonts/FontRows";
 import { api, formatBytes, sizeLabel, type Item, type ItemKind } from "../lib/api";
 import { itemsNoun, kindsNoun } from "../lib/modes";
 import { colorHex } from "../lib/colors";
@@ -318,14 +318,10 @@ const ListRow = memo(function ListRow({
       data-axis="y"
     >
       <ChangePulse id={item.id} className="rounded-md" />
-      {item.kind === "font" ? (
-        <FontListCells item={item} />
-      ) : (
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-raised">
-          <Thumb item={item} fit="contain" />
-        </div>
-      )}
-      <span className={`min-w-0 truncate text-[13px] ${item.kind === "font" ? "hidden" : "flex-1"}`}>
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded bg-raised">
+        <Thumb item={item} fit="contain" />
+      </div>
+      <span className="min-w-0 flex-1 truncate text-[13px]">
         {item.name}
         {similar && (
           <span

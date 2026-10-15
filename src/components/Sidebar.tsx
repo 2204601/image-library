@@ -37,7 +37,7 @@ import {
   trayList,
 } from "../lib/actions";
 import { FontFilters } from "../features/fonts/FontFilters";
-import { api, type Folder, type View } from "../lib/api";
+import { api, modeOf, type Folder, type ItemKind, type View } from "../lib/api";
 import { modeLabel, type Mode } from "../lib/modes";
 import {
   activeConditions,
@@ -532,14 +532,14 @@ function SmartFolderList() {
 }
 
 const MODE_ICON: Record<Mode, React.ReactNode> = {
-  all: <Shapes size={14} />,
+  stock: <Shapes size={14} />,
   font: <Type size={14} />,
 };
 
 /**
- * What the app shows ("すべて", or the fonts to compare): the sidebar's
+ * What the app shows (the stock, or the fonts to compare): the sidebar's
  * header, with counts and ⌘1 / ⌘2 (MODES order). Images and files are
- * narrowed in "すべて" with the kind filter on the toolbar.
+ * narrowed in the stock with the kind filter on the toolbar.
  */
 function ModeSwitch() {
   const mode = useStore((s) => s.mode);
@@ -547,7 +547,9 @@ function ModeSwitch() {
   const kinds = useStore((s) => s.counts.kinds);
   const shown = useStore(useShallow(shownModes));
   const countOf = (m: Mode) =>
-    m === "all" ? Object.values(kinds).reduce((a, n) => a + (n ?? 0), 0) : (kinds[m] ?? 0);
+    (Object.entries(kinds) as [ItemKind, number | undefined][])
+      .filter(([k]) => modeOf(k) === m)
+      .reduce((a, [, n]) => a + (n ?? 0), 0);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -729,7 +731,7 @@ export function Sidebar() {
   ];
   const tidying: Entry[] = [
     // Look-alikes are found by image hash: images only.
-    ...(mode === "all" && usesImages ? [{ view: { kind: "similar" } as View, label: "重複の候補", icon: <Copy size={15} /> }] : []),
+    ...(mode === "stock" && usesImages ? [{ view: { kind: "similar" } as View, label: "重複の候補", icon: <Copy size={15} /> }] : []),
     { view: { kind: "trash" }, label: "ゴミ箱", icon: <Trash2 size={15} />, count: counts.trash },
   ];
 

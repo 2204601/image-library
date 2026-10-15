@@ -413,7 +413,7 @@ function ThumbSize({ hidden }: { hidden: boolean }) {
 }
 
 /**
- * The kind filter of "すべて" (`filter.kinds`): a click shows one kind, ⌘-click
+ * The kind filter of the stock (`filter.kinds`): a click shows one kind, ⌘-click
  * adds or drops one. Made from `KINDS`, so a kind added later gets its chip.
  * It stays from view to view, like the modes it replaces.
  */
@@ -424,7 +424,9 @@ function KindFilter() {
   const setKinds = useStore((s) => s.setKinds);
   // The similar view is of images whatever is picked.
   const similar = useStore((s) => s.view.kind === "similar");
-  if (mode !== "all" || used.length < 2 || similar) return null;
+  // The stock's kinds only (the fonts are a mode of their own).
+  const kinds = KINDS.filter((k) => k.kind !== "font" && used.includes(k.kind));
+  if (mode !== "stock" || kinds.length < 2 || similar) return null;
   const chip = (key: string, label: string, on: boolean, title: string, onClick: (e: React.MouseEvent) => void) => (
     <button
       key={key}
@@ -439,7 +441,7 @@ function KindFilter() {
   return (
     <div role="group" aria-label="種類" className="flex h-6 shrink-0 overflow-hidden rounded-md border border-line">
       {chip("all", "すべて", picked.length === 0, "すべての種類", () => setKinds([]))}
-      {KINDS.filter((k) => used.includes(k.kind)).map(({ kind, label }) => {
+      {kinds.map(({ kind, label }) => {
         const on = picked.includes(kind);
         return chip(kind, label, on, `${label}だけ（${comboText("Mod")}+クリックで種類を足す・外す）`, (e) => {
           if (e.metaKey || e.ctrlKey) setKinds(on ? picked.filter((k) => k !== kind) : [...picked, kind]);
