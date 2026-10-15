@@ -42,11 +42,11 @@ export const LAYOUTS: { key: Layout; label: string; icon: React.ReactNode; hint:
 ];
 
 /**
- * Layouts always on the toolbar; the others are in the display menu. "すべて"
- * puts the images' own first when the list can hold images.
+ * Layouts always on the toolbar; the others are in the display menu. The
+ * stock puts the images' own first when the list can hold images.
  */
 const PRIMARY: Record<Mode, Layout[]> = {
-  all: ["grid", "list"],
+  stock: ["grid", "list"],
   font: ["specimen", "grid"],
 };
 const PRIMARY_IMAGES: Layout[] = ["justified", "waterfall"];
@@ -121,7 +121,7 @@ export function LayoutSwitch() {
   const setLayout = useStore((s) => s.setLayout);
   const mode = useStore((s) => s.mode);
   const images = useStore((s) => listKinds(s).includes("image"));
-  const primary = mode === "all" && images ? PRIMARY_IMAGES : PRIMARY[mode];
+  const primary = mode === "stock" && images ? PRIMARY_IMAGES : PRIMARY[mode];
   // In the mode's order ([見本｜グリッド]), then one from the menu while in use.
   const shown = [
     ...primary.map((k) => LAYOUTS.find((l) => l.key === k)!),

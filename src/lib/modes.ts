@@ -1,14 +1,15 @@
-// What the app shows: every kind together ("すべて"), or the fonts on their
-// own (they are compared, not browsed). Images and files are narrowed with
-// the kind filter inside "すべて". See docs/ARCHITECTURE.md (モード).
-import { KINDS, kindLabel, type Filter, type ItemKind, type SmartFolder, type View } from "./api";
+// What the app shows: the stock (images and files, found and used) or the
+// fonts (compared and picked), each with its own folders, tags and smart
+// folders. Images and files are narrowed with the kind filter inside the
+// stock. See docs/MODES.md and docs/ARCHITECTURE.md (モード).
+import { KINDS, kindLabel, modeOf, type Filter, type ItemKind, type Mode, type SmartFolder, type View } from "./api";
 
-export type Mode = "all" | "font";
+export { modeOf, type Mode } from "./api";
 
 /** Modes in menu order; ⌘1 / ⌘2 follow it. */
-export const MODES: Mode[] = ["all", "font"];
+export const MODES: Mode[] = ["stock", "font"];
 
-export const modeLabel = (m: Mode) => (m === "all" ? "すべて" : kindLabel(m));
+export const modeLabel = (m: Mode) => (m === "stock" ? "ストック" : "フォント");
 
 /** What items of these kinds are called in a sentence ("条件に一致する画像はありません"). */
 export const kindsNoun = (kinds: ItemKind[]) => (kinds.length === 1 ? kindLabel(kinds[0]) : "アイテム");
@@ -16,19 +17,22 @@ export const kindsNoun = (kinds: ItemKind[]) => (kinds.length === 1 ? kindLabel(
 /** What these items are called: their kind when they are of one ("画像"), else "アイテム". */
 export const itemsNoun = (items: { kind: ItemKind }[]) => kindsNoun([...new Set(items.map((i) => i.kind))]);
 
-/** The kind the mode is limited to; undefined = every kind. */
-export const modeKind = (m: Mode): ItemKind | undefined => (m === "all" ? undefined : m);
-
 /**
- * Modes to switch between given the kinds a library is used for: the fonts
- * get their own only next to another kind ("すべて" of fonts alone is the same list).
+ * Modes to switch between given the kinds a library is used for: the ones
+ * with kinds in use (a library of fonts alone, or of no fonts, has one).
  */
-export const modesFor = (used: ItemKind[]): Mode[] =>
-  used.length === 1 && used[0] === "font" ? ["font"] : used.includes("font") ? ["all", "font"] : ["all"];
+export const modesFor = (used: ItemKind[]): Mode[] => {
+  const modes = MODES.filter((m) => used.some((k) => modeOf(k) === m));
+  return modes.length ? modes : ["stock"];
+};
 
 /** Kinds a mode lists, of those the library is used for (in `KINDS` order). */
-export const kindsOfMode = (m: Mode, used: ItemKind[]): ItemKind[] =>
-  m === "font" ? ["font"] : KINDS.map((k) => k.kind).filter((k) => used.includes(k));
+export function kindsOfMode(m: Mode, used: ItemKind[]): ItemKind[] {
+  const of = KINDS.map((k) => k.kind).filter((k) => modeOf(k) === m);
+  const usedOf = of.filter((k) => used.includes(k));
+  // Never none: an empty kind list would ask for every kind.
+  return usedOf.length ? usedOf : of;
+}
 
 /** What decides the kinds a list holds (the store's state has it all). */
 export type KindState = {

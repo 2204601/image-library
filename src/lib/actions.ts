@@ -424,10 +424,10 @@ export function moveToLastFolder(ids: string[]) {
   return moveToFolder(ids, last);
 }
 
-/** Creates a folder and starts renaming it in the sidebar. */
+/** Creates a folder of the mode and starts renaming it in the sidebar. */
 export async function createFolder(parentId: string | null, itemIds: string[] = []) {
   try {
-    const id = await api.createFolder("新しいフォルダ", parentId);
+    const id = await api.createFolder("新しいフォルダ", parentId, st().mode);
     if (itemIds.length) await api.moveToFolder(itemIds, id);
     await st().refresh();
     if (!st().sidebarOpen) st().toggleSidebar();
@@ -772,13 +772,13 @@ export async function createSmartFolder() {
   const empty = activeConditions(s) === 0;
   try {
     const rule = s.currentRule();
-    const id = await api.createSmartFolder("新しいスマートフォルダ", rule);
+    const id = await api.createSmartFolder("新しいスマートフォルダ", rule, s.mode);
     // The conditions now live in the folder; start it with a clean slate.
     useStore.setState({ search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER });
     s.setView({ kind: "smart", id });
     if (!st().sidebarOpen) st().toggleSidebar();
     st().setRenamingFolder(id);
-    if (empty) st().startEditSmart({ id, name: "新しいスマートフォルダ", rule, count: 0, color: null });
+    if (empty) st().startEditSmart({ id, name: "新しいスマートフォルダ", rule, count: 0, color: null, mode: s.mode });
   } catch (e) {
     s.toast(String(e), true);
   }
@@ -830,7 +830,7 @@ export async function shiftFolder(id: string, by: -1 | 1, toEnd = false) {
 }
 
 export async function sortFoldersByName(parentId: string | null) {
-  await st().run(() => api.sortFoldersByName(parentId));
+  await st().run(() => api.sortFoldersByName(parentId, st().mode));
 }
 
 // ------------------------------------------------------- tag clipboard

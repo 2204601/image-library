@@ -28,7 +28,7 @@ export interface Grouped {
 /**
  * How fonts are folded into families (the font mode): one row per family,
  * and the styles of the families in `open` listed under their row.
- * Null = every font is a row of its own ("すべて").
+ * Null = every item is a row of its own (the stock).
  */
 export type Families = { open: ReadonlySet<string> } | null;
 

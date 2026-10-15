@@ -132,7 +132,7 @@ export const COMMANDS: Command[] = [
       const kind = transferableKind(s);
       return kind ? `${kindLabel(kind)}をすべて別のライブラリへ…` : "すべてを別のライブラリへ…";
     },
-    // A kind at a time (in "すべて", narrow to the kind first).
+    // A kind at a time (in the stock, narrow to the kind first).
     enabled: (s) => {
       const kind = transferableKind(s);
       return !!kind && (s.counts.kinds[kind] ?? 0) > 0;

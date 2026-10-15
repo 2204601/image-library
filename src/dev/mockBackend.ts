@@ -2,7 +2,7 @@
 // opened in a normal browser (`npm run dev`) instead of inside Tauri.
 // Mirrors the semantics of src-tauri/src/db.rs closely enough for UI work.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
-import type { Folder, Item, ItemQuery, Rule, SimilarLevel, Tag } from "../lib/api";
+import { modeOf, type Folder, type Item, type ItemQuery, type Mode, type Rule, type SimilarLevel, type Tag } from "../lib/api";
 
 type MockItem = Omit<
   Item,
@@ -50,7 +50,7 @@ const inWeight = (i: MockItem, key: string) => {
   return lo <= r[2] && hi >= r[1];
 };
 const folders: Omit<Folder, "count" | "shared">[] = [];
-const tags: { id: number; name: string; color: string | null }[] = [];
+const tags: { id: number; name: string; color: string | null; mode: Mode }[] = [];
 // `${itemId}|${folderId}` -> manual position
 const itemFolders = new Map<string, number>();
 let posSeq = 0;
@@ -61,10 +61,10 @@ const link = (i: string, f: string) => {
   itemFolders.set(`${i}|${f}`, ++posSeq);
 };
 const itemTags = new Set<string>(); // `${itemId}|${tagId}`
-// Work tray: item id -> position.
+// The shelf (the `tray` table): item id -> position.
 const tray = new Map<string, number>();
 let traySeq = 0;
-const smartFolders: { id: string; name: string; rule: Rule; color: string | null }[] = [];
+const smartFolders: { id: string; name: string; rule: Rule; color: string | null; mode: Mode }[] = [];
 const EXTS = ["jpg", "png", "jpg", "webp", "jpg", "heic"];
 let tagSeq = 0;
 let uid = 0;
@@ -168,16 +168,21 @@ function seed() {
       hue: (i * 67) % 360,
     });
   }
-  const animals = { id: id(), parentId: null, name: "動物", color: "orange" };
+  const animals = { id: id(), parentId: null, name: "動物", color: "orange", mode: "stock" as const };
   folders.push(
     animals,
-    { id: id(), parentId: animals.id, name: "ねこ", color: null },
-    { id: id(), parentId: null, name: "風景", color: "green" },
+    { id: id(), parentId: animals.id, name: "ねこ", color: null, mode: "stock" },
+    { id: id(), parentId: null, name: "風景", color: "green", mode: "stock" },
+    { id: id(), parentId: null, name: "和文", color: "purple", mode: "font" },
   );
   items.slice(0, 30).forEach((it) => link(it.id, animals.id));
   items.slice(30, 36).forEach((it) => link(it.id, folders[1].id));
   addTags(items.slice(0, 40).map((i) => i.id), ["参考"]);
   addTags(items.slice(20, 60).map((i) => i.id), ["ブルー", "背景"]);
+  // Fonts have folders and tags of their own (docs/MODES.md); "参考" is both modes'.
+  const fonts = items.filter((i) => i.kind === "font");
+  fonts.filter((i) => i.fontScript === "ja").forEach((it) => link(it.id, folders[3].id));
+  addTags(fonts.slice(0, 3).map((i) => i.id), ["本文", "参考"]);
   // Look-alikes for the similar view: smaller re-saves of a few images.
   for (const [src, n] of [[3, 1], [10, 2], [57, 1]] as const) {
     const orig = items[src];
@@ -323,13 +328,20 @@ const inFolder = (i: string, f: string) => itemFolders.has(`${i}|${f}`);
 const hasTag = (i: string, t: number) => itemTags.has(`${i}|${t}`);
 const live = () => items.filter((i) => i.deletedAt === null);
 
+/** The mode of item `i` (as db.rs `Mode::of`). */
+const modeOfItem = (i: string): Mode => modeOf(items.find((x) => x.id === i)?.kind ?? "image");
+
+/** Each item gets the tag of its own mode, as db.rs `add_tags`. */
 function addTags(ids: string[], names: string[]) {
   for (const raw of names) {
     const name = raw.trim();
     if (!name) continue;
-    let t = tags.find((x) => x.name.toLowerCase() === name.toLowerCase());
-    if (!t) tags.push((t = { id: ++tagSeq, name, color: name === "参考" ? "blue" : null }));
-    ids.forEach((i) => itemTags.add(`${i}|${t!.id}`));
+    for (const i of ids) {
+      const mode = modeOfItem(i);
+      let t = tags.find((x) => x.mode === mode && x.name.toLowerCase() === name.toLowerCase());
+      if (!t) tags.push((t = { id: ++tagSeq, name, color: name === "参考" ? "blue" : null, mode }));
+      itemTags.add(`${i}|${t.id}`);
+    }
   }
 }
 
@@ -408,9 +420,9 @@ function placeFolder(fid: string, parent: string | null, before: string | null):
   return true;
 }
 
-/** Rewrites the order of `parent`'s children (array order = sibling order). */
-function reorderSiblings(parent: string | null, order: (sibs: typeof folders) => typeof folders) {
-  const slots = folders.map((f, i) => (f.parentId === parent ? i : -1)).filter((i) => i >= 0);
+/** Rewrites the order of `parent`'s children of `mode` (array order = sibling order). */
+function reorderSiblings(parent: string | null, mode: Mode, order: (sibs: typeof folders) => typeof folders) {
+  const slots = folders.map((f, i) => (f.parentId === parent && f.mode === mode ? i : -1)).filter((i) => i >= 0);
   const next = order(slots.map((i) => folders[i]));
   slots.forEach((slot, k) => (folders[slot] = next[k]));
 }
@@ -524,8 +536,9 @@ function countBy<T>(xs: T[], key: (x: T) => string): Record<string, number> {
 }
 
 /** Keeps items of `kind` (all when null), like the `kind` argument in db.rs. */
-const ofKind = (kind: string | null | undefined) => (xs: MockItem[]) =>
-  kind ? xs.filter((i) => i.kind === kind) : xs;
+/** Items of `mode` (every item when not given). */
+const ofMode = (mode: Mode | null | undefined) => (xs: MockItem[]) =>
+  mode ? xs.filter((i) => modeOf(i.kind) === mode) : xs;
 
 // The menu bar (src/lib/menuBar.ts): items by resource id, and the menu set
 // as the app menu, for checking its structure in the browser
@@ -605,7 +618,7 @@ function handle(cmd: string, a: any): unknown {
     case "query_items":
       return query(a.query);
     case "get_counts": {
-      const of = ofKind(a.kind);
+      const of = ofMode(a.mode);
       return {
         all: of(live()).length,
         unfiled: of(live()).filter((i) => !folders.some((f) => inFolder(i.id, f.id))).length,
@@ -876,16 +889,17 @@ function handle(cmd: string, a: any): unknown {
       webImport.extensionDir = "/Users/mock/Library/Application Support/com.local.stockroom/chrome-extension";
       return webImport.extensionDir;
     case "list_folders":
-      return folders.map((f) => ({
-        ...f,
-        count: ofKind(a.kind)(live()).filter((i) => inFolder(i.id, f.id)).length,
-        shared: shares.has(f.id),
-      }));
+      return folders
+        .filter((f) => !a.mode || f.mode === a.mode)
+        .map((f) => ({ ...f, count: live().filter((i) => inFolder(i.id, f.id)).length, shared: shares.has(f.id) }));
     case "place_folder":
+      // Not under a folder of the other mode.
+      if (a.parentId && folders.find((f) => f.id === a.parentId)?.mode !== folders.find((f) => f.id === a.id)?.mode)
+        return false;
       return placeFolder(a.id, a.parentId ?? null, a.before ?? null);
     case "shift_folder": {
-      const parent = folders.find((f) => f.id === a.id)?.parentId ?? null;
-      reorderSiblings(parent, (sibs) => {
+      const f = folders.find((x) => x.id === a.id)!;
+      reorderSiblings(f.parentId, f.mode, (sibs) => {
         const from = sibs.findIndex((f) => f.id === a.id);
         const [f] = sibs.splice(from, 1);
         sibs.splice(Math.max(0, Math.min(sibs.length, from + a.by)), 0, f);
@@ -894,12 +908,16 @@ function handle(cmd: string, a: any): unknown {
       return;
     }
     case "sort_folders_by_name":
-      reorderSiblings(a.parentId ?? null, (sibs) => [...sibs].sort((x, y) => x.name.localeCompare(y.name)));
+      reorderSiblings(a.parentId ?? null, folders.find((f) => f.id === a.parentId)?.mode ?? a.mode, (sibs) =>
+        [...sibs].sort((x, y) => x.name.localeCompare(y.name)),
+      );
       return;
     case "list_smart_folders":
-      return smartFolders.map((f) => ({ ...f, count: applyRule(ofKind(a.kind)(live()), f.rule).length }));
+      return smartFolders
+        .filter((f) => !a.mode || f.mode === a.mode)
+        .map((f) => ({ ...f, count: applyRule(ofMode(f.mode)(live()), f.rule).length }));
     case "create_smart_folder": {
-      const f = { id: id(), name: a.name, rule: a.rule, color: null };
+      const f = { id: id(), name: a.name, rule: a.rule, color: null, mode: a.mode as Mode };
       smartFolders.push(f);
       return f.id;
     }
@@ -914,11 +932,13 @@ function handle(cmd: string, a: any): unknown {
       return;
     case "list_exts": {
       const m = new Map<string, number>();
-      ofKind(a.kind)(live()).forEach((i) => m.set(aliases(i.ext), (m.get(aliases(i.ext)) ?? 0) + 1));
+      ofMode(a.mode)(live()).forEach((i) => m.set(aliases(i.ext), (m.get(aliases(i.ext)) ?? 0) + 1));
       return [...m.entries()].sort((x, y) => y[1] - x[1]);
     }
     case "create_folder": {
-      const f = { id: id(), parentId: a.parentId ?? null, name: a.name, color: null };
+      // A subfolder is of its parent's mode.
+      const mode: Mode = folders.find((x) => x.id === a.parentId)?.mode ?? a.mode;
+      const f = { id: id(), parentId: a.parentId ?? null, name: a.name, color: null, mode };
       folders.push(f);
       return f.id;
     }
@@ -930,9 +950,12 @@ function handle(cmd: string, a: any): unknown {
       return;
     case "move_folder":
       return placeFolder(a.id, a.parentId ?? null, null);
-    case "move_to_folder":
-      a.ids.forEach((i: string) => link(i, a.folderId));
+    case "move_to_folder": {
+      // Only the items of the folder's mode go in.
+      const mode = folders.find((f) => f.id === a.folderId)?.mode;
+      a.ids.filter((i: string) => modeOfItem(i) === mode).forEach((i: string) => link(i, a.folderId));
       return;
+    }
     case "reorder_in_folder": {
       const order = [...itemFolders.entries()]
         .filter(([k]) => k.endsWith(`|${a.folderId}`))
@@ -949,8 +972,9 @@ function handle(cmd: string, a: any): unknown {
       return;
     case "list_tags":
       return [...tags]
+        .filter((t) => !a.mode || t.mode === a.mode)
         .sort((x, y) => x.name.localeCompare(y.name))
-        .map((t) => ({ ...t, count: ofKind(a.kind)(live()).filter((i) => hasTag(i.id, t.id)).length })) satisfies Tag[];
+        .map((t) => ({ ...t, count: live().filter((i) => hasTag(i.id, t.id)).length })) satisfies Tag[];
     case "add_tags":
       addTags(a.ids, a.names);
       return;
@@ -968,7 +992,9 @@ function handle(cmd: string, a: any): unknown {
       return;
     case "rename_tag": {
       const t = tags.find((x) => x.id === a.id)!;
-      const other = tags.find((x) => x.id !== a.id && x.name.toLowerCase() === a.name.trim().toLowerCase());
+      const other = tags.find(
+        (x) => x.id !== a.id && x.mode === t.mode && x.name.toLowerCase() === a.name.trim().toLowerCase(),
+      );
       if (other) {
         [...itemTags].filter((k) => k.endsWith(`|${t.id}`)).forEach((k) => {
           itemTags.delete(k);

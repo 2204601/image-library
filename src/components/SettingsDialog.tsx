@@ -35,7 +35,7 @@ import { ShareSettings } from "./ShareDialog";
 export const SETTINGS_KEY = isMac ? "⌘," : "Ctrl+,";
 
 const KIND_ICON: Record<Mode | ItemKind, React.ReactNode> = {
-  all: <Shapes size={14} />,
+  stock: <Shapes size={14} />,
   image: <ImageIcon size={14} />,
   font: <Type size={14} />,
   file: <FileText size={14} />,

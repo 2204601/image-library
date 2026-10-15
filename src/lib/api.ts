@@ -37,7 +37,7 @@ export interface AppSettings {
   startup: "last" | "choose";
   autoUpdate: boolean;
   /** Sidebar entries hidden per mode, for libraries that follow the app's sidebar. */
-  sidebarHidden: Partial<Record<"all" | "font", string[]>>;
+  sidebarHidden: Partial<Record<Mode, string[]>>;
 }
 
 /**
@@ -45,6 +45,15 @@ export interface AppSettings {
  * files (PDF, office documents) are 0 × 0 too, with a thumbnail from the OS or the file.
  */
 export type ItemKind = "image" | "font" | "file";
+
+/**
+ * What the app shows (docs/MODES.md): the stock (images and files) or the
+ * fonts. Folders, tags and smart folders belong to one (src-tauri/src/db.rs `Mode`).
+ */
+export type Mode = "stock" | "font";
+
+/** The mode an item of `kind` belongs to. */
+export const modeOf = (kind: ItemKind): Mode => (kind === "font" ? "font" : "stock");
 
 /** Kinds in the order the sidebar lists them. */
 export const KINDS: { kind: ItemKind; label: string }[] = [
@@ -277,6 +286,7 @@ export interface SmartFolder {
   rule: Rule;
   count: number;
   color: string | null;
+  mode: Mode;
 }
 
 /** How alike images must be to count as duplicates: strict, standard, loose. */
@@ -305,7 +315,7 @@ export interface Counts {
   trash: number;
   favorites: number;
   pinned: number;
-  /** Items on the work tray (not in the trash). */
+  /** Items on the shelf (not in the trash). */
   tray: number;
   /** Items not in the trash, by kind, whatever kind was asked for (the mode switch). */
   kinds: Partial<Record<ItemKind, number>>;
@@ -326,13 +336,16 @@ export interface Folder {
   color: string | null;
   /** Shared on the local network (src-tauri/src/share.rs). */
   shared: boolean;
+  mode: Mode;
 }
 
+/** A tag of one mode; the other mode may have one of the same name. */
 export interface Tag {
   id: number;
   name: string;
   count: number;
   color: string | null;
+  mode: Mode;
 }
 
 export interface SelectionInfo {
@@ -446,7 +459,8 @@ export const api = {
 
   queryItems: (query: ItemQuery) => invoke<Item[]>("query_items", { query }),
   /** Totals for the sidebar; with `kind`, of that kind only (`kinds` always has every kind). */
-  getCounts: (kind?: ItemKind) => invoke<Counts>("get_counts", { kind: kind ?? null }),
+  /** Counts of the items of `mode` (`kinds` is always of every kind). */
+  getCounts: (mode?: Mode) => invoke<Counts>("get_counts", { mode: mode ?? null }),
   selectionInfo: (ids: string[]) => invoke<SelectionInfo>("selection_info", { ids }),
   setNote: (id: string, note: string) => invoke<void>("set_note", { id, note }),
   renameItem: (id: string, name: string) => invoke<void>("rename_item", { id, name }),
@@ -525,15 +539,19 @@ export const api = {
   resolveDuplicates: (groups: { keep: string; remove: string[] }[]) =>
     invoke<DuplicateEffect[]>("resolve_duplicates", { groups }),
 
-  /** Folder counts are of `kind` when given (the mode). */
-  listFolders: (kind?: ItemKind) => invoke<Folder[]>("list_folders", { kind: kind ?? null }),
-  createFolder: (name: string, parentId: string | null) =>
-    invoke<string>("create_folder", { name, parentId }),
+  /** The folders of `mode` (every folder when not given). */
+  listFolders: (mode?: Mode) => invoke<Folder[]>("list_folders", { mode: mode ?? null }),
+  /** A subfolder is of its parent's mode, whatever `mode` says. */
+  createFolder: (name: string, parentId: string | null, mode: Mode) =>
+    invoke<string>("create_folder", { name, parentId, mode }),
   renameFolder: (id: string, name: string) => invoke<void>("rename_folder", { id, name }),
   deleteFolder: (id: string) => invoke<void>("delete_folder", { id }),
   moveFolder: (id: string, parentId: string | null) =>
     invoke<boolean>("move_folder", { id, parentId }),
-  /** An item is in one folder at most: this takes it out of the one it was in. */
+  /**
+   * An item is in one folder at most: this takes it out of the one it was in.
+   * Items of the other mode than the folder's are left alone.
+   */
   moveToFolder: (ids: string[], folderId: string) => invoke<void>("move_to_folder", { ids, folderId }),
   reorderInFolder: (folderId: string, ids: string[], before: string | null) =>
     invoke<void>("reorder_in_folder", { folderId, ids, before }),
@@ -541,17 +559,21 @@ export const api = {
     invoke<boolean>("place_folder", { id, parentId, before }),
   /** -1 / +1 = up / down one; very large values move to the top / bottom. */
   shiftFolder: (id: string, by: number) => invoke<void>("shift_folder", { id, by }),
-  sortFoldersByName: (parentId: string | null) => invoke<void>("sort_folders_by_name", { parentId }),
-  listSmartFolders: (kind?: ItemKind) => invoke<SmartFolder[]>("list_smart_folders", { kind: kind ?? null }),
-  createSmartFolder: (name: string, rule: Rule) => invoke<string>("create_smart_folder", { name, rule }),
+  /** `parentId` null: the top level of `mode`. */
+  sortFoldersByName: (parentId: string | null, mode: Mode) =>
+    invoke<void>("sort_folders_by_name", { parentId, mode }),
+  listSmartFolders: (mode?: Mode) => invoke<SmartFolder[]>("list_smart_folders", { mode: mode ?? null }),
+  createSmartFolder: (name: string, rule: Rule, mode: Mode) =>
+    invoke<string>("create_smart_folder", { name, rule, mode }),
   updateSmartFolder: (id: string, patch: { name?: string; rule?: Rule }) =>
     invoke<void>("update_smart_folder", { id, name: patch.name ?? null, rule: patch.rule ?? null }),
   deleteSmartFolder: (id: string) => invoke<void>("delete_smart_folder", { id }),
-  listExts: (kind?: ItemKind) => invoke<[string, number][]>("list_exts", { kind: kind ?? null }),
+  listExts: (mode?: Mode) => invoke<[string, number][]>("list_exts", { mode: mode ?? null }),
   removeFromFolder: (ids: string[], folderId: string) =>
     invoke<void>("remove_from_folder", { ids, folderId }),
 
-  listTags: (kind?: ItemKind) => invoke<Tag[]>("list_tags", { kind: kind ?? null }),
+  listTags: (mode?: Mode) => invoke<Tag[]>("list_tags", { mode: mode ?? null }),
+  /** Each item gets the tag of its own mode (made where missing). */
   addTags: (ids: string[], names: string[]) => invoke<void>("add_tags", { ids, names }),
   removeTag: (ids: string[], tagId: number) => invoke<void>("remove_tag", { ids, tagId }),
   renameTag: (id: number, name: string) => invoke<void>("rename_tag", { id, name }),
