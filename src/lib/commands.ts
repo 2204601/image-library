@@ -50,6 +50,7 @@ import { api, kindLabel, type Item, type ItemKind } from "./api";
 import { checkForUpdate } from "./update";
 import { currentFolderId, listKinds, MODES, shownModes, useStore } from "../store";
 import { modeLabel } from "./modes";
+import { rowIds } from "./grouping";
 import { useShortcutHelp } from "../components/ShortcutHelp";
 
 type S = ReturnType<typeof useStore.getState>;
@@ -88,6 +89,16 @@ const allHave = (s: S, f: (i: Item) => boolean) => {
   return xs.length > 0 && xs.every(f);
 };
 const lastFolder = (s: S) => s.folders.find((f) => f.id === s.recentFolders[0]);
+
+/**
+ * ⌘+ / ⌘-: the size the slider sets. The font mode's is on the specimen text
+ * row: the text in the specimen layout, the tiles in the grid.
+ */
+function zoom(s: S, dir: 1 | -1) {
+  if (s.mode === "font" && s.layout === "specimen") s.setSpecimenSize(s.specimenSize + 8 * dir);
+  else if (s.mode === "font") s.setTileSize(s.tileSize + 20 * dir);
+  else s.setThumbSize(Math.min(360, Math.max(80, s.thumbSize + 20 * dir)));
+}
 
 export const COMMANDS: Command[] = [
   // ---------------------------------------------------------------- app
@@ -159,18 +170,16 @@ export const COMMANDS: Command[] = [
   {
     id: "view.zoomIn",
     title: "拡大",
-    label: (s) => (s.layout === "specimen" ? "文字を大きく" : "拡大"),
+    label: (s) => (s.mode === "font" && s.layout === "specimen" ? "文字を大きく" : "拡大"),
     keys: ["Mod+="],
-    run: (s) =>
-      s.layout === "specimen" ? s.setSpecimenSize(s.specimenSize + 8) : s.setThumbSize(Math.min(360, s.thumbSize + 20)),
+    run: (s) => zoom(s, 1),
   },
   {
     id: "view.zoomOut",
     title: "縮小",
-    label: (s) => (s.layout === "specimen" ? "文字を小さく" : "縮小"),
+    label: (s) => (s.mode === "font" && s.layout === "specimen" ? "文字を小さく" : "縮小"),
     keys: ["Mod+-"],
-    run: (s) =>
-      s.layout === "specimen" ? s.setSpecimenSize(s.specimenSize - 8) : s.setThumbSize(Math.max(80, s.thumbSize - 20)),
+    run: (s) => zoom(s, -1),
   },
   {
     id: "view.subfolders",
@@ -192,7 +201,7 @@ export const COMMANDS: Command[] = [
     id: "edit.selectAll",
     title: "すべてを選択",
     keys: ["Mod+A"],
-    run: (s) => s.setSelection(s.items.map((i) => i.id)),
+    run: (s) => s.setSelection(rowIds(s.items)),
   },
   { id: "edit.deselect", title: "選択を解除", keys: ["Esc"], enabled: any, run: (s) => s.setSelection([]) },
   {

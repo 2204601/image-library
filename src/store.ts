@@ -32,8 +32,9 @@ import {
   type LibrarySettings,
   type SidebarHidden,
 } from "./lib/librarySettings";
-import { groupItems, similarSections, type GroupBy, type Section } from "./lib/grouping";
+import { groupItems, rowIds, similarSections, type GroupBy, type Section } from "./lib/grouping";
 import { warn } from "./lib/log";
+import { MAX_OWN_PATTERNS } from "./features/fonts/patterns";
 import { notifyIfAway } from "./lib/osNotify";
 
 /**
@@ -69,13 +70,15 @@ export type Layout = "justified" | "grid" | "waterfall" | "list" | "specimen";
 export const MODE_LAYOUTS: Record<Mode, Layout[]> = {
   // Images keep their shape; fonts and files take a fixed one (layouts.ts `aspect`).
   all: ["justified", "waterfall", "grid", "list"],
-  font: ["specimen", "list", "grid"],
+  // No list for fonts: the specimen with small text does its job (docs/FONT_UI.md).
+  font: ["specimen", "grid"],
 };
 
 /** Groupings of each mode. */
 export const MODE_GROUPS: Record<Mode, GroupBy[]> = {
   all: ["none", "kind", "rating", "tag", "folder"],
-  font: ["none", "rating", "tag", "folder", "familyOne", "family"],
+  // Fonts are always one row per family (▸ opens its styles), so no family grouping.
+  font: ["none", "category", "script", "rating", "tag", "folder"],
 };
 
 /** What the grid shows under each thumbnail. */
@@ -176,6 +179,10 @@ interface State {
   /** Font specimen layout: the text every font shows ("" = each font's own sample) and its size in px. */
   specimenText: string;
   specimenSize: number;
+  /** Font grid: the size of a tile (px), set on the specimen text row in place of the thumbnail size. */
+  tileSize: number;
+  /** Font mode: families whose styles are listed under their row (▸), for the session. */
+  openFamilies: ReadonlySet<string>;
   /** Fonts lacking most of `specimenText` show their own sample instead (an English font with Japanese text). */
   specimenFallback: boolean;
   inspectorOpen: boolean;
@@ -292,6 +299,12 @@ interface State {
   setThumbSize: (n: number) => void;
   setSpecimenText: (text: string) => void;
   setSpecimenSize: (px: number) => void;
+  setTileSize: (px: number) => void;
+  /** Saves the typed specimen text as the library's own pattern / forgets one. */
+  saveSpecimenPattern: (text: string) => void;
+  removeSpecimenPattern: (text: string) => void;
+  /** Opens or closes a family's styles under its row (font mode, specimen layout). */
+  toggleFamily: (family: string) => void;
   setSpecimenFallback: (on: boolean) => void;
   toggleInspector: () => void;
   toggleSidebar: () => void;
@@ -337,6 +350,7 @@ interface State {
    * more than once, and a range runs between the places clicked.
    */
   select: (id: string, mode: "only" | "toggle" | "range", at?: number) => void;
+  /** Selects exactly `ids` (a family row's fonts are expanded by the caller, see `rowIds`). */
   setSelection: (ids: string[]) => void;
   openViewer: (index: number | null) => void;
 
@@ -493,24 +507,43 @@ function indexOf(items: Item[], id: string, at: number | null | undefined): numb
   return at != null && items[at]?.id === id ? at : items.findIndex((i) => i.id === id);
 }
 
-/** `ids` plus, for each family row among `items` (family view), all its fonts. */
-function withFamilies(ids: Iterable<string>, items: Item[]): Set<string> {
-  const out = new Set(ids);
-  if (!items.some((i) => i.familyIds)) return out;
-  for (const i of items) if (i.familyIds && out.has(i.id)) i.familyIds.forEach((m) => out.add(m));
-  return out;
+/** Ids the row at `at` stands for (a family row: all its fonts); `id` when it isn't there. */
+function idsAt(items: Item[], id: string, at: number): string[] {
+  const row = items[at];
+  return row?.id === id ? rowIds([row]) : [id];
 }
 
-/** The display list and its sections for the current view / grouping. */
+/** Smallest and largest font grid tile, and the default. */
+export const TILE_SIZE = { min: 120, max: 320, initial: 180 } as const;
+
+const NO_FAMILIES: ReadonlySet<string> = new Set();
+
+/**
+ * The display list and its sections for the current view / grouping. The
+ * font mode lists one row per family; only the specimen layout opens them.
+ */
 function arrange(s: {
+  mode: Mode;
+  layout: Layout;
   view: View;
   groupBy: GroupBy;
+  openFamilies: ReadonlySet<string>;
   rawItems: Item[];
   tags: Tag[];
   folders: Folder[];
 }): { items: Item[]; sections: Section[] } {
   if (s.view.kind === "similar") return { items: s.rawItems, sections: similarSections(s.rawItems) };
-  return groupItems(s.rawItems, s.groupBy, s.tags, s.folders);
+  const families = s.mode === "font" ? { open: s.layout === "specimen" ? s.openFamilies : NO_FAMILIES } : null;
+  return groupItems(s.rawItems, s.groupBy, s.tags, s.folders, families);
+}
+
+/** Re-arranges the list after a display change, keeping the viewer on the item it showed. */
+function rearrange(s: State, patch: Partial<State>): Partial<State> {
+  const next = { ...s, ...patch };
+  const { items, sections } = arrange(next);
+  const shown = s.viewer !== null ? s.items[s.viewer]?.id : undefined;
+  const viewer = shown ? Math.max(0, items.findIndex((i) => i.id === shown)) : s.viewer;
+  return { ...patch, items, sections, viewer };
 }
 
 // The mode comes from the library being opened (setLibrary).
@@ -607,6 +640,8 @@ export const useStore = create<State>((set, get) => ({
   layout: loadLayout(initialMode),
   specimenText: load("specimenText") ?? "",
   specimenSize: loadNumber("specimenSize", 40),
+  tileSize: Math.min(TILE_SIZE.max, Math.max(TILE_SIZE.min, loadNumber("fontTileSize", TILE_SIZE.initial))),
+  openFamilies: NO_FAMILIES,
   specimenFallback: load("specimenFallback") !== "false",
   showInfo: { name: true, dims: true, rating: true, meta: false, ...loadJson("showInfo") },
   groupBy: loadGroupBy(initialMode),
@@ -895,6 +930,27 @@ export const useStore = create<State>((set, get) => ({
     set({ specimenSize });
     persist("specimenSize", String(specimenSize));
   },
+  setTileSize: (px) => {
+    const tileSize = Math.min(TILE_SIZE.max, Math.max(TILE_SIZE.min, Math.round(px)));
+    set({ tileSize });
+    persist("fontTileSize", String(tileSize));
+  },
+  saveSpecimenPattern: (text) => {
+    if (!text.trim() || !get().library) return;
+    const patterns = [text, ...get().librarySettings.patterns.filter((t) => t !== text)].slice(0, MAX_OWN_PATTERNS);
+    set({ librarySettings: { ...get().librarySettings, patterns } });
+    saveLibrarySetting("specimenPatterns", patterns);
+  },
+  removeSpecimenPattern: (text) => {
+    const patterns = get().librarySettings.patterns.filter((t) => t !== text);
+    set({ librarySettings: { ...get().librarySettings, patterns } });
+    saveLibrarySetting("specimenPatterns", patterns.length ? patterns : null);
+  },
+  toggleFamily: (family) => {
+    const open = new Set(get().openFamilies);
+    if (!open.delete(family)) open.add(family);
+    set(rearrange(get(), { openFamilies: open }));
+  },
   setThumbSize: (thumbSize) => {
     set({ thumbSize });
     persist("thumbSize", String(thumbSize));
@@ -965,8 +1021,9 @@ export const useStore = create<State>((set, get) => ({
   },
   stopEditSmart: () => set({ editingSmart: null }),
   setLayout: (layout) => {
-    set({ layout });
     persist(`layout:${get().mode}`, layout);
+    // Families open only in the specimen layout.
+    set(rearrange(get(), { layout }));
   },
   setShowInfo: (patch) => {
     const showInfo = { ...get().showInfo, ...patch };
@@ -975,12 +1032,8 @@ export const useStore = create<State>((set, get) => ({
   },
   setGroupBy: (groupBy) => {
     persist(`groupBy:${get().mode}`, groupBy);
-    const s = get();
-    const { items, sections } = arrange({ ...s, groupBy });
-    // The viewer follows the image it was showing to its new place.
-    const shown = s.viewer !== null ? s.items[s.viewer]?.id : undefined;
-    const viewer = shown ? Math.max(0, items.findIndex((i) => i.id === shown)) : s.viewer;
-    set({ groupBy, items, sections, viewer });
+    // The viewer follows the item it was showing to its new place.
+    set(rearrange(get(), { groupBy }));
   },
   toggleViewerInfo: () => {
     const viewerInfo = !get().viewerInfo;
@@ -1068,8 +1121,8 @@ export const useStore = create<State>((set, get) => ({
       ]);
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
       const smartFolders = allSmart.filter((sf) => smartFolderInMode(sf, mode));
-      const { items, sections } = arrange({ view, groupBy: get().groupBy, rawItems, tags, folders });
-      const present = new Set(items.flatMap((i) => i.familyIds ?? [i.id]));
+      const { items, sections } = arrange({ ...get(), view, rawItems, tags, folders });
+      const present = new Set(rowIds(items));
       const selected = new Set([...get().selected].filter((id) => present.has(id)));
       // Drop filters / views pointing at things that no longer exist.
       const tagIds = new Set(tags.map((t) => t.id));
@@ -1129,24 +1182,34 @@ export const useStore = create<State>((set, get) => ({
     const a = mode === "range" && anchor !== null ? indexOf(items, anchor, anchorAt) : -1;
     if (mode === "range" && a >= 0 && b >= 0) {
       const [lo, hi] = a < b ? [a, b] : [b, a];
-      set({ selected: withFamilies(items.slice(lo, hi + 1).map((i) => i.id), items), focus: id });
+      set({ selected: new Set(rowIds(items.slice(lo, hi + 1))), focus: id });
       return;
     }
     anchorAt = b >= 0 ? b : null;
+    // A family row stands for all its fonts; an opened style row for itself.
+    const own = idsAt(items, id, b);
     if (mode === "toggle") {
       const next = new Set(selected);
-      const own = withFamilies([id], items);
       if (next.has(id)) own.forEach((m) => next.delete(m));
       else own.forEach((m) => next.add(m));
       set({ selected: next, anchor: id, focus: id });
     } else {
-      set({ selected: withFamilies([id], items), anchor: id, focus: id });
+      set({ selected: new Set(own), anchor: id, focus: id });
     }
   },
   setSelection: (ids) => {
-    const last = ids.at(-1) ?? null;
+    // The keyboard goes on from the last of them that is a row of the list
+    // (a closed family's other fonts aren't).
+    const rows = new Set(get().items.map((i) => i.id));
+    let last = ids.at(-1) ?? null;
+    for (let n = ids.length - 1; n >= 0; n--) {
+      if (rows.has(ids[n])) {
+        last = ids[n];
+        break;
+      }
+    }
     anchorAt = null;
-    set({ selected: withFamilies(ids, get().items), anchor: last, focus: last });
+    set({ selected: new Set(ids), anchor: last, focus: last });
   },
   openViewer: (viewer) => set({ viewer }),
 

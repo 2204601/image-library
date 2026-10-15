@@ -1,11 +1,9 @@
 // Toolbar controls for how the list looks, each on its own: the layout
-// (one click), grouping into sections, and what to show per thumbnail.
+// (one click), grouping into sections (one click), and what to show per thumbnail.
 import {
   ALargeSmall,
   Check,
-  ChevronDown,
   Columns3,
-  Layers,
   LayoutGrid,
   LayoutList,
   Rows3,
@@ -22,11 +20,11 @@ import { Slider } from "./Slider";
 export const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
   { key: "none", label: "なし", hint: "区切らずに並べる" },
   { key: "kind", label: "種類", hint: "画像・フォント・ファイルに分ける" },
+  { key: "category", label: "書体", hint: "明朝・ゴシック・丸ゴシック…に分ける" },
+  { key: "script", label: "言語", hint: "日本語・欧文・中国語・韓国語に分ける" },
   { key: "rating", label: "評価", hint: "★5 から未評価まで" },
   { key: "tag", label: "タグ", hint: "複数のタグがあるものは各タグに出る" },
   { key: "folder", label: "フォルダ", hint: "「すべて」やサブフォルダ表示で便利" },
-  { key: "familyOne", label: "ファミリー（1件にまとめる）", hint: "太さ違いを 1 行に。Regular を代表に出し、操作は全部に効く" },
-  { key: "family", label: "ファミリー別に並べる", hint: "同じフォントの太さ違いを見出しでまとめる（細い順）" },
 ];
 
 /** Every layout; each mode offers its own subset (MODE_LAYOUTS). */
@@ -49,7 +47,7 @@ export const LAYOUTS: { key: Layout; label: string; icon: React.ReactNode; hint:
  */
 const PRIMARY: Record<Mode, Layout[]> = {
   all: ["grid", "list"],
-  font: ["specimen", "list"],
+  font: ["specimen", "grid"],
 };
 const PRIMARY_IMAGES: Layout[] = ["justified", "waterfall"];
 
@@ -124,7 +122,11 @@ export function LayoutSwitch() {
   const mode = useStore((s) => s.mode);
   const images = useStore((s) => listKinds(s).includes("image"));
   const primary = mode === "all" && images ? PRIMARY_IMAGES : PRIMARY[mode];
-  const shown = LAYOUTS.filter((l) => primary.includes(l.key) || l.key === layout);
+  // In the mode's order ([見本｜グリッド]), then one from the menu while in use.
+  const shown = [
+    ...primary.map((k) => LAYOUTS.find((l) => l.key === k)!),
+    ...LAYOUTS.filter((l) => l.key === layout && !primary.includes(l.key)),
+  ];
   return (
     <div className="flex h-7 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
       {shown.map((l, i) => (
@@ -145,49 +147,39 @@ export function LayoutSwitch() {
   );
 }
 
-/** Splitting the list into sections. */
+/**
+ * Splitting the list into sections: every choice of the mode side by side,
+ * one click each, so nothing on the row moves when it changes (docs/UI.md).
+ */
 export function GroupMenu() {
   const groupBy = useStore((s) => s.groupBy);
   const setGroupBy = useStore((s) => s.setGroupBy);
   const isSimilar = useStore((s) => s.view.kind === "similar");
   const mode = useStore((s) => s.mode);
   const groups = GROUPS.filter((g) => MODE_GROUPS[mode].includes(g.key));
-  const current = GROUPS.find((g) => g.key === groupBy)!;
-  const on = groupBy !== "none" && !isSimilar;
   return (
-    <Dropdown
-      title={isSimilar ? "グループ分け（重複の候補では使えません）" : `グループ分け：${current.label}`}
-      active={on}
-      width="w-64"
-      button={
-        <>
-          <Layers size={15} />
-          <span>{on ? current.label : "グループ"}</span>
-          <ChevronDown size={13} className="text-dim" />
-        </>
-      }
-    >
-      <div className={heading}>
-        グループ分け{isSimilar && <span className="ml-1 font-normal">（重複の候補では無効）</span>}
+    <div className="flex h-7 shrink-0 items-center gap-1.5">
+      <span className={`text-dim ${isSimilar ? "opacity-40" : ""}`}>グループ</span>
+      <div role="group" aria-label="グループ分け" className="flex h-full items-stretch overflow-hidden rounded-md border border-line">
+        {groups.map((g, i) => {
+          const on = groupBy === g.key && !isSimilar;
+          return (
+            <button
+              key={g.key}
+              disabled={isSimilar}
+              aria-pressed={on}
+              title={isSimilar ? "グループ分け（重複の候補では使えません）" : `${g.label}：${g.hint}`}
+              onClick={() => setGroupBy(g.key)}
+              className={`px-2 whitespace-nowrap disabled:opacity-40 ${i > 0 ? "border-l border-line" : ""} ${
+                on ? "bg-accent font-medium text-white" : "text-dim enabled:hover:bg-white/5 enabled:hover:text-fg"
+              }`}
+            >
+              {g.label}
+            </button>
+          );
+        })}
       </div>
-      {groups.map((g) => (
-        <button
-          key={g.key}
-          data-close
-          disabled={isSimilar}
-          onClick={() => setGroupBy(g.key)}
-          className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left enabled:hover:bg-white/8 disabled:opacity-40 ${
-            groupBy === g.key ? "text-fg" : "text-dim"
-          }`}
-        >
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span>{g.label}</span>
-            {g.key !== "none" && <span className="text-[11px] text-dim">{g.hint}</span>}
-          </span>
-          {groupBy === g.key && <Check size={13} className="shrink-0 text-accent" />}
-        </button>
-      ))}
-    </Dropdown>
+    </div>
   );
 }
 
@@ -197,13 +189,11 @@ export function DisplayMenu() {
   const setShowInfo = useStore((s) => s.setShowInfo);
   const thumbSize = useStore((s) => s.thumbSize);
   const setThumbSize = useStore((s) => s.setThumbSize);
-  const specimenSize = useStore((s) => s.specimenSize);
-  const setSpecimenSize = useStore((s) => s.setSpecimenSize);
   const layout = useStore((s) => s.layout);
   const mode = useStore((s) => s.mode);
   const kinds = useStore(useShallow(listKinds));
-  // The specimen layout sizes its sample text instead of thumbnails.
-  const specimen = layout === "specimen";
+  // The font mode sizes its text and tiles on the specimen text row.
+  const sized = mode !== "font";
   const setLayout = useStore((s) => s.setLayout);
   return (
     <Dropdown title="表示（レイアウト・サムネイルの大きさ・表示する情報）" width="w-64" button={<SlidersHorizontal size={15} />}>
@@ -225,20 +215,24 @@ export function DisplayMenu() {
           {layout === l.key && <Check size={13} className="shrink-0 text-accent" />}
         </button>
       ))}
-      <div className="mx-1.5 my-1 border-t border-line" />
-      <div className={heading}>{specimen ? "見本の文字の大きさ" : "サムネイルの大きさ"}</div>
-      <label className="flex items-center gap-2 px-2 py-1.5" title="⌘+ / ⌘-">
-        <Slider
-          min={specimen ? 12 : 80}
-          max={specimen ? 160 : 360}
-          step={specimen ? 2 : 10}
-          value={specimen ? specimenSize : thumbSize}
-          disabled={layout === "list"}
-          onChange={(e) => (specimen ? setSpecimenSize : setThumbSize)(Number(e.target.value))}
-          className="min-w-0 flex-1 disabled:opacity-40"
-        />
-        <span className="w-10 text-right text-dim tabular-nums">{specimen ? specimenSize : thumbSize}</span>
-      </label>
+      {sized && (
+        <>
+          <div className="mx-1.5 my-1 border-t border-line" />
+          <div className={heading}>サムネイルの大きさ</div>
+          <label className="flex items-center gap-2 px-2 py-1.5" title="⌘+ / ⌘-">
+            <Slider
+              min={80}
+              max={360}
+              step={10}
+              value={thumbSize}
+              disabled={layout === "list"}
+              onChange={(e) => setThumbSize(Number(e.target.value))}
+              className="min-w-0 flex-1 disabled:opacity-40"
+            />
+            <span className="w-10 text-right text-dim tabular-nums">{thumbSize}</span>
+          </label>
+        </>
+      )}
       <div className="mx-1.5 my-1 border-t border-line" />
       <div className={heading}>サムネイルの下に表示</div>
       {INFO.filter((i) => !i.only || kinds.includes(i.only)).map((i) => (

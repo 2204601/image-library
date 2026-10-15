@@ -298,7 +298,8 @@ export function Toolbar() {
           <InspectorToggle className="flex @max-xl:hidden" />
         </div>
       </div>
-      {layout === "specimen" && <SpecimenControls />}
+      {/* The font mode's text row stays whatever the layout (docs/UI.md). */}
+      {mode === "font" && <SpecimenControls />}
       <div className="flex min-h-6 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
         {smart && (
           <div className="flex min-w-0 items-center gap-1.5">
@@ -411,7 +412,8 @@ export function Toolbar() {
           <Divider />
           <LayoutSwitch />
           <DisplayMenu />
-          <ThumbSize hidden={layout === "specimen" || layout === "list"} />
+          {/* The font mode's sizes are on the specimen text row. */}
+          {mode !== "font" && <ThumbSize hidden={layout === "list"} />}
         </div>
       </div>
       {(filterOpen || editingSmart) && <FilterBar />}

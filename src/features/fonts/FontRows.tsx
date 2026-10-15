@@ -1,7 +1,7 @@
-// Rows of the list for fonts: the cells of the shared list layout, and the
-// specimen layout's row. Both draw the sample in the font itself, loaded only
-// while the row is on screen (see loader.ts).
-import { Heart, Layers, Pin } from "lucide-react";
+// Rows of the list for fonts: the cells of the shared list layout ("すべて"),
+// the specimen layout's row and the font grid's tile. All draw the sample in
+// the font itself, loaded only while the row is on screen (see loader.ts).
+import { ChevronRight, Heart, Layers, Pin } from "lucide-react";
 import { memo, useEffect, useState } from "react";
 // Grid supplies the cell plumbing and uses these rows: the import cycle is
 // fine because everything is used at render time, not at load.
@@ -41,7 +41,35 @@ function useFontRow(id: string) {
   return { family, preview, failed, style };
 }
 
-/** "44 スタイル" on a family row (family view), nothing on a single font. */
+/**
+ * The text a font shows: the typed specimen text, else (or when the font
+ * lacks most of it and the fallback is on) its own sample. `has` marks the
+ * characters it lacks; null while not known or not needed.
+ */
+function useSampleText(id: string, own: string | undefined) {
+  const text = useStore((s) => s.specimenText);
+  const fallback = useStore((s) => s.specimenFallback);
+  const [has, setHas] = useState<Set<number> | null>(null);
+  // The characters are only needed to check typed text.
+  const typed = text.trim() !== "";
+  useEffect(() => {
+    if (!typed) return;
+    let live = true;
+    setHas(null);
+    fontChars(id)
+      .then((c) => live && setHas(c))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [id, typed]);
+  // Mostly red text in a system font says little about the font: its own sample instead.
+  const swapped = typed && fallback && own !== undefined && mostlyMissing(text, has);
+  const typedShown = typed && !swapped;
+  return { text: typedShown ? text : (own ?? ""), has: typedShown ? has : null, swapped };
+}
+
+/** "44 スタイル" on a family row, nothing on a single font. */
 function FamilyCount({ item }: { item: Item }) {
   if (!item.familyIds || item.familyIds.length < 2) return null;
   return (
@@ -79,43 +107,46 @@ export function FontListCells({ item }: { item: Item }) {
   );
 }
 
+/** ▸ / ▾ of a family row; the same room is kept on other rows so the names line up. */
+function FamilyToggle({ item }: { item: Item }) {
+  const open = useStore((s) => !!item.fontFamily && s.openFamilies.has(item.fontFamily));
+  if (!item.familyIds || item.familyIds.length < 2 || !item.fontFamily)
+    return <span className="w-4 shrink-0" aria-hidden />;
+  const family = item.fontFamily;
+  return (
+    <button
+      title={open ? "太さ違いを閉じる" : `太さ違いを開く（${item.familyIds.length} スタイル）`}
+      aria-expanded={open}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={() => useStore.getState().toggleFamily(family)}
+      className="flex h-4 w-4 shrink-0 items-center justify-center self-center rounded text-dim hover:bg-white/10 hover:text-fg"
+    >
+      <ChevronRight size={13} className={`transition-transform duration-150 ${open ? "rotate-90" : ""}`} />
+    </button>
+  );
+}
+
 /**
- * Specimen layout: a font as a row with its name and a sample line at the
- * chosen size, in the text typed above the list (or the font's own sample).
- * Characters the font lacks are marked; a font lacking most of them shows its
- * own sample instead (unless turned off in the pattern menu).
+ * Specimen layout: a font family as a row with its name and a sample line at
+ * the chosen size, in the text typed above the list (or the font's own
+ * sample). Characters the font lacks are marked; a font lacking most of them
+ * shows its own sample instead (unless turned off in the pattern menu).
+ * A family's opened styles (`familyMember`) follow it, indented.
  */
 export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
   const { item, index, selected, focused, dimmed, width, height, reorderable, insert, flags } = props;
-  const text = useStore((s) => s.specimenText);
   const size = useStore((s) => s.specimenSize);
-  const fallback = useStore((s) => s.specimenFallback);
   const { family, preview, failed, style } = useFontRow(item.id);
-  const [has, setHas] = useState<Set<number> | null>(null);
-
-  // The characters are only needed to check typed text.
-  const typed = text.trim() !== "";
-  useEffect(() => {
-    if (!typed) return;
-    let live = true;
-    setHas(null);
-    fontChars(item.id)
-      .then((c) => live && setHas(c))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, [item.id, typed]);
-
-  // Mostly red text in a system font says little about the font: its own sample instead.
-  const swapped = typed && fallback && !!preview && mostlyMissing(text, has);
+  const sample = useSampleText(item.id, preview?.sample);
   const category = fontCategoryOf(item);
+  const member = !!item.familyMember;
   return (
     <div
       className={`relative flex flex-col justify-center gap-1 overflow-hidden rounded-md border-b border-line/60 px-3 transition-opacity duration-200 ${rowSelection(
         selected,
         focused,
-      )} ${dimmed ? "opacity-35" : ""}`}
+      )} ${dimmed ? "opacity-35" : ""} ${member ? "pl-12" : ""}`}
       style={{ width, height }}
       onPointerDown={(e) => onItemPointerDown(e, item, index)}
       onDoubleClick={() => useStore.getState().openViewer(index)}
@@ -125,12 +156,19 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
     >
       <ChangePulse id={item.id} className="rounded-md" />
       <div className="flex min-w-0 items-baseline gap-2 text-xs">
-        <span className="truncate text-[13px] font-medium">{item.fontFamily || item.name}</span>
-        <FamilyCount item={item} />
-        <span className="shrink-0 text-dim">{style}</span>
+        {!member && <FamilyToggle item={item} />}
+        {member ? (
+          <span className="truncate text-[13px]">{style || item.name}</span>
+        ) : (
+          <>
+            <span className="truncate text-[13px] font-medium">{item.fontFamily || item.name}</span>
+            <FamilyCount item={item} />
+            <span className="shrink-0 text-dim">{style}</span>
+          </>
+        )}
         <span className="min-w-0 truncate text-dim/70">{item.name}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-dim">
-          {swapped && (
+          {sample.swapped && (
             <span
               className="rounded bg-accent/15 px-1.5 py-px text-accent"
               title="入力した文字の半分以上がこのフォントに無いため、このフォントの見本で表示しています（「パターン」のメニューで切り替え）"
@@ -142,30 +180,35 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
           {flags && item.inTray && <Layers size={11} className="text-emerald-400" />}
           {flags && item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
           {item.rating > 0 && <Stars n={item.rating} />}
-          {item.fontScript && <span className="rounded bg-white/8 px-1.5 py-px">{fontScriptLabel(item.fontScript)}</span>}
-          <span
-            className={`rounded px-1.5 py-px ${category === "none" ? "text-dim/70" : "bg-white/8"}`}
-            title={item.fontCategoryUser ? "手で設定した書体" : "自動で判定した書体（詳細パネルで変更できます）"}
-          >
-            {fontCategoryLabel(category)}
-            {item.fontCategoryUser && " ✎"}
-          </span>
-          {item.fontFeatures.map((k) => (
-            <span key={k} className="rounded bg-white/8 px-1.5 py-px">
-              {fontFeatureLabel(k)}
+          {!member && item.fontScript && (
+            <span className="rounded bg-white/8 px-1.5 py-px">{fontScriptLabel(item.fontScript)}</span>
+          )}
+          {!member && (
+            <span
+              className={`rounded px-1.5 py-px ${category === "none" ? "text-dim/70" : "bg-white/8"}`}
+              title={item.fontCategoryUser ? "手で設定した書体" : "自動で判定した書体（詳細パネルで変更できます）"}
+            >
+              {fontCategoryLabel(category)}
+              {item.fontCategoryUser && " ✎"}
             </span>
-          ))}
+          )}
+          {!member &&
+            item.fontFeatures.map((k) => (
+              <span key={k} className="rounded bg-white/8 px-1.5 py-px">
+                {fontFeatureLabel(k)}
+              </span>
+            ))}
           <span className="uppercase">{item.ext}</span>
         </span>
       </div>
       {failed ? (
-        <span className="text-dim">見本を表示できません</span>
+        <span className={`text-dim ${member ? "" : "pl-6"}`}>見本を表示できません</span>
       ) : (
         <Sample
-          text={typed && !swapped ? text : (preview?.sample ?? "")}
-          has={typed && !swapped ? has : null}
+          text={sample.text}
+          has={sample.has}
           style={{ fontFamily: family ? `"${family}"` : undefined, fontSize: size, lineHeight: 1.15 }}
-          className={`block truncate whitespace-pre transition-opacity duration-200 ${
+          className={`block truncate whitespace-pre transition-opacity duration-200 ${member ? "" : "pl-6"} ${
             family && preview ? "opacity-100" : "opacity-0"
           }`}
         />
@@ -176,6 +219,92 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
             insert === "before" ? "-top-px" : "-bottom-px"
           }`}
         />
+      )}
+    </div>
+  );
+});
+
+/** What a tile shows with no text typed: a Japanese font its kana and kanji, a Latin one its letters. */
+const tileSample = (item: Item) => (item.fontScript === "latin" ? "Aa" : "あ永A");
+
+/**
+ * Font grid: one tile per family, the typed specimen text (or a few
+ * characters) drawn in the font, the family's name and its number of styles
+ * below. Families don't open here.
+ */
+export const FontTile = memo(function FontTile(props: CellProps) {
+  const { item, index, selected, focused, dimmed, width, height, label, info, reorderable, insert, flags } = props;
+  const { family, preview, failed } = useFontRow(item.id);
+  const typed = useStore((s) => s.specimenText.trim() !== "");
+  const sample = useSampleText(item.id, preview ? tileSample(item) : undefined);
+  // A few characters fill the tile; longer typed text gets smaller and wraps in up to three lines.
+  const length = !typed || sample.swapped ? 3 : [...sample.text].length;
+  const scale = length <= 4 ? 0.26 : length <= 10 ? 0.18 : 0.12;
+  return (
+    <div
+      className={`group relative flex flex-col items-center transition-[opacity,transform] duration-200 ${
+        dimmed ? "scale-95 opacity-35" : ""
+      }`}
+      style={{ width }}
+      onPointerDown={(e) => onItemPointerDown(e, item, index)}
+      onDoubleClick={() => useStore.getState().openViewer(index)}
+      onContextMenu={(e) => showItemMenu(e, item, index)}
+      data-drop={reorderable ? `item:${item.id}` : undefined}
+    >
+      <div
+        className={`relative flex items-center justify-center overflow-hidden rounded-lg bg-raised px-2 transition-shadow duration-150 ${
+          selected ? "sel-ring" : focused ? "" : "hover:ring-2 hover:ring-white/15"
+        } ${focused ? "focus-ring" : ""}`}
+        style={{ width, height }}
+      >
+        {failed ? (
+          <span className="text-xs text-dim">見本を表示できません</span>
+        ) : (
+          <Sample
+            text={sample.text}
+            has={sample.has}
+            style={{
+              fontFamily: family ? `"${family}"` : undefined,
+              fontSize: Math.round(width * scale),
+              lineHeight: 1.2,
+            }}
+            className={`line-clamp-3 text-center break-all transition-opacity duration-200 ${
+              family && preview ? "opacity-100" : "opacity-0"
+            }`}
+          />
+        )}
+        {flags && (item.pinnedAt !== null || item.inTray || item.favorite) && (
+          <span className="pointer-events-none absolute top-1.5 right-1.5 flex gap-1">
+            {item.pinnedAt !== null && <Pin size={11} className="text-accent" fill="currentColor" />}
+            {item.inTray && <Layers size={11} className="text-emerald-400" />}
+            {item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
+          </span>
+        )}
+        <ChangePulse id={item.id} />
+      </div>
+      {insert && (
+        <span
+          className="pointer-events-none absolute top-0 w-1 animate-fade-in rounded-full bg-accent shadow-[0_0_8px] shadow-accent"
+          style={{ height, [insert === "before" ? "left" : "right"]: -8 }}
+        />
+      )}
+      {label > 0 && (
+        <div className="mt-1.5 w-full text-center leading-[15px]">
+          {info.name && (
+            <div className="flex items-center justify-center gap-1.5 text-xs">
+              <span className={`truncate ${selected ? "text-white" : ""}`} title={item.name}>
+                {item.fontFamily || item.name}
+              </span>
+              <FamilyCount item={item} />
+            </div>
+          )}
+          {(info.rating || info.meta) && (
+            <div className="flex items-center justify-center gap-1.5 overflow-hidden text-[11px] whitespace-nowrap text-dim">
+              {info.rating && item.rating > 0 && <Stars n={item.rating} />}
+              {info.meta && <span className="uppercase">{item.ext}</span>}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

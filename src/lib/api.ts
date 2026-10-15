@@ -162,9 +162,14 @@ export interface Item {
   fontCategoryUser: string | null;
   /** Fonts: features (see FONT_FEATURES), empty until read. */
   fontFeatures: string[];
-  /** Family view only: every font the row stands for (the row's own id first). */
+  /**
+   * Font mode only: the row stands for a whole family; every font of it (the
+   * row's own id first). Operations on the row reach them all.
+   */
   familyIds?: string[];
-  /** On the work tray (作業台). */
+  /** Font mode only: a style shown under its family's opened row (▸), indented. */
+  familyMember?: boolean;
+  /** On the shelf (シェルフ; the `tray` table). */
   inTray: boolean;
   filePath: string;
   thumbPath: string;

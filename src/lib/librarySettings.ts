@@ -19,6 +19,8 @@ export interface LibrarySettings {
   hidden: SidebarHidden;
   /** The library has its own sidebar entries; otherwise it follows the app's. */
   sidebarOwn: boolean;
+  /** Specimen texts the user saved (the pattern menu's "自分のパターン"), newest first. */
+  patterns: string[];
 }
 
 /** Sidebar entries hidden, per mode (ids of `SIDEBAR_ENTRIES`). */
@@ -26,7 +28,7 @@ export type SidebarHidden = Partial<Record<Mode, string[]>>;
 
 const ALL_KINDS = KINDS.map((k) => k.kind);
 
-export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = { modes: ALL_KINDS, lastMode: null, lastKinds: [], hidden: {}, sidebarOwn: false };
+export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = { modes: ALL_KINDS, lastMode: null, lastKinds: [], hidden: {}, sidebarOwn: false, patterns: [] };
 
 /** Sidebar entries that can be hidden. "すべて" and "ゴミ箱" always stay. */
 export const SIDEBAR_ENTRIES: { id: string; label: string; modes?: Mode[] }[] = [
@@ -74,6 +76,7 @@ export function parseLibrarySettings(raw: Record<string, unknown>): LibrarySetti
     lastKinds: isOldMode(raw.lastMode) ? [raw.lastMode] : [],
     hidden,
     sidebarOwn,
+    patterns: strings(raw.specimenPatterns).filter((t) => t.trim()),
   };
 }
 
