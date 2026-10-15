@@ -420,7 +420,7 @@ export function SheetDialog() {
           <span className="text-xs text-dim">
             {busy
               ? `画像を準備中… ${busy.done} / ${busy.total}`
-              : "並びは一覧の順です（作業台では手動で並べ替えできます）"}
+              : "並びは一覧の順です（シェルフからはシェルフの並び。ドラッグで並べ替えできます）"}
           </span>
           <div className="ml-auto flex gap-2">
             <button onClick={close} disabled={!!busy} className="rounded-md px-3 py-1.5 hover:bg-white/5 disabled:opacity-40">

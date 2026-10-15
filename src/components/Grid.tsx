@@ -16,11 +16,11 @@ import {
 } from "../lib/actions";
 import { command, isEnabled, runKey } from "../lib/commands";
 import { applicable, commandIcon, commandItem } from "../lib/menuItems";
-import { FontListCells, SpecimenRow } from "../features/fonts/FontRows";
+import { FontListCells, FontTile, SpecimenRow } from "../features/fonts/FontRows";
 import { api, formatBytes, sizeLabel, type Item, type ItemKind } from "../lib/api";
 import { itemsNoun, kindsNoun } from "../lib/modes";
 import { colorHex } from "../lib/colors";
-import type { Section } from "../lib/grouping";
+import { rowIds, type Section } from "../lib/grouping";
 import {
   computeLayout,
   GAP,
@@ -113,8 +113,7 @@ export type CellProps = {
 
 /** Favourite heart (also a toggle on hover) and pin mark on a thumbnail. */
 function FlagOverlay({ item }: { item: Item }) {
-  // Everything in the tray view is on the tray; the mark would only add noise.
-  const trayMark = useStore((s) => item.inTray && s.view.kind !== "tray");
+  const trayMark = item.inTray;
   return (
     <>
       <button
@@ -138,7 +137,7 @@ function FlagOverlay({ item }: { item: Item }) {
             </span>
           )}
           {trayMark && (
-            <span title="作業台にあります（B で外す）" className="pointer-events-auto rounded-full bg-emerald-600 p-1 text-white shadow">
+            <span title="シェルフにあります（B で外す）" className="pointer-events-auto rounded-full bg-emerald-600 p-1 text-white shadow">
               <Layers size={11} strokeWidth={2.25} />
             </span>
           )}
@@ -454,7 +453,10 @@ export function Grid() {
   const focus = useStore((s) => (s.focus && (s.selected.size > 1 || !s.selected.has(s.focus)) ? s.focus : null));
   const thumbSize = useStore((s) => s.thumbSize);
   const specimenSize = useStore((s) => s.specimenSize);
+  const tileSize = useStore((s) => s.tileSize);
   const kind = useStore((s) => s.layout);
+  // The font mode's grid draws each family in its font (FontTile), sized on the specimen text row.
+  const fontTiles = useStore((s) => s.mode === "font" && s.layout === "grid");
   const groupBy = useStore((s) => s.groupBy);
   const showInfo = useStore((s) => s.showInfo);
   const viewKind = useStore((s) => s.view.kind);
@@ -474,7 +476,7 @@ export function Grid() {
   const dragIds = useStore((s) => (s.drag?.kind === "items" ? s.drag.ids : null));
   const dragging = useMemo(() => new Set(dragIds ?? []), [dragIds]);
   const reorderable = useStore(
-    (s) => s.sort === "manual" && ((s.view.kind === "folder" && !s.showSubfolders) || s.view.kind === "tray"),
+    (s) => s.sort === "manual" && s.view.kind === "folder" && !s.showSubfolders,
   );
   const dropTarget = useStore((s) => (s.drag?.kind === "items" ? s.dropTarget : null));
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -499,9 +501,16 @@ export function Grid() {
   const placement = useMemo<Placement>(
     () =>
       inner > 0
-        ? computeLayout(kind, items, inner, kind === "specimen" ? specimenSize : thumbSize, info, sections)
+        ? computeLayout(
+            kind,
+            items,
+            inner,
+            kind === "specimen" ? specimenSize : fontTiles ? tileSize : thumbSize,
+            info,
+            sections,
+          )
         : { boxes: [], headers: [], height: 0, label: 0, fit: "cover" },
-    [kind, items, inner, thumbSize, specimenSize, info, sections],
+    [kind, items, inner, thumbSize, specimenSize, tileSize, fontTiles, info, sections],
   );
   const visible = useMemo(
     () => visibleRange(placement, viewport.top - OVERSCAN, viewport.top + viewport.height + OVERSCAN),
@@ -540,7 +549,7 @@ export function Grid() {
     if (i >= 0) reveal(i);
   }, [kind, groupBy]);
 
-  /** Ids of cells intersecting a rectangle in content coordinates. */
+  /** Ids of cells intersecting a rectangle in content coordinates (a family row: all its fonts). */
   const hitTest = (r: Rect): string[] => {
     const { placement, items } = layout.current;
     const top = Math.min(r.y1, r.y2);
@@ -550,7 +559,7 @@ export function Grid() {
     const hits: string[] = [];
     placement.boxes.forEach((b, i) => {
       if (b.x <= right && b.x + b.w >= left && b.y <= bottom && b.y + b.h + placement.label >= top) {
-        hits.push(items[i].id);
+        hits.push(...rowIds([items[i]]));
       }
     });
     return hits;
@@ -579,8 +588,10 @@ export function Grid() {
       const cur = toContent(pointer.x, pointer.y);
       const r = { x1: start.x, y1: start.y, x2: cur.x, y2: cur.y };
       setMarquee(r);
-      const ids = new Set([...base, ...hitTest(r)]);
-      useStore.getState().setSelection(layout.current.items.filter((i) => ids.has(i.id)).map((i) => i.id));
+      const hits = new Set(hitTest(r));
+      // In list order, so the keyboard goes on from the last one.
+      const ids = new Set([...base, ...rowIds(layout.current.items).filter((id) => hits.has(id))]);
+      useStore.getState().setSelection([...ids]);
     };
     // Scroll while the pointer is held near the top/bottom edge.
     const tick = () => {
@@ -673,7 +684,7 @@ export function Grid() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const Comp = kind === "list" ? ListRow : kind === "specimen" ? SpecimenRow : Cell;
+  const Comp = kind === "list" ? ListRow : kind === "specimen" ? SpecimenRow : fontTiles ? FontTile : Cell;
   return (
     <div
       ref={scrollRef}
@@ -759,7 +770,7 @@ function SectionHeader({ items, section }: { items: Item[]; section: Section }) 
       className={`flex cursor-default items-center gap-2 text-xs ${start > 0 ? "border-t border-line" : ""}`}
       style={{ height: HEADER - 8, marginLeft: PAD, marginRight: PAD, marginBottom: 8 }}
       onPointerDown={(e) => e.stopPropagation()}
-      onClick={() => useStore.getState().setSelection(items.slice(start, end).map((i) => i.id))}
+      onClick={() => useStore.getState().setSelection(rowIds(items.slice(start, end)))}
       title="クリックでこの区切りをすべて選択"
     >
       {rating !== undefined && rating > 0 ? <Stars n={rating} size={12} /> : null}
@@ -854,17 +865,6 @@ function Empty({
       <p className="mt-24 text-center text-dim">
         ピン留めした{noun}はありません。{noun}を選んで P キーでピン留めすると、どの一覧でも先頭に表示されます
       </p>
-    );
-  if (kind === "tray")
-    return (
-      <div className="mt-24 flex flex-col items-center gap-2 text-dim">
-        <Layers size={40} strokeWidth={1.25} />
-        <p>作業台は空です</p>
-        <p className="max-w-md text-center text-xs leading-relaxed">
-          画像を選んで B キー、またはサイドバーの「作業台」へドラッグすると、ここに集まります。
-          集めた画像は「まとめて出力」で1枚の画像や HTML にしたり、まとめて書き出したりできます
-        </p>
-      </div>
     );
   if (kind === "folder")
     return (

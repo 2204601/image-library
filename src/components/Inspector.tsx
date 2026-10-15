@@ -326,8 +326,8 @@ export function FlagButtons({ ids, items }: { ids: string[]; items: Item[] }) {
         <FlagButton
           state={tray}
           icon={<Layers size={14} />}
-          label={tray ? "作業台にあります" : "作業台に追加"}
-          hint={tray ? "作業台から外す（キー B）" : "作業台に集めて、まとめて出力・書き出し（キー B）"}
+          label={tray ? "シェルフにあります" : "シェルフに追加"}
+          hint={tray ? "シェルフから外す（キー B）" : "一覧の下のシェルフに置いて、比べる・まとめて出力・書き出し（キー B）"}
           activeClass="border-emerald-500/60 bg-emerald-500/15 text-emerald-400"
           onClick={() => toggleTray(ids)}
         />

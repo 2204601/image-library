@@ -267,9 +267,9 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
           () => st().setSort(o.key, st().desc),
           {
             checked: (x) => x.sort === o.key,
-            // Manual order is a folder's or the tray's; pixel size, of images alone.
+            // Manual order is a folder's; pixel size, of images alone.
             enabled: (x) =>
-              (o.key !== "manual" || x.view.kind === "folder" || x.view.kind === "tray") &&
+              (o.key !== "manual" || x.view.kind === "folder") &&
               (!o.only || listIs(x, o.only)),
           },
         ),

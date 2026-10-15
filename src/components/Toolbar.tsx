@@ -7,7 +7,6 @@ import {
   FolderInput,
   FolderSearch,
   ImagePlus,
-  LayoutGrid,
   Minus,
   PanelLeftClose,
   PanelLeftOpen,
@@ -23,14 +22,11 @@ import { useEffect, useMemo, useState } from "react";
 import { dragRegion } from "../lib/titleBar";
 import {
   clearDismissedDuplicates,
-  clearTray,
   emptyTrash,
-  exportTray,
   importFilesDialog,
   importFolderDialog,
   keepPlan,
   reviewDuplicates,
-  sheetFromTray,
   similarGroups,
 } from "../lib/actions";
 import { SpecimenControls } from "../features/fonts/SpecimenControls";
@@ -98,7 +94,7 @@ function viewTitle(view: View, folders: Folder[], smart: SmartFolder[]): string 
     case "pinned":
       return "ピン留め";
     case "tray":
-      return "作業台";
+      return "シェルフ";
     case "folder":
       return folders.find((f) => f.id === view.id)?.name ?? "";
     case "smart":
@@ -141,10 +137,8 @@ export function Toolbar() {
   const isTrash = view.kind === "trash";
   const isFolder = view.kind === "folder";
   const isSimilar = view.kind === "similar";
-  const isTray = view.kind === "tray";
   const manual = sort === "manual";
-  const canManual = isFolder || isTray;
-  const trayScope = selectedCount ? `選択中の ${selectedCount} 件` : "作業台のすべて";
+  const canManual = isFolder;
   const groups = useMemo(() => (isSimilar ? similarGroups(items) : []), [isSimilar, items]);
   const keepPick = useStore((s) => s.keepPick);
   const dismissedGroups = useStore((s) => s.dismissedGroups);
@@ -256,26 +250,6 @@ export function Toolbar() {
             >
               <CopyCheck size={15} /> <span className="@max-3xl:hidden">まとめて整理…</span>
             </button>
-          ) : isTray ? (
-            <div className="flex h-8 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
-              <button
-                title={`${trayScope}を1枚の画像・HTML にまとめる`}
-                disabled={count === 0}
-                onClick={sheetFromTray}
-                className="flex items-center gap-1.5 px-2.5 whitespace-nowrap enabled:hover:bg-white/5 disabled:opacity-40"
-              >
-                <LayoutGrid size={15} /> <span className="@max-3xl:hidden">まとめて出力…</span>
-              </button>
-              <button
-                title="作業台を空にする（画像はそのまま残ります）"
-                disabled={count === 0}
-                onClick={clearTray}
-                className="flex items-center gap-1.5 border-l border-line px-2.5 whitespace-nowrap enabled:hover:bg-white/5 disabled:opacity-40"
-              >
-                <X size={15} className="hidden @max-3xl:block" />
-                <span className="@max-3xl:hidden">空にする</span>
-              </button>
-            </div>
           ) : (
             // One bordered group, like the other controls.
             <div className="flex h-8 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
@@ -298,7 +272,8 @@ export function Toolbar() {
           <InspectorToggle className="flex @max-xl:hidden" />
         </div>
       </div>
-      {layout === "specimen" && <SpecimenControls />}
+      {/* The font mode's text row stays whatever the layout (docs/UI.md). */}
+      {mode === "font" && <SpecimenControls />}
       <div className="flex min-h-6 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
         {smart && (
           <div className="flex min-w-0 items-center gap-1.5">
@@ -365,18 +340,7 @@ export function Toolbar() {
             </button>
           </>
         )}
-        {manual && ((isFolder && !showSubfolders) || (isTray && count > 0)) && (
-          <span className="text-dim">画像をドラッグして並べ替えできます</span>
-        )}
-        {isTray && count > 0 && (
-          <button
-            onClick={exportTray}
-            title={`${trayScope}を元のファイルのままフォルダへ書き出す`}
-            className="shrink-0 rounded px-1.5 py-0.5 text-accent hover:bg-accent/15"
-          >
-            書き出し…
-          </button>
-        )}
+        {manual && isFolder && !showSubfolders && <span className="text-dim">画像をドラッグして並べ替えできます</span>}
         {/* How the list looks, at the right end of the second row. */}
         <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
           {/* Native select for the menu, laid over a label sized to the current
@@ -394,7 +358,7 @@ export function Toolbar() {
             >
               {sorts.map((s) => (
                 <option key={s.key} value={s.key} disabled={s.key === "manual" && !canManual}>
-                  {s.key === "manual" && !canManual ? "手動（フォルダ・作業台のみ）" : s.label}
+                  {s.key === "manual" && !canManual ? "手動（フォルダのみ）" : s.label}
                 </option>
               ))}
             </select>
@@ -411,7 +375,8 @@ export function Toolbar() {
           <Divider />
           <LayoutSwitch />
           <DisplayMenu />
-          <ThumbSize hidden={layout === "specimen" || layout === "list"} />
+          {/* The font mode's sizes are on the specimen text row. */}
+          {mode !== "font" && <ThumbSize hidden={layout === "list"} />}
         </div>
       </div>
       {(filterOpen || editingSmart) && <FilterBar />}

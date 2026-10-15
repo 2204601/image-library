@@ -12,6 +12,8 @@ import { Inspector } from "./components/Inspector";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { SelectionBar } from "./components/SelectionBar";
+import { Shelf } from "./components/Shelf";
+import { CompareView } from "./features/fonts/CompareView";
 import { ActionHud } from "./components/ActionHud";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
@@ -43,6 +45,7 @@ export default function App() {
   const library = useStore((s) => s.library);
   const inspectorOpen = useStore((s) => s.inspectorOpen);
   const sidebarOpen = useStore((s) => s.sidebarOpen);
+  const comparing = useStore((s) => s.comparing);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const inspectorWidth = useStore((s) => s.inspectorWidth);
   // A panel's edge is being dragged: no width animation.
@@ -198,8 +201,12 @@ export default function App() {
           </div>
           <main className="relative flex min-w-0 flex-1 flex-col overflow-hidden bg-bg">
             <Toolbar />
-            <Grid />
-            <SelectionBar />
+            {/* The selection bar floats over the list (or the comparison), above the shelf. */}
+            <div className="relative flex min-h-0 flex-1 flex-col">
+              {comparing ? <CompareView /> : <Grid />}
+              {!comparing && <SelectionBar />}
+            </div>
+            <Shelf />
           </main>
           <div
             className={`relative flex shrink-0 overflow-hidden ${resizing ? "" : "transition-[width] duration-200 ease-out"}`}

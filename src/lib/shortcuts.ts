@@ -79,7 +79,7 @@ export function shortcutSections(): ShortcutSection[] {
       rows: [
         cmd("item.favorite"),
         cmd("item.pin"),
-        cmd("item.tray", { label: "作業台に追加・外す" }),
+        cmd("item.tray", { label: "シェルフに追加・外す" }),
         { label: "評価", keys: ["0-5"] },
         { label: "評価して次へ", keys: ["Shift+0-5"] },
         pair("item.rotateCcw", "item.rotateCw", "左に回転 / 右に回転"),
@@ -116,7 +116,7 @@ export function shortcutSections(): ShortcutSection[] {
         { label: "詳細", keys: ["I"] },
         { label: "前後のサムネイル", keys: ["T"] },
         { label: "画像のみ表示（操作や情報を隠す）", keys: ["H"] },
-        { label: "お気に入り・ピン留め・作業台・評価", keys: ["F", "P", "B", "0-5"] },
+        { label: "お気に入り・ピン留め・シェルフ・評価", keys: ["F", "P", "B", "0-5"] },
         pair("item.rotateCcw", "item.rotateCw", "左に回転 / 右に回転"),
       ],
     },
