@@ -53,44 +53,42 @@ impl Undo {
 
 // ---------------------------------------------------------------- edits
 
-fn tag_id(conn: &Connection, name: &str) -> DbResult<Option<i64>> {
-    conn.query_row("SELECT id FROM tags WHERE name = ?1", [name], |r| r.get(0)).optional()
-}
-
-/// Adds the tag `name` to `items` (creating the tag if needed); returns how
-/// many items gained it.
+/// Adds the tag `name` to `items`, each the tag of its own mode (creating it
+/// if needed, docs/MODES.md); returns how many items gained it.
 pub fn add_tag(conn: &Connection, undo: &mut Undo, items: &[String], name: &str) -> DbResult<usize> {
-    if items.is_empty() {
-        return Ok(0);
-    }
-    let tag = match tag_id(conn, name)? {
-        Some(t) => t,
-        None => {
-            let t = db::ensure_tag(conn, name)?;
-            undo.tags_created.push(t);
-            t
-        }
-    };
-    let mut stmt = conn.prepare_cached("INSERT OR IGNORE INTO item_tags (item_id, tag_id) VALUES (?1, ?2)")?;
     let mut n = 0;
-    for id in items {
-        if stmt.execute(params![id, tag])? == 1 {
-            undo.tags_added.push((id.clone(), tag));
-            n += 1;
+    for (mode, items) in db::by_mode(conn, items)? {
+        let tag = match db::tag_id(conn, name, mode)? {
+            Some(t) => t,
+            None => {
+                let t = db::ensure_tag(conn, name, mode)?;
+                undo.tags_created.push(t);
+                t
+            }
+        };
+        let mut stmt = conn.prepare_cached("INSERT OR IGNORE INTO item_tags (item_id, tag_id) VALUES (?1, ?2)")?;
+        for id in &items {
+            if stmt.execute(params![id, tag])? == 1 {
+                undo.tags_added.push((id.clone(), tag));
+                n += 1;
+            }
         }
     }
     Ok(n)
 }
 
-/// Takes the tag `name` off `items` (the tag itself stays); returns how many had it.
+/// Takes the tag `name` (of each item's mode) off `items`; the tag itself
+/// stays. Returns how many had it.
 pub fn remove_tag(conn: &Connection, undo: &mut Undo, items: &[String], name: &str) -> DbResult<usize> {
-    let Some(tag) = tag_id(conn, name)? else { return Ok(0) };
-    let mut stmt = conn.prepare_cached("DELETE FROM item_tags WHERE item_id = ?1 AND tag_id = ?2")?;
     let mut n = 0;
-    for id in items {
-        if stmt.execute(params![id, tag])? == 1 {
-            undo.tags_removed.push((id.clone(), tag));
-            n += 1;
+    for (mode, items) in db::by_mode(conn, items)? {
+        let Some(tag) = db::tag_id(conn, name, mode)? else { continue };
+        let mut stmt = conn.prepare_cached("DELETE FROM item_tags WHERE item_id = ?1 AND tag_id = ?2")?;
+        for id in &items {
+            if stmt.execute(params![id, tag])? == 1 {
+                undo.tags_removed.push((id.clone(), tag));
+                n += 1;
+            }
         }
     }
     Ok(n)
@@ -123,22 +121,22 @@ pub fn move_to_folder(conn: &Connection, undo: &mut Undo, items: &[String], fold
     Ok(n)
 }
 
-/// The folder at `path` (names separated by "/"), creating what is missing.
-/// None for an empty path.
-pub fn ensure_folder_path(conn: &Connection, undo: &mut Undo, path: &str) -> DbResult<Option<String>> {
+/// The folder of `mode` at `path` (names separated by "/"), creating what is
+/// missing. None for an empty path.
+pub fn ensure_folder_path(conn: &Connection, undo: &mut Undo, path: &str, mode: db::Mode) -> DbResult<Option<String>> {
     let mut parent: Option<String> = None;
     for name in path.split('/').map(str::trim).filter(|n| !n.is_empty()) {
         let existing: Option<String> = conn
             .query_row(
-                "SELECT id FROM folders WHERE name = ?1 AND parent_id IS ?2",
-                params![name, parent],
+                "SELECT id FROM folders WHERE name = ?1 AND parent_id IS ?2 AND mode = ?3",
+                params![name, parent, mode.as_str()],
                 |r| r.get(0),
             )
             .optional()?;
         parent = Some(match existing {
             Some(id) => id,
             None => {
-                let id = db::create_folder(conn, name, parent.as_deref())?;
+                let id = db::create_folder(conn, name, parent.as_deref(), mode)?;
                 undo.folders_created.push(id.clone());
                 id
             }
@@ -345,8 +343,8 @@ mod tests {
         assert_eq!(done, Undone { summary: "テスト".into(), skipped: 0 });
         assert_eq!(tags_of(&conn, "a"), ["京都"], "the tag a had before stays");
         assert!(tags_of(&conn, "b").is_empty());
-        assert!(tag_id(&conn, "夏").unwrap().is_none(), "the tag it created is gone");
-        assert!(tag_id(&conn, "京都").unwrap().is_some());
+        assert!(db::tag_id(&conn, "夏", db::Mode::Stock).unwrap().is_none(), "the tag it created is gone");
+        assert!(db::tag_id(&conn, "京都", db::Mode::Stock).unwrap().is_some());
         assert!(undo(&mut conn, id).is_err(), "only once");
         assert!(list(&conn, 10).unwrap()[0].undone);
     }
@@ -354,14 +352,14 @@ mod tests {
     #[test]
     fn folders_go_back_and_created_ones_are_removed_when_empty() {
         let mut conn = setup();
-        let old = db::create_folder(&conn, "old", None).unwrap();
+        let old = db::create_folder(&conn, "old", None, db::Mode::Stock).unwrap();
         db::move_to_folder(&conn, &ids(&["a"]), &old).unwrap();
         let pos: Option<f64> = folder_of(&conn, "a").unwrap().unwrap().1;
 
         let mut u = Undo::default();
-        let target = ensure_folder_path(&conn, &mut u, "写真/ 旅行 /京都").unwrap().unwrap();
+        let target = ensure_folder_path(&conn, &mut u, "写真/ 旅行 /京都", db::Mode::Stock).unwrap().unwrap();
         assert_eq!(u.folders_created.len(), 3);
-        assert!(ensure_folder_path(&conn, &mut u, "写真/旅行").unwrap().is_some());
+        assert!(ensure_folder_path(&conn, &mut u, "写真/旅行", db::Mode::Stock).unwrap().is_some());
         assert_eq!(u.folders_created.len(), 3, "existing folders are reused");
         assert_eq!(move_to_folder(&conn, &mut u, &ids(&["a", "b"]), Some(&target)).unwrap(), 2);
         assert_eq!(move_to_folder(&conn, &mut u, &ids(&["a"]), Some(&target)).unwrap(), 0);
@@ -384,7 +382,7 @@ mod tests {
         assert!(rename(&conn, &mut u, "c", "kyoto_02.jpg").unwrap());
         assert!(set_note(&conn, &mut u, "a", "メモ").unwrap());
         let mut keep = Undo::default();
-        let f = ensure_folder_path(&conn, &mut keep, "F").unwrap();
+        let f = ensure_folder_path(&conn, &mut keep, "F", db::Mode::Stock).unwrap();
         move_to_folder(&conn, &mut u, &ids(&["b"]), f.as_deref()).unwrap();
         let id = record(&conn, "mcp", "名前", &u).unwrap();
 

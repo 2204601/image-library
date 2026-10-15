@@ -555,10 +555,10 @@ mod tests {
     fn setup() -> Setup {
         let tmp = tempfile::tempdir().unwrap();
         let mut lib = Library::create(&tmp.path().join("Share.library")).unwrap();
-        let parent = db::create_folder(&lib.conn, "親", None).unwrap();
-        let shared = db::create_folder(&lib.conn, "共有", Some(&parent)).unwrap();
-        let sub = db::create_folder(&lib.conn, "下", Some(&shared)).unwrap();
-        let beside = db::create_folder(&lib.conn, "隣", Some(&parent)).unwrap();
+        let parent = db::create_folder(&lib.conn, "親", None, db::Mode::Stock).unwrap();
+        let shared = db::create_folder(&lib.conn, "共有", Some(&parent), db::Mode::Stock).unwrap();
+        let sub = db::create_folder(&lib.conn, "下", Some(&shared), db::Mode::Stock).unwrap();
+        let beside = db::create_folder(&lib.conn, "隣", Some(&parent), db::Mode::Stock).unwrap();
         add(&mut lib, "in", &shared);
         add(&mut lib, "deep", &sub);
         add(&mut lib, "up", &parent);

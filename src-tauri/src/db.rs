@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 20;
+const SCHEMA_VERSION: i32 = 21;
 
 const SETTINGS_TABLE: &str = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
@@ -28,8 +28,27 @@ pub fn open(path: &std::path::Path) -> DbResult<Connection> {
          PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;",
     )?;
+    back_up_before_modes(&conn, path)?;
     migrate(&conn)?;
     Ok(conn)
+}
+
+/// A copy of library.db as it was before folders, tags and smart folders
+/// were split between the modes (step 21, docs/MODES.md), next to it as
+/// `library.before-modes.db`: the split rewrites what the user built up, so
+/// it can be undone by hand. Only for an existing library, once.
+fn back_up_before_modes(conn: &Connection, path: &std::path::Path) -> DbResult<()> {
+    let version: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version == 0 || version >= 21 {
+        return Ok(());
+    }
+    let backup = path.with_file_name("library.before-modes.db");
+    if backup.exists() {
+        return Ok(());
+    }
+    // A consistent copy of the whole database (the WAL included), outside any transaction.
+    conn.execute("VACUUM INTO ?1", [backup.to_string_lossy()])?;
+    Ok(())
 }
 
 fn has_column(conn: &Connection, table: &str, column: &str) -> DbResult<bool> {
@@ -324,6 +343,52 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         c.execute("UPDATE items SET font_features = NULL WHERE kind = 'font'", [])?;
         Ok(())
     })?;
+    // Folders, tags and smart folders belong to a mode (docs/MODES.md): the
+    // stock (images, files) or the fonts. Tags of the two modes may share a
+    // name, so the table is made again with UNIQUE (name, mode), the way step
+    // 17 does it (keeping ids and the AUTOINCREMENT sequence). Then what holds
+    // both kinds is split, see `split_modes`.
+    step(21, &|c| {
+        add_column(c, "folders", "mode", "TEXT NOT NULL DEFAULT 'stock'")?;
+        add_column(c, "smart_folders", "mode", "TEXT NOT NULL DEFAULT 'stock'")?;
+        if !has_column(c, "tags", "mode")? {
+            let seq: Option<i64> = c
+                .query_row("SELECT seq FROM sqlite_sequence WHERE name = 'tags'", [], |r| r.get(0))
+                .optional()?;
+            c.execute_batch(
+                "ALTER TABLE item_tags RENAME TO item_tags_old;
+                 ALTER TABLE tags RENAME TO tags_old;
+                 DROP INDEX IF EXISTS idx_item_tags_tag;
+                 CREATE TABLE tags (
+                   id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                   name  TEXT NOT NULL COLLATE NOCASE,
+                   color TEXT,
+                   mode  TEXT NOT NULL DEFAULT 'stock',
+                   UNIQUE (name, mode)
+                 );
+                 CREATE TABLE item_tags (
+                   item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                   tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+                   PRIMARY KEY (item_id, tag_id)
+                 );
+                 INSERT INTO tags (id, name, color) SELECT id, name, color FROM tags_old;
+                 INSERT INTO item_tags (item_id, tag_id) SELECT item_id, tag_id FROM item_tags_old;
+                 DROP TABLE item_tags_old;
+                 DROP TABLE tags_old;
+                 CREATE INDEX idx_item_tags_tag ON item_tags(tag_id);",
+            )?;
+            // Ids of tags deleted before stay unused (see step 17).
+            if let Some(seq) = seq {
+                c.execute("UPDATE sqlite_sequence SET seq = MAX(seq, ?1) WHERE name = 'tags'", [seq])?;
+                c.execute(
+                    "INSERT INTO sqlite_sequence (name, seq) SELECT 'tags', ?1
+                     WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'tags')",
+                    [seq],
+                )?;
+            }
+        }
+        split_modes(c)
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -360,6 +425,305 @@ impl Kind {
             _ => Kind::Image,
         }
     }
+}
+
+/// What the app shows (docs/MODES.md): the stock (images and files) or the
+/// fonts. Folders, tags and smart folders belong to one, and hold only items
+/// of its kinds.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Mode {
+    #[default]
+    Stock,
+    Font,
+}
+
+impl Mode {
+    pub fn of(kind: Kind) -> Self {
+        if kind == Kind::Font {
+            Mode::Font
+        } else {
+            Mode::Stock
+        }
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Mode::Stock => "stock",
+            Mode::Font => "font",
+        }
+    }
+
+    fn parse(s: &str) -> Self {
+        if s == "font" {
+            Mode::Font
+        } else {
+            Mode::Stock
+        }
+    }
+
+    pub const ALL: [Mode; 2] = [Mode::Stock, Mode::Font];
+}
+
+/// SQL fragment keeping items of `mode` (any when None), with the mode as the
+/// argument `?n`. `t` is the alias of the items table.
+fn mode_where(mode: Option<Mode>, n: usize, t: &str) -> (String, Box<dyn ToSql>) {
+    (
+        format!("(?{n} IS NULL OR ({t}.kind = 'font') = (?{n} = 'font'))"),
+        Box::new(mode.map(Mode::as_str)),
+    )
+}
+
+/// The modes of the items `ids`, each with its items (in the given order).
+pub(crate) fn by_mode(conn: &Connection, ids: &[String]) -> DbResult<Vec<(Mode, Vec<String>)>> {
+    let mut stmt = conn.prepare_cached("SELECT kind FROM items WHERE id = ?1")?;
+    let mut out: Vec<(Mode, Vec<String>)> = Vec::new();
+    for id in ids {
+        let Some(kind) = stmt.query_row([id], |r| r.get::<_, String>(0)).optional()? else { continue };
+        let mode = Mode::of(Kind::parse(&kind));
+        match out.iter_mut().find(|(m, _)| *m == mode) {
+            Some((_, v)) => v.push(id.clone()),
+            None => out.push((mode, vec![id.clone()])),
+        }
+    }
+    Ok(out)
+}
+
+/// The mode of an item, if it exists.
+pub fn item_mode(conn: &Connection, id: &str) -> DbResult<Option<Mode>> {
+    Ok(conn
+        .query_row("SELECT kind FROM items WHERE id = ?1", [id], |r| r.get::<_, String>(0))
+        .optional()?
+        .map(|k| Mode::of(Kind::parse(&k))))
+}
+
+/// The mode of a folder, if it exists.
+pub fn folder_mode(conn: &Connection, id: &str) -> DbResult<Option<Mode>> {
+    Ok(conn
+        .query_row("SELECT mode FROM folders WHERE id = ?1", [id], |r| r.get::<_, String>(0))
+        .optional()?
+        .map(|m| Mode::parse(&m)))
+}
+
+/// Splits what holds items of both modes (step 21, docs/MODES.md), losing
+/// nothing:
+/// - A folder whose items (its subfolders' included) are all fonts becomes a
+///   font folder; else it stays in the stock. One with both gets a font twin
+///   (same name, colour and order, under its parent's font twin) that takes
+///   its fonts. An empty folder follows its parent (the stock at the top).
+/// - A tag on fonts only becomes a font tag; one on both gets a font twin
+///   with the same name and colour that takes the fonts.
+/// - A smart folder for fonts only (its kinds) becomes a font one; one that
+///   can match both (no kinds, or fonts and others) gets a font twin, with
+///   its tags moved to their font twins. One with no kinds gets the twin
+///   only when it matches fonts now.
+///
+/// Safe to run again: twins already made are found by name.
+fn split_modes(c: &Connection) -> DbResult<()> {
+    let new_id = || uuid::Uuid::new_v4().simple().to_string();
+
+    // ---- folders
+    type Row = (String, Option<String>, String, Option<String>, Option<f64>);
+    let folders: Vec<Row> = {
+        let mut stmt = c.prepare("SELECT id, parent_id, name, color, sort_order FROM folders")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    // Folder -> (has fonts, has others), its own items first.
+    let mut kinds: HashMap<String, (bool, bool)> = {
+        let mut stmt = c.prepare(
+            "SELECT x.folder_id, MAX(i.kind = 'font'), MAX(i.kind <> 'font')
+             FROM item_folders x JOIN items i ON i.id = x.item_id GROUP BY x.folder_id",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    let known: HashSet<&str> = folders.iter().map(|f| f.0.as_str()).collect();
+    let mut children: HashMap<Option<String>, Vec<&Row>> = HashMap::new();
+    for f in &folders {
+        // A parent that is gone (a damaged database) counts as the top.
+        let parent = f.1.clone().filter(|p| known.contains(p.as_str()));
+        children.entry(parent).or_default().push(f);
+    }
+    // Subfolders' items count for their parents.
+    fn subtree(id: &str, children: &HashMap<Option<String>, Vec<&Row>>, kinds: &mut HashMap<String, (bool, bool)>, depth: usize) -> (bool, bool) {
+        let mut acc = kinds.get(id).copied().unwrap_or_default();
+        if depth < 64 {
+            for ch in children.get(&Some(id.to_owned())).map(Vec::as_slice).unwrap_or_default() {
+                let (f, o) = subtree(&ch.0, children, kinds, depth + 1);
+                acc = (acc.0 || f, acc.1 || o);
+            }
+        }
+        kinds.insert(id.to_owned(), acc);
+        acc
+    }
+    for f in children.get(&None).cloned().unwrap_or_default() {
+        subtree(&f.0, &children, &mut kinds, 0);
+    }
+    // Top down: each folder under its parent's version of its own mode.
+    let mut stack: Vec<(&Row, HashMap<Mode, Option<String>>)> = children
+        .get(&None)
+        .map(|v| v.iter().map(|f| (*f, HashMap::from([(Mode::Stock, None), (Mode::Font, None)]))).collect())
+        .unwrap_or_default();
+    while let Some((f, parents)) = stack.pop() {
+        let (id, _, name, color, order) = f;
+        let (font, other) = kinds.get(id).copied().unwrap_or_default();
+        let mut modes = vec![];
+        if other || (!font && parents.contains_key(&Mode::Stock)) {
+            modes.push(Mode::Stock);
+        }
+        if font || modes.is_empty() {
+            modes.push(Mode::Font);
+        }
+        let mut versions: HashMap<Mode, Option<String>> = HashMap::new();
+        let main = modes[0];
+        c.execute(
+            "UPDATE folders SET mode = ?2, parent_id = ?3 WHERE id = ?1",
+            params![id, main.as_str(), parents.get(&main).cloned().flatten()],
+        )?;
+        versions.insert(main, Some(id.clone()));
+        if let Some(&twin_mode) = modes.get(1) {
+            let parent = &parents.get(&twin_mode).cloned().flatten();
+            let twin: String = match c
+                .query_row(
+                    "SELECT id FROM folders WHERE name = ?1 AND parent_id IS ?2 AND mode = ?3 AND id <> ?4",
+                    params![name, parent, twin_mode.as_str(), id],
+                    |r| r.get(0),
+                )
+                .optional()?
+            {
+                Some(t) => t,
+                None => {
+                    let t = new_id();
+                    c.execute(
+                        "INSERT INTO folders (id, parent_id, name, color, sort_order, mode) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        params![t, parent, name, color, order, twin_mode.as_str()],
+                    )?;
+                    t
+                }
+            };
+            c.execute(
+                "UPDATE item_folders SET folder_id = ?2
+                 WHERE folder_id = ?1 AND item_id IN (SELECT id FROM items WHERE kind = 'font')",
+                params![id, twin],
+            )?;
+            versions.insert(twin_mode, Some(twin));
+        }
+        for ch in children.get(&Some(id.clone())).map(Vec::as_slice).unwrap_or_default() {
+            stack.push((*ch, versions.clone()));
+        }
+    }
+
+    // ---- tags
+    let tags: Vec<(i64, String, Option<String>, bool, bool)> = {
+        let mut stmt = c.prepare(
+            "SELECT t.id, t.name, t.color,
+               EXISTS (SELECT 1 FROM item_tags x JOIN items i ON i.id = x.item_id WHERE x.tag_id = t.id AND i.kind = 'font'),
+               EXISTS (SELECT 1 FROM item_tags x JOIN items i ON i.id = x.item_id WHERE x.tag_id = t.id AND i.kind <> 'font')
+             FROM tags t WHERE t.mode = 'stock'",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    // Stock tag -> its font version.
+    let mut font_tag: HashMap<i64, i64> = HashMap::new();
+    for (id, name, color, font, other) in tags {
+        if !font {
+            continue;
+        }
+        let existing: Option<i64> = c
+            .query_row("SELECT id FROM tags WHERE name = ?1 AND mode = 'font'", [&name], |r| r.get(0))
+            .optional()?;
+        if !other && existing.is_none() {
+            c.execute("UPDATE tags SET mode = 'font' WHERE id = ?1", [id])?;
+            font_tag.insert(id, id);
+            continue;
+        }
+        let twin = match existing {
+            Some(t) => t,
+            None => {
+                c.execute("INSERT INTO tags (name, color, mode) VALUES (?1, ?2, 'font')", params![name, color])?;
+                c.last_insert_rowid()
+            }
+        };
+        c.execute(
+            "INSERT OR IGNORE INTO item_tags (item_id, tag_id)
+             SELECT x.item_id, ?2 FROM item_tags x JOIN items i ON i.id = x.item_id
+             WHERE x.tag_id = ?1 AND i.kind = 'font'",
+            params![id, twin],
+        )?;
+        c.execute(
+            "DELETE FROM item_tags WHERE tag_id = ?1 AND item_id IN (SELECT id FROM items WHERE kind = 'font')",
+            [id],
+        )?;
+        if other {
+            font_tag.insert(id, twin);
+        } else {
+            // Its fonts went to a font tag of the same name from an earlier run.
+            c.execute("DELETE FROM tags WHERE id = ?1", [id])?;
+            merge_rule_tag(c, id, twin)?;
+            font_tag.insert(id, twin);
+        }
+    }
+
+    // ---- smart folders
+    let smart: Vec<(String, String, String, Option<String>, f64)> = {
+        let mut stmt = c.prepare("SELECT id, name, rule, color, sort_order FROM smart_folders WHERE mode = 'stock'")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        rows.collect::<DbResult<_>>()?
+    };
+    for (id, name, json, color, order) in smart {
+        let Ok(rule) = serde_json::from_str::<Rule>(&json) else { continue };
+        let kinds = &rule.filter.kinds;
+        let font = kinds.is_empty() || kinds.contains(&Kind::Font);
+        let other = kinds.is_empty() || kinds.iter().any(|k| *k != Kind::Font);
+        if !font {
+            continue;
+        }
+        // The font version: its tags' font twins, and the fonts of its kinds.
+        let mut font_rule = rule.clone();
+        font_rule.tag_ids = rule.tag_ids.iter().map(|t| font_tag.get(t).copied().unwrap_or(*t)).collect();
+        if !kinds.is_empty() {
+            font_rule.filter.kinds = vec![Kind::Font];
+        }
+        // The JSON is edited in place where it stays, so fields this build doesn't know are kept.
+        let edit = |rule: &Rule| -> String {
+            let mut v: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+            if let Some(o) = v.as_object_mut() {
+                o.insert("tagIds".into(), serde_json::json!(rule.tag_ids));
+                if let Some(f) = o.get_mut("filter").and_then(|f| f.as_object_mut()) {
+                    f.insert("kinds".into(), serde_json::json!(rule.filter.kinds));
+                }
+            }
+            v.to_string()
+        };
+        if !other {
+            c.execute(
+                "UPDATE smart_folders SET mode = 'font', rule = ?2 WHERE id = ?1",
+                params![id, edit(&font_rule)],
+            )?;
+            continue;
+        }
+        if kinds.is_empty() && count_rule(c, &font_rule, Some(Mode::Font))? == 0 {
+            continue;
+        }
+        let exists = c
+            .query_row("SELECT 1 FROM smart_folders WHERE name = ?1 AND mode = 'font'", [&name], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if !exists {
+            c.execute(
+                "INSERT INTO smart_folders (id, name, rule, color, sort_order, mode) VALUES (?1, ?2, ?3, ?4, ?5, 'font')",
+                params![new_id(), name, edit(&font_rule), color, order],
+            )?;
+        }
+        if !kinds.is_empty() {
+            let mut stock_rule = rule.clone();
+            stock_rule.filter.kinds.retain(|k| *k != Kind::Font);
+            c.execute("UPDATE smart_folders SET rule = ?2 WHERE id = ?1", params![id, edit(&stock_rule)])?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1401,7 +1765,7 @@ pub struct Counts {
     pub trash: i64,
     pub favorites: i64,
     pub pinned: i64,
-    /// Items on the work tray (not in the trash).
+    /// Items on the shelf (not in the trash).
     pub tray: i64,
     /// Items not in the trash, by kind (kinds with none are left out).
     pub kinds: BTreeMap<Kind, i64>,
@@ -1420,10 +1784,9 @@ fn kind_where(kind: Option<Kind>, n: usize, t: &str) -> (String, Box<dyn ToSql>)
     (format!("(?{n} IS NULL OR {t}.kind = ?{n})"), Box::new(kind.map(Kind::as_str)))
 }
 
-/// Totals for the sidebar. With `kind`, everything but `kinds` counts only
-/// items of that kind (the font mode; `kinds` is for
-/// switching between them).
-pub fn counts(conn: &Connection, kind: Option<Kind>) -> DbResult<Counts> {
+/// Totals for the sidebar. With `mode`, everything but `kinds` counts only
+/// items of that mode (`kinds` is for switching between them).
+pub fn counts(conn: &Connection, mode: Option<Mode>) -> DbResult<Counts> {
     let mut stmt = conn.prepare_cached("SELECT kind, COUNT(*) FROM items WHERE deleted_at IS NULL GROUP BY kind")?;
     let kinds = stmt
         .query_map([], |r| Ok((Kind::parse(&r.get::<_, String>(0)?), r.get::<_, i64>(1)?)))?
@@ -1461,7 +1824,7 @@ pub fn counts(conn: &Connection, kind: Option<Kind>) -> DbResult<Counts> {
         .collect();
     let font_weights = sums(&weight_terms)?.into_iter().filter(|(_, n)| *n > 0).collect();
     let font_features = sums(&feature_terms)?.into_iter().filter(|(_, n)| *n > 0).collect();
-    let (of_kind, arg) = kind_where(kind, 1, "items");
+    let (of_kind, arg) = mode_where(mode, 1, "items");
     conn.query_row(
         &format!(
             "SELECT
@@ -1555,20 +1918,22 @@ pub struct Folder {
     pub color: Option<String>,
     /// Shared on the local network (share.rs).
     pub shared: bool,
+    pub mode: Mode,
 }
 
-/// Every folder; `count` is its live items (of `kind`, when given).
-pub fn list_folders(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<Folder>> {
-    let (of_kind, arg) = kind_where(kind, 1, "i");
-    let mut stmt = conn.prepare(&format!(
+/// The folders of `mode` (every folder when None); `count` is their live items.
+pub fn list_folders(conn: &Connection, mode: Option<Mode>) -> DbResult<Vec<Folder>> {
+    let mut stmt = conn.prepare(
         "SELECT f.id, f.parent_id, f.name,
            (SELECT COUNT(*) FROM item_folders x JOIN items i ON i.id = x.item_id
-            WHERE x.folder_id = f.id AND i.deleted_at IS NULL AND {of_kind}),
+            WHERE x.folder_id = f.id AND i.deleted_at IS NULL AND (i.kind = 'font') = (f.mode = 'font')),
            f.color,
-           EXISTS (SELECT 1 FROM shares s WHERE s.folder_id = f.id)
-         FROM folders f ORDER BY f.sort_order IS NULL, f.sort_order, f.name COLLATE NOCASE"
-    ))?;
-    let rows = stmt.query_map([arg.as_ref()], |r| {
+           EXISTS (SELECT 1 FROM shares s WHERE s.folder_id = f.id),
+           f.mode
+         FROM folders f WHERE ?1 IS NULL OR f.mode = ?1
+         ORDER BY f.sort_order IS NULL, f.sort_order, f.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([mode.map(Mode::as_str)], |r| {
         Ok(Folder {
             id: r.get(0)?,
             parent_id: r.get(1)?,
@@ -1576,18 +1941,24 @@ pub fn list_folders(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<Folde
             count: r.get(3)?,
             color: r.get(4)?,
             shared: r.get(5)?,
+            mode: Mode::parse(&r.get::<_, String>(6)?),
         })
     })?;
     rows.collect()
 }
 
-/// Creates a folder at the end of its siblings.
-pub fn create_folder(conn: &Connection, name: &str, parent_id: Option<&str>) -> DbResult<String> {
+/// Creates a folder of `mode` at the end of its siblings. A subfolder is of
+/// its parent's mode, whatever `mode` says.
+pub fn create_folder(conn: &Connection, name: &str, parent_id: Option<&str>, mode: Mode) -> DbResult<String> {
+    let mode = match parent_id {
+        Some(p) => folder_mode(conn, p)?.unwrap_or(mode),
+        None => mode,
+    };
     let id = uuid::Uuid::new_v4().simple().to_string();
     conn.execute(
-        "INSERT INTO folders (id, parent_id, name, sort_order) VALUES (?1, ?2, ?3,
-           (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM folders WHERE parent_id IS ?2))",
-        params![id, parent_id, name],
+        "INSERT INTO folders (id, parent_id, name, sort_order, mode) VALUES (?1, ?2, ?3,
+           (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM folders WHERE parent_id IS ?2 AND mode = ?4), ?4)",
+        params![id, parent_id, name, mode.as_str()],
     )?;
     Ok(id)
 }
@@ -1625,12 +1996,13 @@ fn would_cycle(conn: &Connection, id: &str, new_parent: Option<&str>) -> DbResul
     Ok(false)
 }
 
-fn sibling_ids(conn: &Connection, parent: Option<&str>) -> DbResult<Vec<String>> {
+/// The folders of `mode` under `parent` (the top level of each mode is its own).
+fn sibling_ids(conn: &Connection, parent: Option<&str>, mode: Mode) -> DbResult<Vec<String>> {
     let mut stmt = conn.prepare(
-        "SELECT id FROM folders WHERE parent_id IS ?1
+        "SELECT id FROM folders WHERE parent_id IS ?1 AND mode = ?2
          ORDER BY sort_order IS NULL, sort_order, name COLLATE NOCASE",
     )?;
-    let rows = stmt.query_map([parent], |r| r.get(0))?;
+    let rows = stmt.query_map(params![parent, mode.as_str()], |r| r.get(0))?;
     rows.collect()
 }
 
@@ -1643,19 +2015,21 @@ fn renumber(conn: &Connection, ids: &[String]) -> DbResult<()> {
 }
 
 /// Puts a folder under `parent`, in front of sibling `before` (None = last).
-/// Returns false (and does nothing) if that would create a cycle.
+/// Returns false (and does nothing) if that would create a cycle, or put it
+/// under a folder of the other mode.
 pub fn place_folder(
     conn: &mut Connection,
     id: &str,
     parent: Option<&str>,
     before: Option<&str>,
 ) -> DbResult<bool> {
-    if would_cycle(conn, id, parent)? {
+    let Some(mode) = folder_mode(conn, id)? else { return Ok(false) };
+    if would_cycle(conn, id, parent)? || parent.is_some_and(|p| folder_mode(conn, p).ok().flatten() != Some(mode)) {
         return Ok(false);
     }
     let tx = conn.transaction()?;
     tx.execute("UPDATE folders SET parent_id = ?2 WHERE id = ?1", params![id, parent])?;
-    let mut order = sibling_ids(&tx, parent)?;
+    let mut order = sibling_ids(&tx, parent, mode)?;
     order.retain(|x| x != id);
     let at = before
         .and_then(|b| order.iter().position(|x| x == b))
@@ -1670,9 +2044,9 @@ pub fn place_folder(
 /// top (`i32::MIN`) / bottom (`i32::MAX`).
 pub fn shift_folder(conn: &mut Connection, id: &str, by: i32) -> DbResult<()> {
     let tx = conn.transaction()?;
-    let parent: Option<String> =
-        tx.query_row("SELECT parent_id FROM folders WHERE id = ?1", [id], |r| r.get(0))?;
-    let mut order = sibling_ids(&tx, parent.as_deref())?;
+    let (parent, mode): (Option<String>, String) =
+        tx.query_row("SELECT parent_id, mode FROM folders WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let mut order = sibling_ids(&tx, parent.as_deref(), Mode::parse(&mode))?;
     if let Some(from) = order.iter().position(|x| x == id) {
         let item = order.remove(from);
         let to = (from as i64 + by as i64).clamp(0, order.len() as i64) as usize;
@@ -1682,14 +2056,15 @@ pub fn shift_folder(conn: &mut Connection, id: &str, by: i32) -> DbResult<()> {
     tx.commit()
 }
 
-/// Resets the children of `parent` to A→Z order.
-pub fn sort_folders_by_name(conn: &mut Connection, parent: Option<&str>) -> DbResult<()> {
+/// Resets the children of `parent` (the top level of `mode` when None) to A→Z order.
+pub fn sort_folders_by_name(conn: &mut Connection, parent: Option<&str>, mode: Mode) -> DbResult<()> {
     let tx = conn.transaction()?;
     let ids: Vec<String> = {
         let mut stmt = tx.prepare(
-            "SELECT id FROM folders WHERE parent_id IS ?1 ORDER BY name COLLATE NOCASE, id",
+            "SELECT id FROM folders WHERE parent_id IS ?1 AND (?1 IS NOT NULL OR mode = ?2)
+             ORDER BY name COLLATE NOCASE, id",
         )?;
-        let rows = stmt.query_map([parent], |r| r.get(0))?;
+        let rows = stmt.query_map(params![parent, mode.as_str()], |r| r.get(0))?;
         rows.collect::<DbResult<_>>()?
     };
     renumber(&tx, &ids)?;
@@ -1706,6 +2081,7 @@ pub struct SmartFolder {
     pub rule: Rule,
     pub count: i64,
     pub color: Option<String>,
+    pub mode: Mode,
 }
 
 fn load_rule(conn: &Connection, id: &str) -> DbResult<Option<Rule>> {
@@ -1727,12 +2103,12 @@ fn clean_rule(conn: &Connection, mut rule: Rule) -> Rule {
     rule
 }
 
-fn count_rule(conn: &Connection, rule: &Rule, kind: Option<Kind>) -> DbResult<i64> {
+fn count_rule(conn: &Connection, rule: &Rule, mode: Option<Mode>) -> DbResult<i64> {
     let mut wheres = vec!["items.deleted_at IS NULL".to_string()];
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
-    if let Some(k) = kind {
-        wheres.push("items.kind = ?".into());
-        args.push(Box::new(k.as_str()));
+    if let Some(m) = mode {
+        wheres.push("(items.kind = 'font') = (? = 'font')".into());
+        args.push(Box::new(m.as_str()));
     }
     push_rule(rule, &mut wheres, &mut args);
     conn.query_row(
@@ -1742,29 +2118,35 @@ fn count_rule(conn: &Connection, rule: &Rule, kind: Option<Kind>) -> DbResult<i6
     )
 }
 
-/// Every smart folder; `count` is its live matches (of `kind`, when given).
-pub fn list_smart_folders(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<SmartFolder>> {
-    let rows: Vec<(String, String, String, Option<String>)> = {
-        let mut stmt =
-            conn.prepare("SELECT id, name, rule, color FROM smart_folders ORDER BY sort_order, name")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+/// The smart folders of `mode` (every one when None); `count` is their live
+/// matches among the items of their mode.
+pub fn list_smart_folders(conn: &Connection, mode: Option<Mode>) -> DbResult<Vec<SmartFolder>> {
+    let rows: Vec<(String, String, String, Option<String>, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT id, name, rule, color, mode FROM smart_folders WHERE ?1 IS NULL OR mode = ?1
+             ORDER BY sort_order, name",
+        )?;
+        let rows = stmt.query_map([mode.map(Mode::as_str)], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?;
         rows.collect::<DbResult<_>>()?
     };
     rows.into_iter()
-        .map(|(id, name, json, color)| {
+        .map(|(id, name, json, color, mode)| {
             let rule = clean_rule(conn, serde_json::from_str(&json).unwrap_or_default());
-            let count = count_rule(conn, &rule, kind)?;
-            Ok(SmartFolder { id, name, rule, count, color })
+            let mode = Mode::parse(&mode);
+            let count = count_rule(conn, &rule, Some(mode))?;
+            Ok(SmartFolder { id, name, rule, count, color, mode })
         })
         .collect()
 }
 
-pub fn create_smart_folder(conn: &Connection, name: &str, rule: &Rule) -> DbResult<String> {
+pub fn create_smart_folder(conn: &Connection, name: &str, rule: &Rule, mode: Mode) -> DbResult<String> {
     let id = uuid::Uuid::new_v4().simple().to_string();
     conn.execute(
-        "INSERT INTO smart_folders (id, name, rule, sort_order)
-         VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM smart_folders))",
-        params![id, name, serde_json::to_string(rule).unwrap_or_default()],
+        "INSERT INTO smart_folders (id, name, rule, sort_order, mode)
+         VALUES (?1, ?2, ?3, (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM smart_folders), ?4)",
+        params![id, name, serde_json::to_string(rule).unwrap_or_default(), mode.as_str()],
     )?;
     Ok(id)
 }
@@ -1792,9 +2174,9 @@ pub fn delete_smart_folder(conn: &Connection, id: &str) -> DbResult<()> {
     Ok(())
 }
 
-/// File types in the library with counts (live items of `kind`, when given), for the filter bar.
-pub fn list_exts(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<(String, i64)>> {
-    let (of_kind, arg) = kind_where(kind, 1, "items");
+/// File types in the library with counts (live items of `mode`, when given), for the filter bar.
+pub fn list_exts(conn: &Connection, mode: Option<Mode>) -> DbResult<Vec<(String, i64)>> {
+    let (of_kind, arg) = mode_where(mode, 1, "items");
     let mut stmt = conn.prepare(&format!(
         "SELECT lower(ext), COUNT(*) FROM items WHERE deleted_at IS NULL AND {of_kind} GROUP BY lower(ext)"
     ))?;
@@ -1812,23 +2194,32 @@ pub fn list_exts(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<(String,
     Ok(merged)
 }
 
+/// The items among `ids` that can go into `folder_id`: those of its mode.
+fn of_folder_mode(conn: &Connection, ids: &[String], folder_id: &str) -> DbResult<Vec<String>> {
+    let Some(mode) = folder_mode(conn, folder_id)? else { return Ok(vec![]) };
+    Ok(by_mode(conn, ids)?.into_iter().filter(|(m, _)| *m == mode).flat_map(|(_, v)| v).collect())
+}
+
 /// Puts items into a folder (taking them out of the one they were in); they
-/// go to the end of its manual order. Items already there stay where they are.
+/// go to the end of its manual order. Items already there stay where they are,
+/// and items of the other mode aren't moved (a folder holds its mode's only).
 pub fn move_to_folder(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
+    let item_ids = of_folder_mode(conn, item_ids, folder_id)?;
     let mut del = conn.prepare("DELETE FROM item_folders WHERE item_id = ?1 AND folder_id != ?2")?;
-    for id in item_ids {
+    for id in &item_ids {
         del.execute(params![id, folder_id])?;
     }
-    file_unfiled(conn, item_ids, folder_id)
+    file_unfiled(conn, &item_ids, folder_id)
 }
 
 /// Like `move_to_folder`, but leaves items that already have a folder alone.
 pub fn file_unfiled(conn: &Connection, item_ids: &[String], folder_id: &str) -> DbResult<()> {
+    let item_ids = of_folder_mode(conn, item_ids, folder_id)?;
     let mut stmt = conn.prepare(
         "INSERT OR IGNORE INTO item_folders (item_id, folder_id, position)
          VALUES (?1, ?2, (SELECT COALESCE(MAX(position), 0) + 1 FROM item_folders WHERE folder_id = ?2))",
     )?;
-    for id in item_ids {
+    for id in &item_ids {
         stmt.execute(params![id, folder_id])?;
     }
     Ok(())
@@ -1866,18 +2257,19 @@ pub fn reorder_in_folder(
     tx.commit()
 }
 
-/// Returns the child folder called `name` under `parent`, creating it if needed.
-pub fn find_or_create_folder(conn: &Connection, parent: Option<&str>, name: &str) -> DbResult<String> {
+/// Returns the child folder called `name` under `parent` (at the top of
+/// `mode` when None), creating it if needed.
+pub fn find_or_create_folder(conn: &Connection, parent: Option<&str>, name: &str, mode: Mode) -> DbResult<String> {
     let existing = conn
         .query_row(
-            "SELECT id FROM folders WHERE name = ?1 AND parent_id IS ?2",
-            params![name, parent],
+            "SELECT id FROM folders WHERE name = ?1 AND parent_id IS ?2 AND (?2 IS NOT NULL OR mode = ?3)",
+            params![name, parent, mode.as_str()],
             |r| r.get(0),
         )
         .optional()?;
     match existing {
         Some(id) => Ok(id),
-        None => create_folder(conn, name, parent),
+        None => create_folder(conn, name, parent, mode),
     }
 }
 
@@ -1898,27 +2290,30 @@ pub struct Tag {
     pub name: String,
     pub count: i64,
     pub color: Option<String>,
+    pub mode: Mode,
 }
 
-/// Every tag; `count` is its live items (of `kind`, when given).
-pub fn list_tags(conn: &Connection, kind: Option<Kind>) -> DbResult<Vec<Tag>> {
-    let (of_kind, arg) = kind_where(kind, 1, "i");
-    let mut stmt = conn.prepare(&format!(
+/// The tags of `mode` (every tag when None); `count` is their live items.
+pub fn list_tags(conn: &Connection, mode: Option<Mode>) -> DbResult<Vec<Tag>> {
+    let mut stmt = conn.prepare(
         "SELECT t.id, t.name,
            (SELECT COUNT(*) FROM item_tags x JOIN items i ON i.id = x.item_id
-            WHERE x.tag_id = t.id AND i.deleted_at IS NULL AND {of_kind}),
-           t.color
-         FROM tags t ORDER BY t.name COLLATE NOCASE"
-    ))?;
-    let rows = stmt.query_map([arg.as_ref()], |r| {
-        Ok(Tag {
-            id: r.get(0)?,
-            name: r.get(1)?,
-            count: r.get(2)?,
-            color: r.get(3)?,
-        })
-    })?;
+            WHERE x.tag_id = t.id AND i.deleted_at IS NULL AND (i.kind = 'font') = (t.mode = 'font')),
+           t.color, t.mode
+         FROM tags t WHERE ?1 IS NULL OR t.mode = ?1 ORDER BY t.name COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([mode.map(Mode::as_str)], tag_row)?;
     rows.collect()
+}
+
+fn tag_row(r: &rusqlite::Row) -> DbResult<Tag> {
+    Ok(Tag {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        count: r.get(2)?,
+        color: r.get(3)?,
+        mode: Mode::parse(&r.get::<_, String>(4)?),
+    })
 }
 
 /// Colours a folder, smart folder or tag can take (the UI maps them to shades).
@@ -1947,19 +2342,30 @@ pub fn set_color(conn: &Connection, target: ColorTarget, id: &dyn ToSql, color: 
     Ok(())
 }
 
-pub(crate) fn ensure_tag(conn: &Connection, name: &str) -> DbResult<i64> {
-    conn.execute("INSERT OR IGNORE INTO tags (name) VALUES (?1)", [name])?;
-    conn.query_row("SELECT id FROM tags WHERE name = ?1", [name], |r| r.get(0))
+/// The tag `name` of `mode`, if there is one.
+pub(crate) fn tag_id(conn: &Connection, name: &str, mode: Mode) -> DbResult<Option<i64>> {
+    conn.query_row("SELECT id FROM tags WHERE name = ?1 AND mode = ?2", params![name, mode.as_str()], |r| r.get(0))
+        .optional()
 }
 
+/// The tag `name` of `mode`, made if there isn't one.
+pub(crate) fn ensure_tag(conn: &Connection, name: &str, mode: Mode) -> DbResult<i64> {
+    conn.execute("INSERT OR IGNORE INTO tags (name, mode) VALUES (?1, ?2)", params![name, mode.as_str()])?;
+    conn.query_row("SELECT id FROM tags WHERE name = ?1 AND mode = ?2", params![name, mode.as_str()], |r| r.get(0))
+}
+
+/// Tags items by name, each with the tag of its own mode (made where missing).
 pub fn add_tags(conn: &mut Connection, item_ids: &[String], names: &[String]) -> DbResult<()> {
     let tx = conn.transaction()?;
+    let groups = by_mode(&tx, item_ids)?;
     for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
-        let tag_id = ensure_tag(&tx, name)?;
-        let mut stmt =
-            tx.prepare_cached("INSERT OR IGNORE INTO item_tags (item_id, tag_id) VALUES (?1, ?2)")?;
-        for id in item_ids {
-            stmt.execute(params![id, tag_id])?;
+        for (mode, ids) in &groups {
+            let tag_id = ensure_tag(&tx, name, *mode)?;
+            let mut stmt =
+                tx.prepare_cached("INSERT OR IGNORE INTO item_tags (item_id, tag_id) VALUES (?1, ?2)")?;
+            for id in ids {
+                stmt.execute(params![id, tag_id])?;
+            }
         }
     }
     tx.commit()
@@ -1973,7 +2379,7 @@ pub fn remove_tag(conn: &Connection, item_ids: &[String], tag_id: i64) -> DbResu
     Ok(())
 }
 
-/// Renames a tag. If another tag already has that name, the two are merged.
+/// Renames a tag. If another tag of its mode already has that name, the two are merged.
 pub fn rename_tag(conn: &mut Connection, id: i64, name: &str) -> DbResult<()> {
     let name = name.trim();
     if name.is_empty() {
@@ -1982,7 +2388,7 @@ pub fn rename_tag(conn: &mut Connection, id: i64, name: &str) -> DbResult<()> {
     let tx = conn.transaction()?;
     let existing: Option<i64> = tx
         .query_row(
-            "SELECT id FROM tags WHERE name = ?1 AND id != ?2",
+            "SELECT id FROM tags WHERE name = ?1 AND id != ?2 AND mode = (SELECT mode FROM tags WHERE id = ?2)",
             params![name, id],
             |r| r.get(0),
         )
@@ -2055,19 +2461,10 @@ pub fn selection_info(conn: &Connection, ids: &[String]) -> DbResult<SelectionIn
     }
     let ids = ids_param(ids);
     let mut stmt = conn.prepare(&format!(
-        "SELECT t.id, t.name, COUNT(*), t.color FROM item_tags x JOIN tags t ON t.id = x.tag_id
+        "SELECT t.id, t.name, COUNT(*), t.color, t.mode FROM item_tags x JOIN tags t ON t.id = x.tag_id
          WHERE x.item_id {IN_IDS} GROUP BY t.id ORDER BY t.name COLLATE NOCASE"
     ))?;
-    let tags = stmt
-        .query_map([&ids], |r| {
-            Ok(Tag {
-                id: r.get(0)?,
-                name: r.get(1)?,
-                count: r.get(2)?,
-                color: r.get(3)?,
-            })
-        })?
-        .collect::<DbResult<Vec<_>>>()?;
+    let tags = stmt.query_map([&ids], tag_row)?.collect::<DbResult<Vec<_>>>()?;
     let mut stmt = conn.prepare(&format!(
         "SELECT folder_id, COUNT(*) FROM item_folders WHERE item_id {IN_IDS} GROUP BY folder_id"
     ))?;
@@ -2195,7 +2592,7 @@ mod tests {
         add(&mut conn, "a", "cat.png", 1);
         add(&mut conn, "b", "dog.png", 2);
         add(&mut conn, "c", "bird.png", 3);
-        let f = create_folder(&conn, "Animals", None).unwrap();
+        let f = create_folder(&conn, "Animals", None, Mode::Stock).unwrap();
         move_to_folder(&conn, &s(&["a"]), &f).unwrap();
         add_tags(&mut conn, &s(&["b"]), &s(&["cute"])).unwrap();
         trash_items(&conn, &s(&["c"])).unwrap();
@@ -2237,7 +2634,7 @@ mod tests {
         add(&mut conn, "a", "a.png", 1);
         add(&mut conn, "b", "b.png", 2);
         add(&mut conn, "c", "c.png", 3);
-        let f = create_folder(&conn, "F", None).unwrap();
+        let f = create_folder(&conn, "F", None, Mode::Stock).unwrap();
         move_to_folder(&conn, &s(&["b"]), &f).unwrap();
         add_tags(&mut conn, &s(&["b"]), &s(&["x"])).unwrap();
         add_tags(&mut conn, &s(&["c"]), &s(&["y"])).unwrap();
@@ -2266,7 +2663,7 @@ mod tests {
         let mut conn = mem();
         add(&mut conn, "a", "a.png", 1);
         add(&mut conn, "b", "b.png", 2);
-        let (f, g) = (create_folder(&conn, "F", None).unwrap(), create_folder(&conn, "G", None).unwrap());
+        let (f, g) = (create_folder(&conn, "F", None, Mode::Stock).unwrap(), create_folder(&conn, "G", None, Mode::Stock).unwrap());
         move_to_folder(&conn, &s(&["a"]), &f).unwrap();
         move_to_folder(&conn, &s(&["b"]), &g).unwrap();
         set_rating(&conn, &s(&["a"]), 5).unwrap();
@@ -2279,8 +2676,8 @@ mod tests {
     fn colours_folders_smart_folders_and_tags() {
         let mut conn = mem();
         add(&mut conn, "a", "a.png", 1);
-        let f = create_folder(&conn, "F", None).unwrap();
-        let sf = create_smart_folder(&conn, "S", &Rule::default()).unwrap();
+        let f = create_folder(&conn, "F", None, Mode::Stock).unwrap();
+        let sf = create_smart_folder(&conn, "S", &Rule::default(), Mode::Stock).unwrap();
         add_tags(&mut conn, &s(&["a"]), &s(&["t"])).unwrap();
         let tag = list_tags(&conn, None).unwrap()[0].id;
         set_color(&conn, ColorTarget::Folder, &f, Some("red")).unwrap();
@@ -2299,7 +2696,7 @@ mod tests {
     fn an_item_lives_in_one_folder() {
         let mut conn = mem();
         add(&mut conn, "a", "a.png", 1);
-        let (f, g) = (create_folder(&conn, "F", None).unwrap(), create_folder(&conn, "G", None).unwrap());
+        let (f, g) = (create_folder(&conn, "F", None, Mode::Stock).unwrap(), create_folder(&conn, "G", None, Mode::Stock).unwrap());
         move_to_folder(&conn, &s(&["a"]), &f).unwrap();
         move_to_folder(&conn, &s(&["a"]), &f).unwrap(); // same folder again: no-op
         move_to_folder(&conn, &s(&["a"]), &g).unwrap();
@@ -2316,7 +2713,7 @@ mod tests {
         let mut conn = mem();
         conn.execute_batch("PRAGMA user_version = 4; DROP INDEX IF EXISTS idx_item_folders_item;").unwrap();
         add(&mut conn, "a", "a.png", 1);
-        let (f, g) = (create_folder(&conn, "F", None).unwrap(), create_folder(&conn, "G", None).unwrap());
+        let (f, g) = (create_folder(&conn, "F", None, Mode::Stock).unwrap(), create_folder(&conn, "G", None, Mode::Stock).unwrap());
         for folder in [&f, &g] {
             conn.execute("INSERT INTO item_folders (item_id, folder_id, position) VALUES ('a', ?, 1)", [folder])
                 .unwrap();
@@ -2395,8 +2792,8 @@ mod tests {
     fn folder_tree_ops() {
         let mut conn = mem();
         add(&mut conn, "a", "a.png", 1);
-        let p = create_folder(&conn, "Parent", None).unwrap();
-        let c = create_folder(&conn, "Child", Some(&p)).unwrap();
+        let p = create_folder(&conn, "Parent", None, Mode::Stock).unwrap();
+        let c = create_folder(&conn, "Child", Some(&p), Mode::Stock).unwrap();
         move_to_folder(&conn, &s(&["a"]), &c).unwrap();
 
         assert!(!move_folder(&mut conn, &p, Some(&c)).unwrap(), "cycle must be rejected");
@@ -2534,13 +2931,13 @@ mod tests {
         // Still cascading, and the highest id isn't handed out again.
         delete_tag(&conn, 2).unwrap();
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM item_tags", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
-        assert_eq!(ensure_tag(&conn, "z").unwrap(), 3);
+        assert_eq!(ensure_tag(&conn, "z", Mode::Stock).unwrap(), 3);
         delete_tag(&conn, 3).unwrap();
-        assert_eq!(ensure_tag(&conn, "w").unwrap(), 4);
+        assert_eq!(ensure_tag(&conn, "w", Mode::Stock).unwrap(), 4);
         // Running the step again (an older build lowered the version) keeps everything.
         conn.pragma_update(None, "user_version", 16).unwrap();
         migrate(&conn).unwrap();
-        assert_eq!(ensure_tag(&conn, "x").unwrap(), 1);
+        assert_eq!(ensure_tag(&conn, "x", Mode::Stock).unwrap(), 1);
         assert_eq!(conn.query_row("SELECT COUNT(*) FROM item_tags", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 
@@ -2662,7 +3059,7 @@ mod tests {
         let mut conn = mem();
         add(&mut conn, "a", "a.png", 1);
         add(&mut conn, "b", "b.png", 2);
-        let f = create_folder(&conn, "F", None).unwrap();
+        let f = create_folder(&conn, "F", None, Mode::Stock).unwrap();
         move_to_folder(&conn, &s(&["a"]), &f).unwrap();
         add_tags(&mut conn, &s(&["a"]), &s(&["x", "y"])).unwrap();
         let items = query_items(&conn, &q(View::All)).unwrap();
@@ -2697,9 +3094,9 @@ mod tests {
         for (i, id) in ["a", "b", "c", "d"].iter().enumerate() {
             add(&mut conn, id, &format!("{id}.png"), i as i64);
         }
-        let p = create_folder(&conn, "P", None).unwrap();
-        let c = create_folder(&conn, "C", Some(&p)).unwrap();
-        let g = create_folder(&conn, "G", Some(&c)).unwrap();
+        let p = create_folder(&conn, "P", None, Mode::Stock).unwrap();
+        let c = create_folder(&conn, "C", Some(&p), Mode::Stock).unwrap();
+        let g = create_folder(&conn, "G", Some(&c), Mode::Stock).unwrap();
         move_to_folder(&conn, &s(&["a", "b", "c"]), &p).unwrap();
         move_to_folder(&conn, &s(&["d"]), &g).unwrap();
 
@@ -2722,11 +3119,11 @@ mod tests {
     #[test]
     fn find_or_create_reuses() {
         let conn = mem();
-        let a = find_or_create_folder(&conn, None, "Photos").unwrap();
-        assert_eq!(find_or_create_folder(&conn, None, "Photos").unwrap(), a);
-        let child = find_or_create_folder(&conn, Some(&a), "Photos").unwrap();
+        let a = find_or_create_folder(&conn, None, "Photos", Mode::Stock).unwrap();
+        assert_eq!(find_or_create_folder(&conn, None, "Photos", Mode::Stock).unwrap(), a);
+        let child = find_or_create_folder(&conn, Some(&a), "Photos", Mode::Stock).unwrap();
         assert_ne!(child, a, "same name under a different parent is a different folder");
-        assert_eq!(find_or_create_folder(&conn, Some(&a), "Photos").unwrap(), child);
+        assert_eq!(find_or_create_folder(&conn, Some(&a), "Photos", Mode::Stock).unwrap(), child);
     }
 
     #[test]
@@ -2815,43 +3212,230 @@ mod tests {
     }
 
     #[test]
-    fn counts_of_one_kind() {
+    fn counts_of_one_mode() {
         let mut conn = mem();
         add(&mut conn, "a", "cat.png", 1);
         add(&mut conn, "b", "dog.png", 2);
         add(&mut conn, "f", "font.ttf", 3);
         conn.execute("UPDATE items SET kind = 'font', ext = 'ttf', width = 0, height = 0 WHERE id = 'f'", []).unwrap();
-        let folder = create_folder(&conn, "Mixed", None).unwrap();
+        let folder = create_folder(&conn, "Images", None, Mode::Stock).unwrap();
+        // A folder holds its mode's items only: the font stays unfiled.
         move_to_folder(&conn, &s(&["a", "f"]), &folder).unwrap();
+        // The same name tags each item with its mode's tag.
         add_tags(&mut conn, &s(&["b", "f"]), &s(&["pet"])).unwrap();
         set_favorite(&conn, &s(&["f"]), true).unwrap();
         trash_items(&conn, &s(&["b"])).unwrap();
-        create_smart_folder(&conn, "Pets", &Rule { tag_ids: vec![1], ..Default::default() }).unwrap();
+        let stock_pet = tag_id(&conn, "pet", Mode::Stock).unwrap().unwrap();
+        create_smart_folder(&conn, "Pets", &Rule { tag_ids: vec![stock_pet], ..Default::default() }, Mode::Stock).unwrap();
 
-        // Everything, as before.
+        // Everything.
         let all = counts(&conn, None).unwrap();
-        assert_eq!((all.all, all.unfiled, all.untagged, all.trash, all.favorites), (2, 0, 1, 1, 1));
+        assert_eq!((all.all, all.unfiled, all.untagged, all.trash, all.favorites), (2, 1, 1, 1, 1));
         assert_eq!(all.kinds, BTreeMap::from([(Kind::Image, 1), (Kind::Font, 1)]));
-        assert_eq!(list_folders(&conn, None).unwrap()[0].count, 2);
-        assert_eq!(list_tags(&conn, None).unwrap()[0].count, 1, "b is in the trash");
+        assert_eq!(list_folders(&conn, None).unwrap().len(), 1);
+        assert_eq!(list_tags(&conn, None).unwrap().len(), 2, "pet of each mode");
         assert_eq!(list_exts(&conn, None).unwrap().len(), 2);
 
-        // Fonts only: images don't count, but `kinds` still lists both.
-        let fonts = counts(&conn, Some(Kind::Font)).unwrap();
-        assert_eq!((fonts.all, fonts.unfiled, fonts.untagged, fonts.trash, fonts.favorites), (1, 0, 0, 0, 1));
+        // Fonts: images don't count, but `kinds` still lists both.
+        let fonts = counts(&conn, Some(Mode::Font)).unwrap();
+        assert_eq!((fonts.all, fonts.unfiled, fonts.untagged, fonts.trash, fonts.favorites), (1, 1, 0, 0, 1));
         assert_eq!(fonts.kinds, all.kinds);
-        assert_eq!(list_folders(&conn, Some(Kind::Font)).unwrap()[0].count, 1);
-        assert_eq!(list_tags(&conn, Some(Kind::Font)).unwrap()[0].count, 1);
-        assert_eq!(list_smart_folders(&conn, Some(Kind::Font)).unwrap()[0].count, 1);
-        assert_eq!(list_exts(&conn, Some(Kind::Font)).unwrap(), vec![("ttf".to_string(), 1)]);
+        assert!(list_folders(&conn, Some(Mode::Font)).unwrap().is_empty());
+        let tags = list_tags(&conn, Some(Mode::Font)).unwrap();
+        assert_eq!((tags.len(), tags[0].count, tags[0].mode), (1, 1, Mode::Font));
+        assert!(list_smart_folders(&conn, Some(Mode::Font)).unwrap().is_empty());
+        assert_eq!(list_exts(&conn, Some(Mode::Font)).unwrap(), vec![("ttf".to_string(), 1)]);
 
-        // Images only.
-        let images = counts(&conn, Some(Kind::Image)).unwrap();
-        assert_eq!((images.all, images.unfiled, images.untagged, images.trash, images.favorites), (1, 0, 1, 1, 0));
-        assert_eq!(list_folders(&conn, Some(Kind::Image)).unwrap()[0].count, 1);
-        assert_eq!(list_tags(&conn, Some(Kind::Image)).unwrap()[0].count, 0);
-        assert_eq!(list_smart_folders(&conn, Some(Kind::Image)).unwrap()[0].count, 0);
-        assert_eq!(list_exts(&conn, Some(Kind::Image)).unwrap(), vec![("png".to_string(), 1)]);
+        // The stock.
+        let stock = counts(&conn, Some(Mode::Stock)).unwrap();
+        assert_eq!((stock.all, stock.unfiled, stock.untagged, stock.trash, stock.favorites), (1, 0, 1, 1, 0));
+        assert_eq!(list_folders(&conn, Some(Mode::Stock)).unwrap()[0].count, 1);
+        assert_eq!(list_tags(&conn, Some(Mode::Stock)).unwrap()[0].count, 0, "b is in the trash");
+        assert_eq!(list_smart_folders(&conn, Some(Mode::Stock)).unwrap()[0].count, 0);
+        assert_eq!(list_exts(&conn, Some(Mode::Stock)).unwrap(), vec![("png".to_string(), 1)]);
+    }
+
+    /// Turns a fresh database back into what version 20 left: no modes on
+    /// folders, smart folders and tags, and tag names unique on their own.
+    fn back_to_v20(conn: &Connection) {
+        conn.execute_batch(
+            "ALTER TABLE folders DROP COLUMN mode;
+             ALTER TABLE smart_folders DROP COLUMN mode;
+             DROP TABLE item_tags;
+             DROP TABLE tags;
+             CREATE TABLE tags (
+               id    INTEGER PRIMARY KEY AUTOINCREMENT,
+               name  TEXT NOT NULL UNIQUE COLLATE NOCASE,
+               color TEXT
+             );
+             CREATE TABLE item_tags (
+               item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+               tag_id  INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+               PRIMARY KEY (item_id, tag_id)
+             );
+             CREATE INDEX idx_item_tags_tag ON item_tags(tag_id);
+             PRAGMA user_version = 20;",
+        )
+        .unwrap();
+    }
+
+    fn add_font(conn: &mut Connection, id: &str, at: i64) {
+        add(conn, id, &format!("{id}.ttf"), at);
+        conn.execute("UPDATE items SET kind = 'font', ext = 'ttf', width = 0, height = 0 WHERE id = ?1", [id]).unwrap();
+    }
+
+    #[test]
+    fn splits_folders_tags_and_smart_folders_between_the_modes() {
+        let mut conn = mem();
+        back_to_v20(&conn);
+        add(&mut conn, "i1", "a.png", 1);
+        add(&mut conn, "i2", "b.png", 2);
+        add_font(&mut conn, "f1", 3);
+        add_font(&mut conn, "f2", 4);
+        // P (red) / C1 [i1, f1], P / C2 [f2], P / E (empty); R [i2]; Z (empty).
+        conn.execute_batch(
+            "INSERT INTO folders (id, parent_id, name, sort_order, color) VALUES
+               ('P', NULL, 'P', 1, 'red'), ('C1', 'P', 'C1', 1, NULL), ('C2', 'P', 'C2', 2, NULL),
+               ('E', 'P', 'E', 3, NULL), ('R', NULL, 'R', 2, NULL), ('Z', NULL, 'Z', 3, NULL);
+             INSERT INTO item_folders (item_id, folder_id, position) VALUES
+               ('i1', 'C1', 1), ('f1', 'C1', 2), ('f2', 'C2', 1), ('i2', 'R', 1);
+             INSERT INTO tags (id, name, color) VALUES (1, 'mix', 'blue'), (2, 'fontonly', NULL), (3, 'img', NULL), (10, 'gone', NULL);
+             DELETE FROM tags WHERE id = 10;
+             INSERT INTO item_tags (item_id, tag_id) VALUES ('i1', 1), ('f1', 1), ('f2', 2), ('i2', 3);",
+        )
+        .unwrap();
+        let rule = |r: Rule| serde_json::to_string(&r).unwrap();
+        let with_kinds = |kinds: Vec<Kind>, tags: Vec<i64>| Rule {
+            tag_ids: tags,
+            filter: Filter { kinds, ..Default::default() },
+            ..Default::default()
+        };
+        conn.execute(
+            "INSERT INTO smart_folders (id, name, rule, sort_order) VALUES
+               ('S_all', 'all', ?1, 1), ('S_font', 'font', ?2, 2), ('S_img', 'img', ?3, 3), ('S_none', 'none', ?4, 4)",
+            params![
+                rule(with_kinds(vec![], vec![1])),
+                rule(with_kinds(vec![Kind::Font, Kind::Image], vec![1])),
+                rule(with_kinds(vec![Kind::Image], vec![])),
+                rule(Rule { min_rating: 5, ..Default::default() }),
+            ],
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+        let v: i32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, SCHEMA_VERSION);
+
+        // Folders: P and C1 hold both, so each has a font twin; C2 (fonts only)
+        // moves under P's twin; E (empty) stays with P; R and Z stay.
+        let stock = list_folders(&conn, Some(Mode::Stock)).unwrap();
+        let fonts = list_folders(&conn, Some(Mode::Font)).unwrap();
+        let by = |list: &[Folder], name: &str| list.iter().find(|f| f.name == name).cloned().unwrap();
+        let names = |list: &[Folder]| {
+            let mut n: Vec<String> = list.iter().map(|f| f.name.clone()).collect();
+            n.sort();
+            n
+        };
+        assert_eq!(names(&stock), ["C1", "E", "P", "R", "Z"]);
+        assert_eq!(names(&fonts), ["C1", "C2", "P"]);
+        let font_p = by(&fonts, "P");
+        assert_eq!((font_p.parent_id.as_deref(), font_p.color.as_deref()), (None, Some("red")));
+        assert_eq!(by(&fonts, "C1").parent_id, Some(font_p.id.clone()));
+        assert_eq!(by(&fonts, "C2").id, "C2", "kept its id, under the font P");
+        assert_eq!(by(&fonts, "C2").parent_id, Some(font_p.id.clone()));
+        assert_eq!(by(&stock, "C1").id, "C1");
+        assert_eq!(by(&stock, "E").parent_id.as_deref(), Some("P"));
+        assert_eq!((by(&stock, "C1").count, by(&fonts, "C1").count), (1, 1));
+        let folder_of = |id: &str| -> String {
+            conn.query_row("SELECT folder_id FROM item_folders WHERE item_id = ?1", [id], |r| r.get(0)).unwrap()
+        };
+        assert_eq!(folder_of("i1"), "C1");
+        assert_eq!(folder_of("f1"), by(&fonts, "C1").id);
+
+        // Tags: mix gets a font twin with the same name and colour.
+        let stock_tags = list_tags(&conn, Some(Mode::Stock)).unwrap();
+        let font_tags = list_tags(&conn, Some(Mode::Font)).unwrap();
+        let tag = |list: &[Tag], name: &str| list.iter().find(|t| t.name == name).cloned();
+        assert_eq!(tag(&stock_tags, "mix").map(|t| (t.id, t.count)), Some((1, 1)));
+        let font_mix = tag(&font_tags, "mix").unwrap();
+        assert_eq!((font_mix.count, font_mix.color.as_deref()), (1, Some("blue")));
+        assert!(font_mix.id > 10, "ids of deleted tags aren't used again: {}", font_mix.id);
+        assert_eq!(tag(&font_tags, "fontonly").map(|t| t.id), Some(2));
+        assert!(tag(&stock_tags, "fontonly").is_none());
+        assert_eq!(tag(&stock_tags, "img").map(|t| t.id), Some(3));
+
+        // Smart folders.
+        let smart_stock = list_smart_folders(&conn, Some(Mode::Stock)).unwrap();
+        let smart_fonts = list_smart_folders(&conn, Some(Mode::Font)).unwrap();
+        let smart = |list: &[SmartFolder], name: &str| list.iter().find(|f| f.name == name).cloned();
+        let mut stock_names: Vec<&str> = smart_stock.iter().map(|f| f.name.as_str()).collect();
+        stock_names.sort();
+        assert_eq!(stock_names, ["all", "font", "img", "none"]);
+        let mut font_names: Vec<&str> = smart_fonts.iter().map(|f| f.name.as_str()).collect();
+        font_names.sort();
+        assert_eq!(font_names, ["all", "font"], "none matches no font, img is of images");
+        let font_all = smart(&smart_fonts, "all").unwrap();
+        assert_eq!((font_all.rule.tag_ids.clone(), font_all.count), (vec![font_mix.id], 1));
+        assert_eq!(smart(&smart_fonts, "font").unwrap().rule.filter.kinds, [Kind::Font]);
+        assert_eq!(smart(&smart_stock, "font").unwrap().rule.filter.kinds, [Kind::Image]);
+        assert_eq!(smart(&smart_stock, "all").unwrap().count, 1);
+
+        // A second run (an older build lowered the version) changes nothing.
+        conn.execute_batch("PRAGMA user_version = 20").unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(list_folders(&conn, None).unwrap().len(), 8);
+        assert_eq!(list_tags(&conn, None).unwrap().len(), 4);
+        assert_eq!(list_smart_folders(&conn, None).unwrap().len(), 6);
+    }
+
+    #[test]
+    fn backs_up_a_library_before_splitting_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("library.db");
+        {
+            let conn = open(&path).unwrap();
+            back_to_v20(&conn);
+        }
+        let backup = dir.path().join("library.before-modes.db");
+        assert!(!backup.exists(), "a new library has nothing to back up");
+        open(&path).unwrap();
+        let old = Connection::open(&backup).unwrap();
+        let v: i32 = old.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 20, "the copy is as it was");
+        assert!(!has_column(&old, "folders", "mode").unwrap());
+    }
+
+    #[test]
+    fn folders_and_tags_keep_to_their_mode() {
+        let mut conn = mem();
+        add(&mut conn, "i", "a.png", 1);
+        add_font(&mut conn, "f", 2);
+        let stock = create_folder(&conn, "Work", None, Mode::Stock).unwrap();
+        let font = create_folder(&conn, "Work", None, Mode::Font).unwrap();
+        // A subfolder is of its parent's mode.
+        let sub = create_folder(&conn, "Sub", Some(&font), Mode::Stock).unwrap();
+        assert_eq!(folder_mode(&conn, &sub).unwrap(), Some(Mode::Font));
+        // Each mode's top level is ordered on its own.
+        let other = create_folder(&conn, "Other", None, Mode::Font).unwrap();
+        shift_folder(&mut conn, &other, -1).unwrap();
+        let order: Vec<String> = list_folders(&conn, Some(Mode::Font)).unwrap().into_iter().filter(|f| f.parent_id.is_none()).map(|f| f.id).collect();
+        assert_eq!(order, [other.clone(), font.clone()]);
+        // Nothing goes into a folder of the other mode.
+        assert!(!place_folder(&mut conn, &stock, Some(&font), None).unwrap());
+        move_to_folder(&conn, &s(&["i", "f"]), &font).unwrap();
+        assert_eq!(get_items(&conn, &s(&["i"])).unwrap()[0].folder_id, None);
+        assert_eq!(get_items(&conn, &s(&["f"])).unwrap()[0].folder_id, Some(font.clone()));
+        assert_eq!(find_or_create_folder(&conn, None, "Work", Mode::Stock).unwrap(), stock);
+        assert_eq!(find_or_create_folder(&conn, None, "Work", Mode::Font).unwrap(), font);
+        // Tags of the same name, one per mode; renaming merges within the mode only.
+        add_tags(&mut conn, &s(&["i", "f"]), &s(&["x"])).unwrap();
+        add_tags(&mut conn, &s(&["i"]), &s(&["y"])).unwrap();
+        let fx = tag_id(&conn, "x", Mode::Font).unwrap().unwrap();
+        let sx = tag_id(&conn, "x", Mode::Stock).unwrap().unwrap();
+        assert_ne!(fx, sx);
+        rename_tag(&mut conn, fx, "y").unwrap();
+        assert!(tag_id(&conn, "y", Mode::Font).unwrap().is_some(), "renamed, not merged into the stock's y");
+        assert_eq!(list_tags(&conn, Some(Mode::Stock)).unwrap().len(), 2);
     }
 
     #[test]
@@ -2865,7 +3449,7 @@ mod tests {
         let pet = list_tags(&conn, None).unwrap()[0].id;
 
         let rule = Rule { min_rating: 3, ..Default::default() };
-        let id = create_smart_folder(&conn, "Good", &rule).unwrap();
+        let id = create_smart_folder(&conn, "Good", &rule, Mode::Stock).unwrap();
         let list = list_smart_folders(&conn, None).unwrap();
         assert_eq!((list[0].name.as_str(), list[0].count), ("Good", 2));
         assert_eq!(list[0].rule, rule);
@@ -2913,9 +3497,9 @@ mod tests {
                 .map(|f| f.name)
                 .collect()
         };
-        let b = create_folder(&conn, "B", None).unwrap();
-        let a = create_folder(&conn, "A", None).unwrap();
-        let c = create_folder(&conn, "C", None).unwrap();
+        let b = create_folder(&conn, "B", None, Mode::Stock).unwrap();
+        let a = create_folder(&conn, "A", None, Mode::Stock).unwrap();
+        let c = create_folder(&conn, "C", None, Mode::Stock).unwrap();
         assert_eq!(names(&conn, None), ["B", "A", "C"], "new folders go last");
 
         shift_folder(&mut conn, &c, -1).unwrap();
@@ -2928,14 +3512,14 @@ mod tests {
         assert!(place_folder(&mut conn, &a, None, Some(&b)).unwrap());
         assert_eq!(names(&conn, None), ["A", "B", "C"]);
         // Into another folder, in front of an existing child.
-        let x = create_folder(&conn, "X", Some(&b)).unwrap();
+        let x = create_folder(&conn, "X", Some(&b), Mode::Stock).unwrap();
         assert!(place_folder(&mut conn, &c, Some(&b), Some(&x)).unwrap());
         assert_eq!(names(&conn, Some(&b)), ["C", "X"]);
         assert!(!place_folder(&mut conn, &b, Some(&x), None).unwrap(), "no cycles");
 
         place_folder(&mut conn, &x, Some(&b), Some(&c)).unwrap();
         assert_eq!(names(&conn, Some(&b)), ["X", "C"]);
-        sort_folders_by_name(&mut conn, Some(&b)).unwrap();
+        sort_folders_by_name(&mut conn, Some(&b), Mode::Stock).unwrap();
         assert_eq!(names(&conn, Some(&b)), ["C", "X"]);
     }
 
@@ -2974,11 +3558,11 @@ mod tests {
         let mut conn = mem();
         add(&mut conn, "a", "a.png", 1);
         add(&mut conn, "b", "b.png", 2);
-        let f = create_folder(&conn, "Zeta", None).unwrap();
-        let g = create_folder(&conn, "Alpha", None).unwrap();
+        let f = create_folder(&conn, "Zeta", None, Mode::Stock).unwrap();
+        let g = create_folder(&conn, "Alpha", None, Mode::Stock).unwrap();
         move_to_folder(&conn, &s(&["a", "b"]), &f).unwrap();
         reorder_in_folder(&mut conn, &f, &s(&["b"]), Some("a")).unwrap(); // b before a
-        create_smart_folder(&conn, "Saved", &Rule { min_rating: 2, ..Default::default() }).unwrap();
+        create_smart_folder(&conn, "Saved", &Rule { min_rating: 2, ..Default::default() }, Mode::Stock).unwrap();
         set_rating(&conn, &s(&["a"]), 5).unwrap();
 
         for older in [0, 1, 2, 3] {

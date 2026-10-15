@@ -193,7 +193,8 @@ fn handle(head: &Head, body: &mut dyn Read, port: u16, shared: &Shared, host: &d
                 name: String,
                 parent_id: Option<String>,
             }
-            let folders = db::list_folders(&l.conn, None).map_err(|e| e.to_string())?;
+            // What the extension saves is images and files: the stock's folders and tags (docs/MODES.md).
+            let folders = db::list_folders(&l.conn, Some(db::Mode::Stock)).map_err(|e| e.to_string())?;
             let out: Vec<F> = folders
                 .into_iter()
                 .map(|f| F { id: f.id, name: f.name, parent_id: f.parent_id })
@@ -201,7 +202,7 @@ fn handle(head: &Head, body: &mut dyn Read, port: u16, shared: &Shared, host: &d
             Ok(json!(out))
         }),
         ("GET", "/tags") => with_lib(&|l| {
-            let tags = db::list_tags(&l.conn, None).map_err(|e| e.to_string())?;
+            let tags = db::list_tags(&l.conn, Some(db::Mode::Stock)).map_err(|e| e.to_string())?;
             Ok(json!(tags.into_iter().map(|t| t.name).collect::<Vec<_>>()))
         }),
         ("POST", "/import") => {
@@ -385,7 +386,7 @@ mod tests {
         let hd = [("Host", h.as_str()), ("Authorization", auth.as_str())];
         let folder = {
             let g = host.lib.lock().unwrap();
-            db::create_folder(&g.as_ref().unwrap().conn, "Web 保存", None).unwrap()
+            db::create_folder(&g.as_ref().unwrap().conn, "Web 保存", None, db::Mode::Stock).unwrap()
         };
         let (status, folders) = call(p, "GET", "/folders", &hd, b"");
         assert_eq!((status, folders[0]["name"].as_str()), (200, Some("Web 保存")));

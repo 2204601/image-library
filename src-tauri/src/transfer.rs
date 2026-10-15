@@ -225,9 +225,11 @@ fn copy_attached(
                     )?;
                 }
             }
+            // The destination's tags and folders of the item's mode (docs/MODES.md).
+            let mode = db::Mode::of(item.kind);
             for tag in &item.tag_ids {
                 let Some((name, color)) = src.tags.get(tag) else { continue };
-                let tag_id = db::ensure_tag(&tx, name)?;
+                let tag_id = db::ensure_tag(&tx, name, mode)?;
                 tx.execute("UPDATE main.tags SET color = ?2 WHERE id = ?1 AND color IS NULL", params![tag_id, color])?;
                 tx.execute(
                     "INSERT OR IGNORE INTO main.item_tags (item_id, tag_id) VALUES (?1, ?2)",
@@ -240,7 +242,7 @@ fn copy_attached(
                     None => {
                         let mut parent: Option<String> = None;
                         for (name, color) in src.folder_path(fid) {
-                            let id = db::find_or_create_folder(&tx, parent.as_deref(), name)?;
+                            let id = db::find_or_create_folder(&tx, parent.as_deref(), name, mode)?;
                             tx.execute(
                                 "UPDATE main.folders SET color = ?2 WHERE id = ?1 AND color IS NULL",
                                 params![id, color],
@@ -383,8 +385,8 @@ mod tests {
         add(&a, "i2", "h2");
         add(&b, "x2", "h2"); // already in B under another id
 
-        let parent = db::create_folder(&a.conn, "Work", None).unwrap();
-        let child = db::create_folder(&a.conn, "Logos", Some(&parent)).unwrap();
+        let parent = db::create_folder(&a.conn, "Work", None, db::Mode::Stock).unwrap();
+        let child = db::create_folder(&a.conn, "Logos", Some(&parent), db::Mode::Stock).unwrap();
         db::set_color(&a.conn, db::ColorTarget::Folder, &child, Some("red")).unwrap();
         db::move_to_folder(&a.conn, &["i1".into(), "i2".into()], &child).unwrap();
         db::add_tags(&mut a.conn, &["i1".into(), "i2".into()], &["brand".into()]).unwrap();
