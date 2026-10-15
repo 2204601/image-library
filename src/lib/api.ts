@@ -222,7 +222,9 @@ export type View =
   /** The shelf (the `tray` table): only queried for the shelf under the list, never opened as a list. */
   | { kind: "tray" }
   | { kind: "folder"; id: string }
-  | { kind: "smart"; id: string };
+  | { kind: "smart"; id: string }
+  /** Items carrying a tag: the sidebar's tags are places like folders (docs/NAVIGATION.md). */
+  | { kind: "tag"; id: number };
 
 export type Shape = "landscape" | "portrait" | "square";
 
@@ -306,6 +308,26 @@ export interface ItemQuery {
   similarLevel: SimilarLevel;
   sort: SortKey;
   desc: boolean;
+}
+
+/**
+ * How many of a query's items have each value of each filter condition
+ * (src-tauri/src/db.rs `facet_counts`). The filter row asks with the
+ * condition whose menu is open left out: its counts are with the others on.
+ */
+export interface Facets {
+  /** Items rated exactly n ("0" = unrated). */
+  ratings: Record<string, number>;
+  tags: Record<string, number>;
+  kinds: Partial<Record<ItemKind, number>>;
+  /** File types, most first. */
+  exts: [string, number][];
+  /** Images by shape. */
+  shapes: Partial<Record<Shape, number>>;
+  fontScripts: Record<string, number>;
+  fontCategories: Record<string, number>;
+  fontWeights: Record<string, number>;
+  fontFeatures: Record<string, number>;
 }
 
 export interface Counts {
@@ -460,6 +482,7 @@ export const api = {
   queryItems: (query: ItemQuery) => invoke<Item[]>("query_items", { query }),
   /** Totals for the sidebar; with `kind`, of that kind only (`kinds` always has every kind). */
   /** Counts of the items of `mode` (`kinds` is always of every kind). */
+  facetCounts: (query: ItemQuery) => invoke<Facets>("facet_counts", { query }),
   getCounts: (mode?: Mode) => invoke<Counts>("get_counts", { mode: mode ?? null }),
   selectionInfo: (ids: string[]) => invoke<SelectionInfo>("selection_info", { ids }),
   setNote: (id: string, note: string) => invoke<void>("set_note", { id, note }),

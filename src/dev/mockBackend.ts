@@ -427,7 +427,8 @@ function reorderSiblings(parent: string | null, mode: Mode, order: (sibs: typeof
   slots.forEach((slot, k) => (folders[slot] = next[k]));
 }
 
-function query(q: ItemQuery): Item[] {
+/** The items a query matches, unsorted (as db.rs `query_where`). */
+function matched(q: ItemQuery): MockItem[] {
   let r = q.view.kind === "trash" ? items.filter((i) => i.deletedAt !== null) : live();
   const v = q.view;
   if (v.kind === "unfiled") r = r.filter((i) => !folders.some((f) => inFolder(i.id, f.id)));
@@ -435,6 +436,7 @@ function query(q: ItemQuery): Item[] {
   if (v.kind === "favorites") r = r.filter((i) => i.favorite);
   if (v.kind === "pinned") r = r.filter((i) => i.pinnedAt !== null);
   if (v.kind === "tray") r = r.filter((i) => tray.has(i.id));
+  if (v.kind === "tag") r = r.filter((i) => hasTag(i.id, v.id));
   if (v.kind === "folder") {
     const ids = q.includeSubfolders ? descendants(v.id) : [v.id];
     r = r.filter((i) => ids.some((f) => inFolder(i.id, f)));
@@ -444,6 +446,39 @@ function query(q: ItemQuery): Item[] {
     const sf = smartFolders.find((f) => f.id === v.id);
     r = sf ? applyRule(r, sf.rule) : [];
   }
+  return r;
+}
+
+/** Counts per value of each filter condition, as db.rs `facet_counts`. */
+function facets(q: ItemQuery) {
+  const r = matched(q);
+  const fonts = r.filter((i) => i.kind === "font" && i.fontScript);
+  const exts = countBy(r, (i) => aliases(i.ext));
+  const shape = (i: MockItem) =>
+    i.width > i.height * 1.05 ? "landscape" : i.height > i.width * 1.05 ? "portrait" : "square";
+  return {
+    ratings: countBy(r, (i) => String(i.rating)),
+    tags: Object.fromEntries(
+      tags.map((t) => [t.id, r.filter((i) => hasTag(i.id, t.id)).length]).filter(([, n]) => n),
+    ),
+    kinds: countBy(r, (i) => i.kind),
+    exts: Object.entries(exts).sort((x, y) => y[1] - x[1]),
+    shapes: countBy(r.filter((i) => i.kind === "image"), shape),
+    fontScripts: countBy(fonts, (i) => i.fontScript ?? "other"),
+    fontCategories: countBy(fonts, (i) => i.fontCategoryUser ?? i.fontCategory ?? "none"),
+    fontWeights: Object.fromEntries(
+      FONT_WEIGHT_RANGES.map(([k]) => [k, fonts.filter((i) => inWeight(i, k)).length]).filter(([, n]) => n),
+    ),
+    fontFeatures: countBy(
+      fonts.flatMap((i) => (i.fontFeatures ?? []).map((k) => ({ k }))),
+      (x) => x.k,
+    ),
+  };
+}
+
+function query(q: ItemQuery): Item[] {
+  let r = matched(q);
+  const v = q.view;
   // Pinned items lead every list, latest pin first.
   const pin = (a: MockItem, b: MockItem) => (b.pinnedAt ?? -Infinity) - (a.pinnedAt ?? -Infinity);
   // The tray's own order ignores pins, as in db.rs.
@@ -617,6 +652,8 @@ function handle(cmd: string, a: any): unknown {
     }
     case "query_items":
       return query(a.query);
+    case "facet_counts":
+      return facets(a.query);
     case "get_counts": {
       const of = ofMode(a.mode);
       return {
