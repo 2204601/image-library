@@ -62,3 +62,9 @@ export function patternName(text: string, own: string[]): string {
 
 /** Most saved patterns kept (the oldest give way). */
 export const MAX_OWN_PATTERNS = 20;
+
+/** The text of the ready-made pattern named `label`. */
+export function patternText(label: string): string {
+  for (const g of PATTERN_GROUPS) for (const p of g.patterns) if (p.label === label) return p.text;
+  return "";
+}

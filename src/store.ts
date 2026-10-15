@@ -50,7 +50,8 @@ export { listIs, listKinds, listNoun, queryKinds, shownKinds } from "./lib/modes
 /** x/y = current pointer, sx/sy = where the drag started (for snap-back). */
 type DragPos = { x: number; y: number; sx: number; sy: number };
 export type Drag =
-  | ({ kind: "items"; ids: string[] } & DragPos)
+  /** `from`: picked up on the shelf (reordered there, not added again). */
+  | ({ kind: "items"; ids: string[]; from?: "shelf" } & DragPos)
   | ({ kind: "folder"; id: string } & DragPos);
 
 export interface ToastAction {
@@ -121,7 +122,7 @@ export type TransferRequest =
 
 /**
  * What a "the contents of this list" action works on: given items, the list
- * on screen, or a folder / smart folder / tag / the tray from the sidebar.
+ * on screen, a folder / smart folder / tag from the sidebar, or the shelf.
  */
 export type ListSource =
   | { kind: "ids"; ids: string[] }
@@ -244,6 +245,12 @@ interface State {
   items: Item[];
   /** The query result as returned (one entry per image). */
   rawItems: Item[];
+  /** What is on the mode's shelf (the `tray` table, of the mode's kinds), in its own order. */
+  shelf: Item[];
+  /** The shelf under the list shows its contents (else one line); changed only by the user. */
+  shelfOpen: boolean;
+  /** Font mode: the comparison of the shelf's fonts is shown in place of the list. */
+  comparing: boolean;
   /** Bands of `items`: similar-view groups, or the `groupBy` sections. */
   sections: Section[];
   folders: Folder[];
@@ -307,6 +314,8 @@ interface State {
   toggleFamily: (family: string) => void;
   setSpecimenFallback: (on: boolean) => void;
   toggleInspector: () => void;
+  toggleShelf: () => void;
+  setComparing: (on: boolean) => void;
   toggleSidebar: () => void;
   /** Sets a panel's width (kept within its limits, see PANEL_WIDTH). */
   setPanelWidth: (panel: "sidebar" | "inspector", px: number) => void;
@@ -478,24 +487,6 @@ const loadRecentTags = (root: string): number[] => {
 };
 let pendingRecentTags: string[] = [];
 
-/**
- * The tray opens in its own order (the order things were put on it); the
- * sort used elsewhere is kept here and comes back on leaving the tray.
- */
-let sortOutsideTray: { sort: SortKey; desc: boolean } | null = null;
-function traySort(from: View, to: View, cur: { sort: SortKey; desc: boolean }): Partial<State> {
-  if (to.kind === "tray" && from.kind !== "tray") {
-    sortOutsideTray = { sort: cur.sort, desc: cur.desc };
-    return { sort: "manual", desc: false };
-  }
-  if (to.kind !== "tray" && from.kind === "tray" && sortOutsideTray) {
-    const back = sortOutsideTray;
-    sortOutsideTray = null;
-    return back;
-  }
-  return {};
-}
-
 let refreshSeq = 0;
 let toastSeq = 0;
 let flashSeq = 0;
@@ -512,6 +503,9 @@ function idsAt(items: Item[], id: string, at: number): string[] {
   const row = items[at];
   return row?.id === id ? rowIds([row]) : [id];
 }
+
+/** Most fonts on the font shelf: what the comparison can line up (docs/FONT_UI.md). */
+export const FONT_SHELF_MAX = 8;
 
 /** Smallest and largest font grid tile, and the default. */
 export const TILE_SIZE = { min: 120, max: 320, initial: 180 } as const;
@@ -570,7 +564,7 @@ function leaveHidden() {
   }
 }
 
-/** The sidebar entry's name ("作業台"), for messages. */
+/** The sidebar entry's name ("お気に入り"), for messages. */
 export const sidebarEntryLabel = (id: string) => SIDEBAR_ENTRIES.find((e) => e.id === id)?.label ?? id;
 
 /** Saves one setting of the open library, reporting failures. */
@@ -667,6 +661,9 @@ export const useStore = create<State>((set, get) => ({
 
   items: [],
   rawItems: [],
+  shelf: [],
+  shelfOpen: load("shelfOpen") !== "false",
+  comparing: false,
   sections: [],
   folders: [],
   smartFolders: [],
@@ -723,7 +720,6 @@ export const useStore = create<State>((set, get) => ({
       librarySettings = { ...librarySettings, lastKinds: [] };
       saveLibrarySetting("lastMode", mode);
     }
-    const sortNow = { ...get(), ...traySort(get().view, { kind: "all" }, get()) };
     const next = { mode, view: { kind: "all" } as View, filter, smartFolders: [], librarySettings };
     set({
       library,
@@ -731,17 +727,18 @@ export const useStore = create<State>((set, get) => ({
       mode,
       layout: loadLayout(mode),
       groupBy: loadGroupBy(mode),
-      sort: sortNow.sort,
-      desc: sortNow.desc,
       items: [],
       rawItems: [],
       sections: [],
+      shelf: [],
+      comparing: false,
+      openFamilies: NO_FAMILIES,
       view: { kind: "all" },
       search: "",
       tagFilter: [],
       minRating: 0,
       filter,
-      ...fitToKinds({ ...next, sort: sortNow.sort }),
+      ...fitToKinds({ ...next, sort: get().sort }),
       editingSmart: null,
       recentTags: library ? loadRecentTags(library.root) : [],
       selected: new Set(),
@@ -770,8 +767,6 @@ export const useStore = create<State>((set, get) => ({
       set({ librarySettings: { ...get().librarySettings, lastMode: mode } });
       saveLibrarySetting("lastMode", mode);
     }
-    // Leaving the tray (if there) restores the sort it replaced.
-    const sortNow = { ...get(), ...traySort(get().view, { kind: "all" }, get()) };
     const next = { ...get(), mode, view: { kind: "all" } as View, filter: EMPTY_FILTER };
     set({
       mode,
@@ -783,13 +778,14 @@ export const useStore = create<State>((set, get) => ({
       editingSmart: null,
       layout: loadLayout(mode),
       groupBy: loadGroupBy(mode),
-      sort: sortNow.sort,
-      desc: sortNow.desc,
       // Only images have a pixel size.
-      ...fitToKinds({ ...next, sort: sortNow.sort }),
+      ...fitToKinds(next),
       items: [],
       rawItems: [],
       sections: [],
+      // Each mode has its own shelf.
+      shelf: [],
+      comparing: false,
       selected: new Set(),
       anchor: null,
       focus: null,
@@ -882,15 +878,16 @@ export const useStore = create<State>((set, get) => ({
           editingSmart: null,
         }
       : {};
-    const next = { ...get(), ...reset, view, ...traySort(get().view, view, get()) };
+    const next = { ...get(), ...reset, view };
     set({
       view,
+      // Going somewhere in the sidebar leaves the comparison for the list.
+      comparing: false,
       selected: new Set(),
       anchor: null,
       focus: null,
       ...clear,
       ...reset,
-      ...traySort(get().view, view, get()),
       ...fitToKinds(next),
     });
     get().refresh();
@@ -960,6 +957,12 @@ export const useStore = create<State>((set, get) => ({
     set({ inspectorOpen });
     persist("inspectorOpen", String(inspectorOpen));
   },
+  toggleShelf: () => {
+    const shelfOpen = !get().shelfOpen;
+    set({ shelfOpen });
+    persist("shelfOpen", String(shelfOpen));
+  },
+  setComparing: (comparing) => set({ comparing: comparing && get().mode === "font" }),
   toggleSidebar: () => {
     const sidebarOpen = !get().sidebarOpen;
     set({ sidebarOpen });
@@ -1005,8 +1008,8 @@ export const useStore = create<State>((set, get) => ({
     // Edit in the "all" view so the user sees exactly what the rule matches.
     set({
       editingSmart: { id: sf.id, name: sf.name },
-      ...traySort(get().view, { kind: "all" }, get()),
       view: { kind: "all" },
+      comparing: false,
       search: sf.rule.search,
       tagFilter: sf.rule.tagIds,
       tagMatchAll: sf.rule.tagMatchAll,
@@ -1099,7 +1102,7 @@ export const useStore = create<State>((set, get) => ({
         }
         dismissedGroups = await api.countDismissedDuplicates();
       }
-      const [rawItems, folders, tags, counts, allSmart, exts] = await Promise.all([
+      const [rawItems, folders, tags, counts, allSmart, exts, shelf] = await Promise.all([
         api.queryItems({
           view,
           search,
@@ -1118,6 +1121,19 @@ export const useStore = create<State>((set, get) => ({
         api.getCounts(modeKind(mode)),
         api.listSmartFolders(modeKind(mode)),
         api.listExts(modeKind(mode)),
+        // The mode's shelf, whatever the view and conditions.
+        api.queryItems({
+          view: { kind: "tray" },
+          search: "",
+          tagIds: [],
+          tagMatchAll: false,
+          includeSubfolders: false,
+          minRating: 0,
+          filter: { ...EMPTY_FILTER, kinds: queryKinds({ ...get(), view: { kind: "tray" }, filter: EMPTY_FILTER }) },
+          similarLevel,
+          sort: "manual",
+          desc: false,
+        }),
       ]);
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
       const smartFolders = allSmart.filter((sf) => smartFolderInMode(sf, mode));
@@ -1152,6 +1168,7 @@ export const useStore = create<State>((set, get) => ({
       set({
         items,
         rawItems,
+        shelf,
         sections,
         folders,
         smartFolders,

@@ -9,7 +9,6 @@ import {
   Images,
   Inbox,
   Keyboard,
-  Layers,
   MoreHorizontal,
   Pin,
   Shapes,
@@ -26,14 +25,11 @@ import {
   confirmDeleteFolder,
   confirmDeleteSmartFolder,
   confirmDeleteTag,
-  clearTray,
   createFolder,
   createSmartFolder,
   emptyTrash,
   exportList,
-  exportTray,
   renameSmartFolder,
-  sheetFromTray,
   shiftFolder,
   sortFoldersByName,
   sheetList,
@@ -108,7 +104,7 @@ function contentsMenu(source: ListSource, what = "中身"): MenuItem[] {
   return [
     { label: `${what}を書き出し…`, onClick: () => exportList(source) },
     { label: "まとめて出力…", onClick: () => sheetList(source) },
-    ...(source.kind === "tray" ? [] : [{ label: "作業台にすべて追加", onClick: () => trayList(source) }]),
+    ...(source.kind === "tray" ? [] : [{ label: "シェルフにすべて追加", onClick: () => trayList(source) }]),
     { label: "別のライブラリへ…", onClick: () => transferList(source) },
   ];
 }
@@ -729,14 +725,7 @@ export function Sidebar() {
   const marks: Entry[] = [
     { view: { kind: "favorites" }, label: "お気に入り", icon: <Heart size={15} />, count: counts.favorites },
     { view: { kind: "pinned" }, label: "ピン留め", icon: <Pin size={15} />, count: counts.pinned },
-    {
-      view: { kind: "tray" },
-      label: "作業台",
-      icon: <Layers size={15} />,
-      count: counts.tray,
-      dropId: "tray",
-      title: "まとめて出力・書き出しの前に、画像を一時的に集めておく場所（B キーで追加、ここへドラッグでも）",
-    },
+    // The shelf is under the list (Shelf.tsx), not a place to go.
   ];
   const tidying: Entry[] = [
     // Look-alikes are found by image hash: images only.
@@ -751,15 +740,7 @@ export function Sidebar() {
   const menuOf = (v: View): MenuItem[] =>
     v.kind === "trash"
       ? [{ label: "ゴミ箱を空にする", danger: true, onClick: emptyTrash }]
-      : v.kind === "tray" && counts.tray > 0
-        ? [
-            { label: "書き出し…", onClick: exportTray },
-            { label: "まとめて出力…", onClick: sheetFromTray },
-            { label: "別のライブラリへ…", onClick: () => transferList({ kind: "tray" }) },
-            { separator: true },
-            { label: "作業台を空にする", onClick: clearTray },
-          ]
-        : [];
+      : [];
 
   const row = (s: Entry) => (
     <Row

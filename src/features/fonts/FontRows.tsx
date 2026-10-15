@@ -7,6 +7,8 @@ import { memo, useEffect, useState } from "react";
 // fine because everything is used at render time, not at load.
 import { onItemPointerDown, rowSelection, showItemMenu, Stars, type CellProps } from "../../components/Grid";
 import { ChangePulse } from "../../components/ActionHud";
+import { toggleTray } from "../../lib/actions";
+import { rowIds } from "../../lib/grouping";
 import { fontCategoryLabel, fontCategoryOf, fontFeatureLabel, fontScriptLabel, type Item } from "../../lib/api";
 import { useStore } from "../../store";
 import { type FontListPreview } from "./api";
@@ -107,6 +109,28 @@ export function FontListCells({ item }: { item: Item }) {
   );
 }
 
+/**
+ * Puts the row's font (a family: its regular) on the shelf or takes it off.
+ * Shown on hover, and always while on the shelf.
+ */
+function ShelfButton({ item, className = "" }: { item: Item; className?: string }) {
+  const on = useStore((s) => s.shelf.some((i) => i.id === item.id));
+  return (
+    <button
+      title={on ? "シェルフから外す（B）" : "シェルフに追加（B）"}
+      aria-pressed={on}
+      onPointerDown={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      onClick={() => void toggleTray(rowIds([item]))}
+      className={`items-center justify-center rounded ${
+        on ? "flex text-emerald-400" : "hidden text-dim group-hover:flex hover:text-fg"
+      } ${className}`}
+    >
+      <Layers size={13} />
+    </button>
+  );
+}
+
 /** ▸ / ▾ of a family row; the same room is kept on other rows so the names line up. */
 function FamilyToggle({ item }: { item: Item }) {
   const open = useStore((s) => !!item.fontFamily && s.openFamilies.has(item.fontFamily));
@@ -143,7 +167,7 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
   const member = !!item.familyMember;
   return (
     <div
-      className={`relative flex flex-col justify-center gap-1 overflow-hidden rounded-md border-b border-line/60 px-3 transition-opacity duration-200 ${rowSelection(
+      className={`group relative flex flex-col justify-center gap-1 overflow-hidden rounded-md border-b border-line/60 px-3 transition-opacity duration-200 ${rowSelection(
         selected,
         focused,
       )} ${dimmed ? "opacity-35" : ""} ${member ? "pl-12" : ""}`}
@@ -176,8 +200,8 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
               {item.fontScript === "latin" ? "欧文見本" : "フォントの見本"}
             </span>
           )}
+          {flags && <ShelfButton item={item} className="h-4 w-4" />}
           {flags && item.pinnedAt !== null && <Pin size={11} className="text-accent" fill="currentColor" />}
-          {flags && item.inTray && <Layers size={11} className="text-emerald-400" />}
           {flags && item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
           {item.rating > 0 && <Stars n={item.rating} />}
           {!member && item.fontScript && (
@@ -273,13 +297,13 @@ export const FontTile = memo(function FontTile(props: CellProps) {
             }`}
           />
         )}
-        {flags && (item.pinnedAt !== null || item.inTray || item.favorite) && (
+        {flags && (item.pinnedAt !== null || item.favorite) && (
           <span className="pointer-events-none absolute top-1.5 right-1.5 flex gap-1">
             {item.pinnedAt !== null && <Pin size={11} className="text-accent" fill="currentColor" />}
-            {item.inTray && <Layers size={11} className="text-emerald-400" />}
             {item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
           </span>
         )}
+        {flags && <ShelfButton item={item} className="absolute top-1 left-1 h-6 w-6 bg-black/45" />}
         <ChangePulse id={item.id} />
       </div>
       {insert && (

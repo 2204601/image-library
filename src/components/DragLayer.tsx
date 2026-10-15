@@ -4,7 +4,7 @@
 import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
-import { addToTray, moveToFolder, reorder } from "../lib/actions";
+import { addToTray, moveToFolder, reorder, reorderShelf } from "../lib/actions";
 import { api, type Folder } from "../lib/api";
 import { warn } from "../lib/log";
 import { useStore, type Drag } from "../store";
@@ -17,7 +17,7 @@ const THRESHOLD = 5;
  */
 export function startPointerDrag(
   e: React.PointerEvent,
-  makeDrag: () => { kind: "items"; ids: string[] } | { kind: "folder"; id: string },
+  makeDrag: () => { kind: "items"; ids: string[]; from?: "shelf" } | { kind: "folder"; id: string },
   onClick?: () => void,
 ) {
   if (e.button !== 0) return;
@@ -49,8 +49,9 @@ function isDescendant(folders: Folder[], id: string, ancestor: string): boolean 
 
 /**
  * The drop target under the pointer, or null if this drag can't go there.
- * "folder:<id>" | "root" | "tray" | "item:<id>:before|after" (manual reordering)
- * | "pos:folder:<id>:before|after" (folder reordering among siblings).
+ * "folder:<id>" | "root" | "tray" (the shelf) | "item:<id>:before|after" (manual reordering)
+ * | "shelf:<id>:before|after" (reordering the shelf) | "pos:folder:<id>:before|after"
+ * (folder reordering among siblings).
  */
 function targetAt(x: number, y: number, drag: Drag): string | null {
   const el = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-drop]");
@@ -58,7 +59,14 @@ function targetAt(x: number, y: number, drag: Drag): string | null {
   if (!t || !el) return null;
   if (drag.kind === "items") {
     if (t.startsWith("folder:")) return t;
-    if (t === "tray") return useStore.getState().view.kind === "tray" ? null : t;
+    // From the list: anywhere on the shelf adds. On the shelf: beside another one reorders.
+    if (t === "tray") return drag.from === "shelf" ? null : t;
+    if (t.startsWith("shelf:")) {
+      if (drag.from !== "shelf") return "tray";
+      if (drag.ids.includes(t.slice(6))) return null;
+      const r = el.getBoundingClientRect();
+      return `${t}:${x < r.left + r.width / 2 ? "before" : "after"}`;
+    }
     if (t.startsWith("item:") && !drag.ids.includes(t.slice(5))) {
       const r = el.getBoundingClientRect();
       // List rows stack vertically; everything else flows left to right.
@@ -100,6 +108,11 @@ async function drop(drag: Drag, target: string) {
       before = rest[rest.findIndex((i) => i.id === id) + 1]?.id ?? null;
     }
     await reorder(moving, before);
+  } else if (drag.kind === "items" && target.startsWith("shelf:")) {
+    const [, id, side] = target.split(":");
+    const rest = s.shelf.filter((i) => !drag.ids.includes(i.id));
+    const before = side === "before" ? id : (rest[rest.findIndex((i) => i.id === id) + 1]?.id ?? null);
+    await reorderShelf(drag.ids, before);
   } else if (drag.kind === "items" && target === "tray") {
     await addToTray(drag.ids);
   } else if (drag.kind === "items") {
@@ -120,7 +133,8 @@ async function drop(drag: Drag, target: string) {
 
 /** Leaving the window with images hands the drag to the OS (drop into other apps). */
 function dragOut(drag: Drag & { kind: "items" }) {
-  const items = useStore.getState().items.filter((i) => drag.ids.includes(i.id));
+  const s = useStore.getState();
+  const items = [...s.items, ...s.shelf].filter((i, n, all) => drag.ids.includes(i.id) && all.findIndex((x) => x.id === i.id) === n);
   if (!items.length) return;
   startDrag({ item: items.map((i) => i.filePath), icon: items[0].thumbPath }).catch((e) =>
     warn("drag out failed", e),
@@ -130,8 +144,8 @@ function dragOut(drag: Drag & { kind: "items" }) {
 function targetLabel(target: string | null, folders: Folder[]): string | null {
   if (!target) return null;
   if (target === "root") return "最上位へ移動";
-  if (target === "tray") return "作業台に追加";
-  if (target.startsWith("item:")) return "ここへ並べ替え";
+  if (target === "tray") return "シェルフに追加";
+  if (target.startsWith("item:") || target.startsWith("shelf:")) return "ここへ並べ替え";
   if (target.startsWith("pos:")) {
     const name = folders.find((f) => f.id === target.split(":")[2])?.name;
     return name ? `「${name}」の${target.endsWith("before") ? "前" : "後"}へ` : null;
@@ -144,6 +158,7 @@ export function DragLayer() {
   const drag = useStore((s) => s.drag);
   const dropTarget = useStore((s) => s.dropTarget);
   const items = useStore((s) => s.items);
+  const shelf = useStore((s) => s.shelf);
   const folders = useStore((s) => s.folders);
   const ghost = useRef<HTMLDivElement>(null);
   const active = drag !== null;
@@ -225,7 +240,7 @@ export function DragLayer() {
       style={{ left: drag.x + 12, top: drag.y + 12, transformOrigin: "0 0" }}
     >
       {drag.kind === "items" ? (
-        <ItemsGhost ids={drag.ids} items={items} />
+        <ItemsGhost ids={drag.ids} items={drag.from === "shelf" ? shelf : items} />
       ) : (
         <div className="rounded-md bg-raised px-3 py-1.5 shadow-xl ring-1 ring-accent">
           📁 {folders.find((f) => f.id === drag.id)?.name}

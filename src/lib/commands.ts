@@ -30,6 +30,7 @@ import {
   deleteSelection,
   exportList,
   moveToLastFolder,
+  onShelf,
   openLibraryDialog,
   openSelection,
   orient,
@@ -289,12 +290,13 @@ export const COMMANDS: Command[] = [
   },
   {
     id: "item.tray",
-    title: "作業台",
-    label: (s) => (allHave(s, (i) => i.inTray) ? "作業台から外す" : "作業台に追加"),
+    title: "シェルフ",
+    // In the font mode a selected family goes on the shelf as one font (`shelfIds`).
+    label: (s) => (sel(s).length && onShelf(sel(s)) ? "シェルフから外す" : "シェルフに追加"),
     icon: Layers,
     keys: ["B"],
     enabled: live,
-    checked: (s) => allHave(s, (i) => i.inTray),
+    checked: (s) => sel(s).length > 0 && onShelf(sel(s)),
     run: (s) => void toggleTray(sel(s)),
   },
   ...[0, 1, 2, 3, 4, 5].map(
@@ -366,7 +368,7 @@ export const COMMANDS: Command[] = [
     icon: FolderInput,
     run: () => void transferList(selectionOrShown()),
   },
-  { id: "list.tray", title: "作業台にすべて追加", run: () => void trayList({ kind: "shown" }) },
+  { id: "list.tray", title: "シェルフにすべて追加", run: () => void trayList({ kind: "shown" }) },
 
   // -------------------------------------------------------------- organize
   {

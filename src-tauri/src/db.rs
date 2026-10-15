@@ -232,7 +232,7 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         add_column(c, "items", "font_category_user", "TEXT")?;
         Ok(())
     })?;
-    // The work tray (作業台): items gathered for a while to be handled
+    // The shelf (シェルフ, once the work tray): items gathered for a while to be handled
     // together (contact sheet, export). `position` is the order they are in.
     step(14, &|c| {
         c.execute_batch(
@@ -406,7 +406,7 @@ pub struct Item {
     pub font_category_user: Option<String>,
     /// Fonts: features ("mono", "coding", ...), see `fonts::FEATURES`. Empty until read.
     pub font_features: Vec<String>,
-    /// On the work tray (作業台).
+    /// On the shelf (シェルフ; the `tray` table).
     pub in_tray: bool,
     /// Similar view only: which group of look-alikes the item belongs to.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -449,7 +449,7 @@ pub enum View {
     Similar,
     Favorites,
     Pinned,
-    /// The work tray (作業台).
+    /// The shelf (シェルフ; the `tray` table). The app only queries it for the shelf under the list.
     Tray,
     /// Items matching a smart folder's saved rule.
     Smart { id: String },

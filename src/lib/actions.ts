@@ -6,6 +6,7 @@ import { itemsNoun, kindsNoun } from "./modes";
 import {
   activeConditions,
   currentFolderId,
+  FONT_SHELF_MAX,
   isHidden,
   queryKinds,
   shownKinds,
@@ -500,62 +501,108 @@ export async function orient(ids: string[], op: OrientOp, { quiet }: Feedback = 
   });
 }
 
-/** Manual order: move `ids` in front of `before` (null = end) in the open folder or the tray. */
+/** Manual order: move `ids` in front of `before` (null = end) in the open folder. */
 export async function reorder(ids: string[], before: string | null) {
-  if (st().view.kind === "tray") return st().run(() => api.reorderTray(ids, before));
   const folder = currentFolderId();
   if (!folder) return;
   await st().run(() => api.reorderInFolder(folder, ids, before));
 }
 
-// ------------------------------------------------------------ work tray
+// --------------------------------------------------------------- shelf
+// The shelf under the list (the `tray` table): things gathered for a while,
+// one per mode. In the font mode it holds what is compared, at most
+// FONT_SHELF_MAX (docs/FONT_UI.md).
 
-/** Puts items on the work tray (after the ones already there). */
+/**
+ * What putting `ids` on the shelf puts there: in the font mode a whole
+ * family (its row selected) goes as its row's font, the one the comparison
+ * starts from; a style opened under its family (▸) goes on its own.
+ */
+export function shelfIds(ids: string[]): string[] {
+  const s = st();
+  if (s.mode !== "font") return ids;
+  const want = new Set(ids);
+  const whole = new Map<string, string>();
+  for (const row of s.items) {
+    if (row.familyIds && row.familyIds.every((id) => want.has(id))) row.familyIds.forEach((id) => whole.set(id, row.id));
+  }
+  return [...new Set(ids.map((id) => whole.get(id) ?? id))];
+}
+
+/** Whether `ids` (as `shelfIds` takes them) are all on the shelf. */
+export function onShelf(ids: string[]): boolean {
+  const shelf = new Set(st().shelf.map((i) => i.id));
+  const want = shelfIds(ids);
+  return want.length > 0 && want.every((id) => shelf.has(id));
+}
+
+/** The toast's "シェルフを開く" while the shelf is folded. */
+const openShelfAction = (): ToastAction | undefined =>
+  st().shelfOpen ? undefined : { label: "シェルフを開く", onClick: () => st().toggleShelf() };
+
+/** Puts items on the shelf (after the ones already there). */
 export async function addToTray(ids: string[]) {
   if (!ids.length) return;
+  const want = shelfIds(ids);
+  if (st().mode === "font") {
+    const there = new Set(st().shelf.map((i) => i.id));
+    const fresh = want.filter((id) => !there.has(id));
+    if (there.size + fresh.length > FONT_SHELF_MAX) {
+      st().notify({
+        title: `シェルフは ${FONT_SHELF_MAX} 件までです。外してから追加してください`,
+        detail: `今 ${there.size} 件・追加しようとしたのは ${fresh.length} 件`,
+        kind: "error",
+      });
+      return;
+    }
+  }
   let added = 0;
   const ok = await st().run(async () => {
-    added = await api.addToTray(ids);
+    added = await api.addToTray(want);
   });
   if (!ok) return;
   st().flashTarget("tray");
-  st().toast(
-    added ? `${added} 件を作業台に追加しました` : "すでに作業台にあります",
-    false,
-    hiddenViewAction("tray", "作業台を開く", { kind: "tray" }),
-  );
+  st().toast(added ? `${added} 件をシェルフに追加しました` : "すでにシェルフにあります", false, openShelfAction());
 }
 
-/** B: puts items on the tray, or takes them off when all are already there. */
+/** B: puts items on the shelf, or takes them off when all are already there. */
 export async function toggleTray(ids: string[]) {
   if (!ids.length) return;
-  if (!allHave(ids, (i) => i.inTray)) return addToTray(ids);
+  if (!onShelf(ids)) return addToTray(ids);
+  return removeFromShelf(shelfIds(ids));
+}
+
+/** Takes items off the shelf (they stay in the library), with an undo. */
+export async function removeFromShelf(ids: string[]) {
+  if (!ids.length) return;
   if (!(await st().run(() => api.removeFromTray(ids)))) return;
-  st().toast(`${ids.length} 件を作業台から外しました`, false, {
+  st().toast(`${ids.length} 件をシェルフから外しました`, false, {
     label: "元に戻す",
     onClick: () => st().run(() => api.addToTray(ids)),
   });
 }
 
-/** Takes everything off the tray (the images themselves stay). */
+/** Moves shelf items `ids` in front of `before` (null = to the end). */
+export function reorderShelf(ids: string[], before: string | null) {
+  return st().run(() => api.reorderTray(ids, before));
+}
+
+/** Takes everything off the shelf (the items themselves stay). */
 export async function clearTray() {
-  try {
-    const ids = await api.clearTray();
-    if (ids.length)
-      st().toast(`作業台を空にしました（${ids.length} 件）`, false, {
-        label: "元に戻す",
-        onClick: () => st().run(() => api.addToTray(ids)),
-      });
-  } catch (e) {
-    st().toast(String(e), true);
-  }
-  await st().refresh();
+  // Only the mode's shelf: the other mode keeps its own.
+  const ids = st().shelf.map((i) => i.id);
+  if (!ids.length) return;
+  if (!(await st().run(() => api.removeFromTray(ids)))) return;
+  st().toast(`シェルフを空にしました（${ids.length} 件）`, false, {
+    label: "元に戻す",
+    onClick: () => st().run(() => api.addToTray(ids)),
+  });
 }
 
 /** Items of the kinds shown in `view`, in the list's sort (the tray: its own order). */
 function queryView(view: View, opts: { tagIds?: number[]; includeSubfolders?: boolean } = {}): Promise<Item[]> {
   const s = st();
-  const manual = view.kind === "tray" || (view.kind === "folder" && s.sort === "manual");
+  const manual = view.kind === "folder" && s.sort === "manual";
   return api.queryItems({
     view,
     search: "",
@@ -572,7 +619,7 @@ function queryView(view: View, opts: { tagIds?: number[]; includeSubfolders?: bo
 
 /**
  * The items a "contents of this list" action works on (書き出し, まとめて出力,
- * 作業台にすべて追加, 別のライブラリへ). A folder includes its subfolders
+ * シェルフにすべて追加, 別のライブラリへ). A folder includes its subfolders
  * unless `subfolders` is false (the export dialog's choice, not the view's
  * "サブフォルダの内容を表示").
  */
@@ -585,7 +632,8 @@ export async function listTargets(source: ListSource, subfolders = true): Promis
     case "shown":
       return displayOrder();
     case "tray":
-      return queryView({ kind: "tray" });
+      // What the shelf shows, in its order.
+      return st().shelf;
     case "folder":
       return queryView({ kind: "folder", id: source.id }, { includeSubfolders: subfolders });
     case "smart":
@@ -593,17 +641,6 @@ export async function listTargets(source: ListSource, subfolders = true): Promis
     case "tag":
       return queryView({ kind: "all" }, { tagIds: [source.id] });
   }
-}
-
-/**
- * The items an action from the tray works on: what is selected in the tray
- * view, else everything on it in the order shown.
- */
-function traySource(): ListSource {
-  const s = st();
-  if (s.view.kind !== "tray") return { kind: "tray" };
-  const sel = displayOrder().filter((i) => s.selected.has(i.id));
-  return sel.length ? { kind: "ids", ids: sel.map((i) => i.id) } : { kind: "shown" };
 }
 
 /** What the selection-or-list commands (⌘E, まとめて出力…) work on: the selection, else the list on screen. */
@@ -624,7 +661,7 @@ export function sourceName(source: ListSource): string {
     case "shown":
       return "表示中の一覧";
     case "tray":
-      return "作業台";
+      return "シェルフ";
     case "folder":
       return `「${s.folders.find((f) => f.id === source.id)?.name ?? ""}」`;
     case "smart":
@@ -658,7 +695,7 @@ export function sheetList(source: ListSource) {
   return withTargets(source, (items) => st().setSheet(items));
 }
 
-/** 作業台にすべて追加. */
+/** シェルフにすべて追加. */
 export function trayList(source: ListSource) {
   return withTargets(source, (items) => addToTray(items.map((i) => i.id)));
 }
@@ -676,12 +713,14 @@ function displayOrder(): Item[] {
   return st().items.filter((i) => !seen.has(i.id) && seen.add(i.id));
 }
 
+/** まとめて出力… of the shelf, in its order. */
 export function sheetFromTray() {
-  return sheetList(traySource());
+  return sheetList({ kind: "tray" });
 }
 
+/** 書き出し… of the shelf. */
 export function exportTray() {
-  exportList(traySource());
+  exportList({ kind: "tray" });
 }
 
 // ------------------------------------------------------- contact sheet

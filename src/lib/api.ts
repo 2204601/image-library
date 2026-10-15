@@ -210,7 +210,7 @@ export type View =
   | { kind: "similar" }
   | { kind: "favorites" }
   | { kind: "pinned" }
-  /** The work tray (作業台): items gathered to handle together. */
+  /** The shelf (the `tray` table): only queried for the shelf under the list, never opened as a list. */
   | { kind: "tray" }
   | { kind: "folder"; id: string }
   | { kind: "smart"; id: string };

@@ -113,8 +113,7 @@ export type CellProps = {
 
 /** Favourite heart (also a toggle on hover) and pin mark on a thumbnail. */
 function FlagOverlay({ item }: { item: Item }) {
-  // Everything in the tray view is on the tray; the mark would only add noise.
-  const trayMark = useStore((s) => item.inTray && s.view.kind !== "tray");
+  const trayMark = item.inTray;
   return (
     <>
       <button
@@ -138,7 +137,7 @@ function FlagOverlay({ item }: { item: Item }) {
             </span>
           )}
           {trayMark && (
-            <span title="作業台にあります（B で外す）" className="pointer-events-auto rounded-full bg-emerald-600 p-1 text-white shadow">
+            <span title="シェルフにあります（B で外す）" className="pointer-events-auto rounded-full bg-emerald-600 p-1 text-white shadow">
               <Layers size={11} strokeWidth={2.25} />
             </span>
           )}
@@ -477,7 +476,7 @@ export function Grid() {
   const dragIds = useStore((s) => (s.drag?.kind === "items" ? s.drag.ids : null));
   const dragging = useMemo(() => new Set(dragIds ?? []), [dragIds]);
   const reorderable = useStore(
-    (s) => s.sort === "manual" && ((s.view.kind === "folder" && !s.showSubfolders) || s.view.kind === "tray"),
+    (s) => s.sort === "manual" && s.view.kind === "folder" && !s.showSubfolders,
   );
   const dropTarget = useStore((s) => (s.drag?.kind === "items" ? s.dropTarget : null));
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -866,17 +865,6 @@ function Empty({
       <p className="mt-24 text-center text-dim">
         ピン留めした{noun}はありません。{noun}を選んで P キーでピン留めすると、どの一覧でも先頭に表示されます
       </p>
-    );
-  if (kind === "tray")
-    return (
-      <div className="mt-24 flex flex-col items-center gap-2 text-dim">
-        <Layers size={40} strokeWidth={1.25} />
-        <p>作業台は空です</p>
-        <p className="max-w-md text-center text-xs leading-relaxed">
-          画像を選んで B キー、またはサイドバーの「作業台」へドラッグすると、ここに集まります。
-          集めた画像は「まとめて出力」で1枚の画像や HTML にしたり、まとめて書き出したりできます
-        </p>
-      </div>
     );
   if (kind === "folder")
     return (

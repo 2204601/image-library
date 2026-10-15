@@ -379,7 +379,7 @@ function SidebarChecks({
 }
 
 const SIDEBAR_SUB =
-  "チェックを外した項目はサイドバーに出しません。表示を隠すだけで、作業台へ追加（B キー）などの操作はそのまま使えます。「すべて」と「ゴミ箱」はいつも出ます";
+  "チェックを外した項目はサイドバーに出しません。表示を隠すだけで、シェルフへ追加（B キー）などの操作はそのまま使えます。「すべて」と「ゴミ箱」はいつも出ます";
 
 function AppSidebarPage() {
   const hidden = useStore((s) => sidebarHidden(s, "app"));
