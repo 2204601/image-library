@@ -17,7 +17,6 @@ import {
   Tags,
   Trash2,
   Type,
-  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -36,7 +35,6 @@ import {
   transferList,
   trayList,
 } from "../lib/actions";
-import { FontFilters } from "../features/fonts/FontFilters";
 import { api, modeOf, type Folder, type ItemKind, type View } from "../lib/api";
 import { modeLabel, type Mode } from "../lib/modes";
 import {
@@ -489,7 +487,7 @@ function SmartFolderList() {
     >
       {smartFolders.length === 0 && (
         <p className="px-2 py-1 text-xs leading-relaxed text-dim">
-          絞り込み（⌘⇧F）の条件を保存すると、当てはまる{noun}が自動で集まります
+          絞り込みの「条件を保存」で、当てはまる{noun}が自動で集まります
         </p>
       )}
       {smartFolders.map((sf) => (
@@ -624,54 +622,22 @@ function ModeSwitch() {
   );
 }
 
+/** Tags are places like folders (docs/NAVIGATION.md): a click opens the tag's items. */
 function TagList() {
   const tags = useStore((s) => s.tags);
-  const tagFilter = useStore((s) => s.tagFilter);
-  const toggleTagFilter = useStore((s) => s.toggleTagFilter);
-  const clearTagFilter = useStore((s) => s.clearTagFilter);
-  const tagMatchAll = useStore((s) => s.tagMatchAll);
-  const setTagMatchAll = useStore((s) => s.setTagMatchAll);
+  const view = useStore((s) => s.view);
+  const setView = useStore((s) => s.setView);
   const run = useStore((s) => s.run);
   const showMenu = useMenu((s) => s.show);
   const [editing, setEditing] = useState<number | null>(null);
 
-  const mode = (all: boolean, label: string, title: string) => (
-    <button
-      title={title}
-      onClick={() => setTagMatchAll(all)}
-      className={`rounded px-1.5 py-px font-normal ${
-        tagMatchAll === all ? "bg-white/15 text-fg" : "text-dim hover:text-fg"
-      }`}
-    >
-      {label}
-    </button>
-  );
-
   return (
-    <Section
-      title="タグ"
-      hideId="section:tags"
-      action={
-        tagFilter.length > 0 && (
-          <div className="flex items-center gap-1.5 tracking-normal">
-            {tagFilter.length > 1 && (
-              <div className="flex rounded-md border border-line p-px">
-                {mode(false, "いずれか", "選択したタグのどれかが付いた画像（OR）")}
-                {mode(true, "すべて", "選択したタグがすべて付いた画像（AND）")}
-              </div>
-            )}
-            <button title="タグの絞り込みを解除" className="text-dim hover:text-fg" onClick={clearTagFilter}>
-              <X size={14} />
-            </button>
-          </div>
-        )
-      }
-    >
+    <Section title="タグ" hideId="section:tags">
       {tags.length === 0 && <p className="px-2 py-1 text-xs text-dim">タグはまだありません</p>}
       {tags.map((t) => (
         <Row
           key={t.id}
-          active={tagFilter.includes(t.id)}
+          active={view.kind === "tag" && view.id === t.id}
           icon={<TagIcon size={14} style={{ color: colorHex(t.color) }} fill={colorHex(t.color) ?? "none"} fillOpacity={0.3} />}
           label={
             editing === t.id ? (
@@ -687,7 +653,7 @@ function TagList() {
             )
           }
           count={t.count}
-          onClick={() => toggleTagFilter(t.id)}
+          onClick={() => setView({ kind: "tag", id: t.id })}
           onDoubleClick={() => setEditing(t.id)}
           onContextMenu={(e) =>
             showMenu(e, [
@@ -717,10 +683,15 @@ export function Sidebar() {
   const showMenu = useMenu((s) => s.show);
 
   type Entry = { view: View; label: string; icon: React.ReactNode; count?: number; dropId?: string; title?: string };
-  // Three groups (docs/SETTINGS.md): what to look at, what is marked, and the
-  // tidying up, kept at the bottom.
+  // Places, top down (docs/NAVIGATION.md): what to look at, what is marked,
+  // the tidying up (framed), then what was gathered (folders, smart folders, tags).
   const looks: Entry[] = [
-    { view: { kind: "all" }, label: "すべて", icon: <Images size={15} />, count: counts.all },
+    {
+      view: { kind: "all" },
+      label: mode === "font" ? "すべてのフォント" : "すべて",
+      icon: <Images size={15} />,
+      count: counts.all,
+    },
     { view: { kind: "unfiled" }, label: "未分類", icon: <Inbox size={15} />, count: counts.unfiled },
     { view: { kind: "untagged" }, label: "タグなし", icon: <Tags size={15} />, count: counts.untagged },
   ];
@@ -779,12 +750,11 @@ export function Sidebar() {
         {shown(looks).map(row)}
         {shown(marks).length > 0 && <div className="mx-2 my-1.5 border-t border-line/60" />}
         {shown(marks).map(row)}
-        {mode === "font" && <FontFilters />}
+        <div className="mt-2 rounded-lg border border-line/70 p-0.5">{shown(tidying).map(row)}</div>
         <FolderTree />
         <SmartFolderList />
         <TagList />
       </nav>
-      <div className="shrink-0 border-t border-line px-2 py-1">{shown(tidying).map(row)}</div>
       <button
         onClick={() => useShortcutHelp.getState().setOpen(true)}
         className="flex shrink-0 items-center gap-2 border-t border-line px-4 py-2 text-xs text-dim hover:bg-white/5 hover:text-fg"

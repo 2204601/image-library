@@ -817,6 +817,8 @@ pub enum View {
     Tray,
     /// Items matching a smart folder's saved rule.
     Smart { id: String },
+    /// Items carrying a tag: the sidebar's tags are places like folders (docs/NAVIGATION.md).
+    Tag { id: i64 },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
@@ -1033,6 +1035,13 @@ fn font_weight_where(key: &str) -> String {
 const FONT_FEATURE_WHERE: &str = "instr(',' || IFNULL(items.font_features, '') || ',', ',' || ? || ',') > 0";
 
 /// Adds the WHERE clauses for `rule`.
+/// Each shape as SQL on `items` (images only; square = sides within 5%).
+const SHAPE_SQL: [(&str, &str); 3] = [
+    ("landscape", "items.width > items.height * 1.05"),
+    ("portrait", "items.height > items.width * 1.05"),
+    ("square", "(items.width <= items.height * 1.05 AND items.height <= items.width * 1.05)"),
+];
+
 fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql>>) {
     if let Some(expr) = search::parse(&rule.search) {
         let sql = search::to_sql(&expr, &mut |word| {
@@ -1110,11 +1119,9 @@ fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql
             .shapes
             .iter()
             .map(|s| match s {
-                Shape::Landscape => "items.width > items.height * 1.05",
-                Shape::Portrait => "items.height > items.width * 1.05",
-                Shape::Square => {
-                    "(items.width <= items.height * 1.05 AND items.height <= items.width * 1.05)"
-                }
+                Shape::Landscape => SHAPE_SQL[0].1,
+                Shape::Portrait => SHAPE_SQL[1].1,
+                Shape::Square => SHAPE_SQL[2].1,
             })
             .collect();
         wheres.push(format!("({})", parts.join(" OR ")));
@@ -1139,27 +1146,11 @@ const SUBFOLDERS_CTE: &str = "WITH RECURSIVE sub(id) AS (
        SELECT ? UNION ALL SELECT c.id FROM folders c JOIN sub ON c.parent_id = sub.id)
      SELECT id FROM sub";
 
-/// Rows of a query; `finish` does the rest (see `QueryRows`).
-pub fn query_rows(conn: &Connection, q: &ItemQuery) -> DbResult<QueryRows> {
+/// The WHERE terms (joined with AND) and their arguments of a query: its
+/// view, ad-hoc conditions and smart folder rule.
+fn query_where(conn: &Connection, q: &ItemQuery) -> DbResult<(Vec<String>, Vec<Box<dyn ToSql>>)> {
     let mut wheres: Vec<String> = Vec::new();
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
-
-    // Manual order joins the folder's (or the tray's) positions; a folder's
-    // bind value comes first.
-    let manual_folder = match (&q.view, q.sort) {
-        (View::Folder { id }, SortKey::Manual) => Some(id.clone()),
-        _ => None,
-    };
-    let manual_tray = q.view == View::Tray && matches!(q.sort, SortKey::Manual);
-    let join = if let Some(f) = &manual_folder {
-        args.push(Box::new(f.clone()));
-        "LEFT JOIN item_folders pos ON pos.item_id = items.id AND pos.folder_id = ?"
-    } else if manual_tray {
-        "LEFT JOIN tray pos ON pos.item_id = items.id"
-    } else {
-        ""
-    };
-
     if q.view == View::Trash {
         wheres.push("items.deleted_at IS NOT NULL".into());
     } else {
@@ -1188,6 +1179,10 @@ pub fn query_rows(conn: &Connection, q: &ItemQuery) -> DbResult<QueryRows> {
         View::Favorites => wheres.push("items.favorite = 1".into()),
         View::Pinned => wheres.push("items.pinned_at IS NOT NULL".into()),
         View::Tray => wheres.push("EXISTS (SELECT 1 FROM tray t WHERE t.item_id = items.id)".into()),
+        View::Tag { id } => {
+            wheres.push("EXISTS (SELECT 1 FROM item_tags t WHERE t.item_id = items.id AND t.tag_id = ?)".into());
+            args.push(Box::new(*id));
+        }
         View::All | View::Trash | View::Similar | View::Smart { .. } => {}
     }
 
@@ -1198,6 +1193,30 @@ pub fn query_rows(conn: &Connection, q: &ItemQuery) -> DbResult<QueryRows> {
             None => wheres.push("0".into()), // folder was deleted
         }
     }
+    Ok((wheres, args))
+}
+
+/// Rows of a query; `finish` does the rest (see `QueryRows`).
+pub fn query_rows(conn: &Connection, q: &ItemQuery) -> DbResult<QueryRows> {
+    let mut args: Vec<Box<dyn ToSql>> = Vec::new();
+
+    // Manual order joins the folder's (or the tray's) positions; a folder's
+    // bind value comes first, as the join comes before WHERE.
+    let manual_folder = match (&q.view, q.sort) {
+        (View::Folder { id }, SortKey::Manual) => Some(id.clone()),
+        _ => None,
+    };
+    let manual_tray = q.view == View::Tray && matches!(q.sort, SortKey::Manual);
+    let join = if let Some(f) = &manual_folder {
+        args.push(Box::new(f.clone()));
+        "LEFT JOIN item_folders pos ON pos.item_id = items.id AND pos.folder_id = ?"
+    } else if manual_tray {
+        "LEFT JOIN tray pos ON pos.item_id = items.id"
+    } else {
+        ""
+    };
+    let (wheres, where_args) = query_where(conn, q)?;
+    args.extend(where_args);
 
     let dir = if q.desc { "DESC" } else { "ASC" };
     let order = match q.sort {
@@ -1233,6 +1252,102 @@ pub fn query_rows(conn: &Connection, q: &ItemQuery) -> DbResult<QueryRows> {
 /// The items of a query, as `query_items` returns them.
 pub fn query_items(conn: &Connection, q: &ItemQuery) -> DbResult<Vec<Item>> {
     Ok(query_rows(conn, q)?.finish())
+}
+
+/// How many of a query's items have each value of each condition of the
+/// filter row (docs/NAVIGATION.md). The app asks with the condition whose
+/// menu is open left out, so its counts are with the other conditions on.
+#[derive(Debug, Default, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Facets {
+    /// Items rated exactly n (0 = unrated); "★n 以上" adds them up.
+    pub ratings: BTreeMap<u8, i64>,
+    pub tags: BTreeMap<i64, i64>,
+    pub kinds: BTreeMap<Kind, i64>,
+    /// File types (canonical, as `list_exts`), most first.
+    pub exts: Vec<(String, i64)>,
+    /// Images by shape ("landscape", "portrait", "square").
+    pub shapes: BTreeMap<String, i64>,
+    /// Fonts (details read) by writing system, typeface style, weight range and feature.
+    pub font_scripts: BTreeMap<String, i64>,
+    pub font_categories: BTreeMap<String, i64>,
+    pub font_weights: BTreeMap<String, i64>,
+    pub font_features: BTreeMap<String, i64>,
+}
+
+pub fn facet_counts(conn: &Connection, q: &ItemQuery) -> DbResult<Facets> {
+    let (wheres, args) = query_where(conn, q)?;
+    let matched = format!("SELECT items.id FROM items WHERE {}", wheres.join(" AND "));
+    let args: Vec<&dyn ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    // Rows of (key, count) over the matched items, `col` and `cond` on `items`.
+    let group = |col: &str, cond: &str| -> DbResult<Vec<(rusqlite::types::Value, i64)>> {
+        let sql = format!("SELECT {col}, COUNT(*) FROM items WHERE items.id IN ({matched}) AND {cond} GROUP BY 1");
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(args.as_slice(), |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect()
+    };
+    let text = |v: rusqlite::types::Value| match v {
+        rusqlite::types::Value::Text(t) => t,
+        _ => String::new(),
+    };
+    let int = |v: rusqlite::types::Value| match v {
+        rusqlite::types::Value::Integer(i) => i,
+        _ => 0,
+    };
+    let mut f = Facets {
+        ratings: group("items.rating", "1")?.into_iter().map(|(k, n)| (int(k) as u8, n)).collect(),
+        kinds: group("items.kind", "1")?.into_iter().map(|(k, n)| (Kind::parse(&text(k)), n)).collect(),
+        font_scripts: group("items.font_script", "items.kind = 'font' AND items.font_script IS NOT NULL")?
+            .into_iter()
+            .map(|(k, n)| (text(k), n))
+            .collect(),
+        font_categories: group(FONT_CATEGORY, "items.kind = 'font' AND items.font_script IS NOT NULL")?
+            .into_iter()
+            .map(|(k, n)| (text(k), n))
+            .collect(),
+        ..Default::default()
+    };
+    for (ext, n) in group("lower(items.ext)", "1")? {
+        let ext = canonical_ext(&text(ext));
+        match f.exts.iter_mut().find(|(e, _)| *e == ext) {
+            Some((_, c)) => *c += n,
+            None => f.exts.push((ext, n)),
+        }
+    }
+    f.exts.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    {
+        let sql = format!(
+            "SELECT x.tag_id, COUNT(*) FROM item_tags x WHERE x.item_id IN ({matched}) GROUP BY x.tag_id"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(args.as_slice(), |r| Ok((r.get(0)?, r.get(1)?)))?;
+        f.tags = rows.collect::<DbResult<_>>()?;
+    }
+    // One SUM per value where an item can have several (or a range spans several).
+    let sums = |terms: &[(String, String)], cond: &str| -> DbResult<BTreeMap<String, i64>> {
+        let cols: Vec<String> = terms.iter().map(|(_, t)| format!("SUM({t})")).collect();
+        let sql = format!("SELECT {} FROM items WHERE items.id IN ({matched}) AND {cond}", cols.join(", "));
+        let mut stmt = conn.prepare(&sql)?;
+        let out: BTreeMap<String, i64> = stmt.query_row(args.as_slice(), |r| {
+            terms
+                .iter()
+                .enumerate()
+                .map(|(i, (k, _))| Ok((k.clone(), r.get::<_, Option<i64>>(i)?.unwrap_or(0))))
+                .collect()
+        })?;
+        Ok(out.into_iter().filter(|(_, n)| *n > 0).collect())
+    };
+    let shapes: Vec<(String, String)> = SHAPE_SQL.iter().map(|(k, t)| (k.to_string(), t.to_string())).collect();
+    f.shapes = sums(&shapes, "items.kind = 'image'")?;
+    let fonts = "items.kind = 'font' AND items.font_script IS NOT NULL";
+    let weights: Vec<(String, String)> = FONT_WEIGHTS.iter().map(|(k, _, _)| (k.to_string(), font_weight_where(k))).collect();
+    f.font_weights = sums(&weights, fonts)?;
+    let features: Vec<(String, String)> = crate::fonts::FEATURES
+        .iter()
+        .map(|k| (k.to_string(), format!("instr(',' || IFNULL(items.font_features, '') || ',', ',{k},') > 0")))
+        .collect();
+    f.font_features = sums(&features, fonts)?;
+    Ok(f)
 }
 
 /// A query's rows, with the similar view's grouping still to do: it compares
@@ -3436,6 +3551,37 @@ mod tests {
         rename_tag(&mut conn, fx, "y").unwrap();
         assert!(tag_id(&conn, "y", Mode::Font).unwrap().is_some(), "renamed, not merged into the stock's y");
         assert_eq!(list_tags(&conn, Some(Mode::Stock)).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn tags_are_places_and_facets_count_with_the_other_conditions() {
+        let mut conn = mem();
+        add(&mut conn, "a", "a.png", 1);
+        add(&mut conn, "b", "b.jpg", 2);
+        add(&mut conn, "c", "c.png", 3);
+        conn.execute("UPDATE items SET width = 20 WHERE id = 'a'", []).unwrap(); // landscape
+        conn.execute("UPDATE items SET ext = 'jpg' WHERE id = 'b'", []).unwrap();
+        set_rating(&conn, &s(&["a"]), 5).unwrap();
+        set_rating(&conn, &s(&["b"]), 3).unwrap();
+        add_tags(&mut conn, &s(&["a", "b"]), &s(&["x"])).unwrap();
+        add_tags(&mut conn, &s(&["b", "c"]), &s(&["y"])).unwrap();
+        let x = tag_id(&conn, "x", Mode::Stock).unwrap().unwrap();
+        let y = tag_id(&conn, "y", Mode::Stock).unwrap().unwrap();
+
+        // A tag as a place.
+        let mut tag = q(View::Tag { id: x });
+        assert_eq!(ids(query_items(&conn, &tag).unwrap()), ["a", "b"]);
+        let f = facet_counts(&conn, &tag).unwrap();
+        assert_eq!(f.ratings, BTreeMap::from([(5, 1), (3, 1)]));
+        assert_eq!(f.tags, BTreeMap::from([(x, 2), (y, 1)]));
+        assert_eq!(f.exts, [("jpg".to_string(), 1), ("png".to_string(), 1)]);
+        assert_eq!(f.shapes, BTreeMap::from([("landscape".to_string(), 1), ("square".to_string(), 1)]));
+        assert_eq!(f.kinds, BTreeMap::from([(Kind::Image, 2)]));
+
+        // Another condition narrows the counts.
+        tag.filter.exts = vec!["png".into()];
+        let f = facet_counts(&conn, &tag).unwrap();
+        assert_eq!((f.ratings, f.tags), (BTreeMap::from([(5, 1)]), BTreeMap::from([(x, 1)])));
     }
 
     #[test]

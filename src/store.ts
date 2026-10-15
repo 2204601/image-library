@@ -13,6 +13,7 @@ import {
   type SmartFolder,
   type ImportSummary,
   type Item,
+  type ItemQuery,
   type ItemKind,
   type LibraryInfo,
   type SimilarLevel,
@@ -209,8 +210,7 @@ interface State {
   minRating: number;
   /** Attribute filters from the filter bar. */
   filter: Filter;
-  filterOpen: boolean;
-  /** Smart folder whose rule is loaded into the filters for editing. */
+  /** Smart folder whose rule is loaded into the filter row for editing. */
   editingSmart: { id: string; name: string } | null;
   layout: Layout;
   showInfo: ShowInfo;
@@ -335,9 +335,8 @@ interface State {
   setShowSubfolders: (on: boolean) => void;
   setMinRating: (n: number) => void;
   setFilter: (patch: Partial<Filter>) => void;
-  /** Resets search, tag, rating and attribute filters. */
+  /** Resets every condition of the filter row (the kind filter too) and the search. */
   clearConditions: () => void;
-  toggleFilterOpen: () => void;
   /** The ad-hoc conditions as a smart folder rule. */
   currentRule: () => Rule;
   /** Loads a smart folder's rule into the filters so it can be edited. */
@@ -461,7 +460,7 @@ function fitToKinds(s: KindState & { sort: SortKey }): Partial<State> {
   return { filter: { ...s.filter, ...IMAGE_ONLY }, ...(s.sort === "dimensions" ? { sort: "importedAt" as SortKey } : {}) };
 }
 
-/** Number of active ad-hoc conditions (for badges / "clear" buttons). */
+/** Number of active ad-hoc conditions: the filter row's and the search. */
 export function activeConditions(s: {
   search: string;
   tagFilter: number[];
@@ -473,7 +472,7 @@ export function activeConditions(s: {
     (s.search.trim() ? 1 : 0) +
     (s.tagFilter.length ? 1 : 0) +
     (s.minRating ? 1 : 0) +
-    // The kind filter shows on the toolbar itself, not as a condition.
+    (f.kinds.length ? 1 : 0) +
     (f.fontScripts.length ? 1 : 0) +
     (f.fontCategories.length ? 1 : 0) +
     (f.fontWeights.length ? 1 : 0) +
@@ -557,20 +556,110 @@ let librarySeq = 0;
 
 /**
  * After the sidebar entries in effect changed: hiding what is open moves to
- * "すべて"; hiding the tags (or the fonts' filters) drops their conditions.
+ * "すべて". The filter row's conditions stay (hiding is of places only).
  */
 function leaveHidden() {
   const s = useStore.getState();
   const ids = sidebarHidden(s)[s.mode] ?? [];
   const entry = entryOfView(s.view);
   if (entry && ids.includes(entry)) s.setView({ kind: "all" });
-  if (ids.includes("section:tags") && s.tagFilter.length) s.clearTagFilter();
-  const f = s.filter;
-  if (
-    ids.includes("section:fontFilters") &&
-    (f.fontScripts.length || f.fontCategories.length || f.fontWeights.length || f.fontFeatures.length)
-  ) {
-    s.setFilter({ fontScripts: [], fontCategories: [], fontWeights: [], fontFeatures: [] });
+}
+
+/** The conditions of the filter row, each cleared on its own (docs/NAVIGATION.md). */
+export type ConditionKey =
+  | "rating"
+  | "tags"
+  | "kinds"
+  | "exts"
+  | "dims"
+  | "date"
+  | "size"
+  | "fontScripts"
+  | "fontCategories"
+  | "fontWeights"
+  | "fontFeatures";
+
+/** What clearing each condition sets. */
+export const CLEARED: Record<ConditionKey, { minRating?: 0; tagFilter?: number[]; filter?: Partial<Filter> }> = {
+  rating: { minRating: 0 },
+  tags: { tagFilter: [] },
+  kinds: { filter: { kinds: [] } },
+  exts: { filter: { exts: [] } },
+  dims: { filter: { shapes: [], minWidth: null, maxWidth: null, minHeight: null, maxHeight: null } },
+  date: { filter: { importedAfter: null, importedBefore: null } },
+  size: { filter: { minSize: null, maxSize: null } },
+  fontScripts: { filter: { fontScripts: [] } },
+  fontCategories: { filter: { fontCategories: [] } },
+  fontWeights: { filter: { fontWeights: [] } },
+  fontFeatures: { filter: { fontFeatures: [] } },
+};
+
+type QueryState = Pick<
+  State,
+  | "mode"
+  | "view"
+  | "search"
+  | "tagFilter"
+  | "tagMatchAll"
+  | "sort"
+  | "desc"
+  | "showSubfolders"
+  | "minRating"
+  | "filter"
+  | "similarLevel"
+  | "librarySettings"
+>;
+
+/**
+ * The query of the list on screen; `without` leaves one condition out, for
+ * the counts in its menu (with the other conditions on).
+ */
+export function listQuery(s: QueryState, without?: ConditionKey): ItemQuery {
+  const c = without ? CLEARED[without] : {};
+  const st = { ...s, ...c, filter: { ...s.filter, ...c.filter } };
+  return {
+    view: st.view,
+    search: st.search,
+    tagIds: st.tagFilter,
+    tagMatchAll: st.tagMatchAll,
+    includeSubfolders: st.showSubfolders,
+    minRating: st.minRating,
+    // The mode's kinds, narrowed by the kind filter.
+    filter: { ...st.filter, kinds: queryKinds(st) },
+    similarLevel: st.similarLevel,
+    sort: st.sort,
+    desc: st.desc,
+  };
+}
+
+/**
+ * How many items the open place has without any condition, for "5 / 13 件";
+ * null where it isn't known (the similar view).
+ */
+export function placeTotal(s: Pick<State, "view" | "counts" | "folders" | "tags" | "smartFolders" | "showSubfolders">): number | null {
+  const v = s.view;
+  switch (v.kind) {
+    case "all":
+    case "unfiled":
+    case "untagged":
+    case "favorites":
+    case "pinned":
+    case "trash":
+      return s.counts[v.kind];
+    case "tray":
+      return s.counts.tray;
+    case "tag":
+      return s.tags.find((t) => t.id === v.id)?.count ?? null;
+    case "smart":
+      return s.smartFolders.find((f) => f.id === v.id)?.count ?? null;
+    case "folder": {
+      const own = (id: string): number =>
+        (s.folders.find((f) => f.id === id)?.count ?? 0) +
+        (s.showSubfolders ? s.folders.filter((f) => f.parentId === id).reduce((n, f) => n + own(f.id), 0) : 0);
+      return own(v.id);
+    }
+    case "similar":
+      return null;
   }
 }
 
@@ -611,6 +700,8 @@ export function entryOfView(v: View): string | null {
       return "section:folders";
     case "smart":
       return "section:smart";
+    case "tag":
+      return "section:tags";
     case "all":
     case "trash":
       return null;
@@ -639,7 +730,6 @@ export const useStore = create<State>((set, get) => ({
   showSubfolders: load("showSubfolders") === "true",
   minRating: 0,
   filter: EMPTY_FILTER,
-  filterOpen: load("filterOpen") === "true",
   editingSmart: null,
   layout: loadLayout(initialMode),
   specimenText: load("specimenText") ?? "",
@@ -997,18 +1087,19 @@ export const useStore = create<State>((set, get) => ({
     get().refresh();
   },
   clearConditions: () => {
-    // The kind filter has its own "すべて" on the toolbar.
-    set({ search: "", tagFilter: [], minRating: 0, filter: { ...EMPTY_FILTER, kinds: get().filter.kinds } });
+    set({ search: "", tagFilter: [], minRating: 0, filter: EMPTY_FILTER });
     get().refresh();
-  },
-  toggleFilterOpen: () => {
-    const filterOpen = !get().filterOpen;
-    set({ filterOpen });
-    persist("filterOpen", String(filterOpen));
   },
   currentRule: () => {
     const s = get();
-    const { search, tagFilter, tagMatchAll, minRating, filter } = s;
+    const { search, minRating, filter } = s;
+    let { tagFilter, tagMatchAll } = s;
+    // In a tag's place, the tag is a condition too (when the others all have to be on).
+    const v = s.view;
+    if (v.kind === "tag" && (tagFilter.length === 0 || tagMatchAll)) {
+      tagFilter = [v.id, ...tagFilter.filter((t) => t !== v.id)];
+      tagMatchAll = true;
+    }
     // The kinds picked are a condition like the others (the smart folder is of
     // the mode it is made in, which keeps it to the mode's kinds).
     const kinds: ItemKind[] = s.mode === "font" ? [] : filter.kinds;
@@ -1027,7 +1118,6 @@ export const useStore = create<State>((set, get) => ({
       // The kinds go to the kind filter (in the font mode, they are its own). Shape and
       // pixel size only match images, so a rule with them shows as of images.
       filter: { ...EMPTY_FILTER, ...sf.rule.filter, kinds: get().mode === "stock" ? ruleKinds(sf.rule.filter) : [] },
-      filterOpen: true,
       selected: new Set(),
     });
     get().refresh();
@@ -1098,9 +1188,7 @@ export const useStore = create<State>((set, get) => ({
   refresh: async () => {
     if (!get().library) return;
     const seq = ++refreshSeq;
-    const { mode, view, search, tagFilter, tagMatchAll, sort, desc, showSubfolders, minRating, filter, similarLevel } =
-      get();
-    const kinds = queryKinds(get());
+    const { mode, view, similarLevel } = get();
     try {
       let dismissedGroups: number | null = null;
       if (view.kind === "similar") {
@@ -1113,19 +1201,7 @@ export const useStore = create<State>((set, get) => ({
         dismissedGroups = await api.countDismissedDuplicates();
       }
       const [rawItems, folders, tags, counts, smartFolders, exts, shelf] = await Promise.all([
-        api.queryItems({
-          view,
-          search,
-          tagIds: tagFilter,
-          tagMatchAll,
-          includeSubfolders: showSubfolders,
-          minRating,
-          // The mode's kinds, narrowed by the kind filter.
-          filter: { ...filter, kinds },
-          similarLevel,
-          sort,
-          desc,
-        }),
+        api.queryItems(listQuery(get())),
         api.listFolders(mode),
         api.listTags(mode),
         api.getCounts(mode),
@@ -1155,6 +1231,7 @@ export const useStore = create<State>((set, get) => ({
       const viewNow = get().view;
       const viewGone =
         (viewNow.kind === "folder" && !folders.some((f) => f.id === viewNow.id)) ||
+        (viewNow.kind === "tag" && !tags.some((t) => t.id === viewNow.id)) ||
         (viewNow.kind === "smart" && !smartFolders.some((f) => f.id === viewNow.id));
       const folderIds = new Set(folders.map((f) => f.id));
       const byName = new Map(tags.map((t) => [t.name, t.id]));

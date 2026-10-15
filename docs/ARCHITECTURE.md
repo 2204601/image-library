@@ -22,9 +22,8 @@
     フォルダへドロップしたときにほかのモードの項目が混ざっていたら、それは未分類のまま入る（取り込み後に `notifyOtherMode` で知らせる）
   - 分ける前のライブラリは、開いたときに移行する（step 21。`split_modes`）。その前に `library.before-modes.db` へ複製を残す
     （`back_up_before_modes`）
-- **種類の絞り込み**：ストックでは、ツールバー 2 段目のチップ（`Toolbar.tsx` の `KindFilter`、`KINDS` のうちストックの種類から作る）で
-  `filter.kinds` を選ぶ。クリックでその種類だけ、⌘クリックで足す・外す。ほかの条件と違い、表示（フォルダ・タグなど）を
-  移っても残る（モードの代わり）。絞り込みの件数バッジには数えない
+- **種類の絞り込み**：ストックでは、絞り込みの行の「種類」（`FilterRow.tsx` の `KindCondition`、`KINDS` のうちストックの種類から作る）で
+  `filter.kinds` を選ぶ。ほかの条件と違い、表示（フォルダ・タグなど）を移っても残る（モードの代わり）。「すべて解除」では外す
 - 一覧が持ちうる種類は `listKinds`（`lib/modes.ts`、状態を受け取る純粋関数）の 1 か所で決める：モードの種類（使う種類のうちそのモードのもの、
   `kindsOfMode`）を種類の絞り込みで狭め、開いているスマートフォルダの条件と重複の候補（画像だけ）でさらに狭める。
   問い合わせの `filter.kinds` は `queryKinds`（全種類なら空。ストックとフォントはどちらも全種類にはならない）
@@ -38,7 +37,7 @@
   - 前の版の `lastMode: "all"` と `hidden:all` はストックのものとして読む。画像・ファイルのモードがあった版の `lastMode: "image"` などは、
     ストックをその種類に絞って開く。サイドバーで隠した項目は `hidden:stock`、`hidden:all`、`hidden:image` / `hidden:file` の順に引き継ぐ
     （`parseLibrarySettings`。アプリ全体の設定は `parseSidebarHidden`）
-- 件数（`get_counts`）、絞り込みバーの形式一覧（`list_exts`）は `mode` 引数でそのモードの項目だけを数える（`db.rs` の `mode_where`）。
+- 件数（`get_counts`）、形式の一覧（`list_exts`）は `mode` 引数でそのモードの項目だけを数える（`db.rs` の `mode_where`）。
   種類の絞り込みでは変えない
   - `Counts.kinds` だけは常に全種類の件数（モード切替のバッジ用）
 - レイアウトとグループ分けはモードごとに保存する（`layout:<mode>`, `groupBy:<mode>`。ストックは `layout:all`、以前の画像モードのものを引き継ぐ）。
@@ -51,8 +50,14 @@
   （`refresh` で一覧と一緒に取る）ので、モードごとに別のシェルフになる。一覧として開く表示ではなく、`View` の `tray` はこの問い合わせにだけ使う。
   フォントモードは `FONT_SHELF_MAX`（8）件までで、比較ビュー（`features/fonts/CompareView.tsx`、`store.comparing`）を一覧の場所に出す。
   ファミリーの行をシェルフに置くと代表の 1 件になる（`shelfIds`）
-- スマートフォルダの `filter.kinds` はほかと同じ条件（ストックの種類のチップで選んだもの）。フォントモードで作ったものは `kinds` が空。
-  条件を編集するときは、`kinds` を種類のチップに読み込む
+- スマートフォルダの `filter.kinds` はほかと同じ条件（絞り込みの行の「種類」で選んだもの）。フォントモードで作ったものは `kinds` が空。
+  条件を編集するときは、`kinds` を「種類」に読み込む
+
+- **場所と絞り込み**（docs/NAVIGATION.md）：サイドバーは場所（`View`）を 1 つ選ぶ。タグも場所（`View::Tag` / `{ kind: "tag", id }`）。
+  絞り込みはツールバー 3 段目の `components/FilterRow.tsx` 1 か所（フォントの言語・書体・太さ・特徴は `features/fonts/FontFilters.tsx` の
+  `FontConditions` が同じ部品で出す）。一覧の問い合わせは `listQuery(s)`（`store.ts`）で作り、`listQuery(s, key)` はその条件だけを外したもの。
+  メニューの件数は開いたときに `facet_counts`（`db.rs`。問い合わせの WHERE は `query_where` を `query_rows` と共有）で数える。
+  「5 / 13 件」の分母は `placeTotal`（サイドバーの件数から）
 
 種類を増やすとき（例：ブックマーク・動画）：`ItemKind` と `KINDS`（`lib/api.ts`）、`features/<kind>/` を足し、`modeOf` と
 `db::Mode::of` でどのモードのものかを決める。チップと「使う種類」は `KINDS` から作られる。見え方が根本的に違うならモードにする
@@ -80,7 +85,7 @@
 | 共通基盤（core） | `src/lib/*`, `src/store.ts`, `src/components/*` | ライブラリ・DB・取り込み・フォルダ・タグ・スマートフォルダ・検索・一覧の骨組み（Grid / Sidebar / Toolbar / Inspector / Viewer）・Updater |
 | | `src-tauri/src/{db,import,library,search,webimport,share,loopback,changes,proxy,transfer,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、フォルダの共有、変更の記録と取り消し、ライブラリ間のコピー・移動、共通コマンド |
 | | `src-tauri/src/mcp/` | Claude からの整理（MCP サーバー、`--mcp` の中継）。`docs/MCP.md` |
-| フォント | `src/features/fonts/` | フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行とグリッドのタイル（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、サイドバーの言語・書体（`FontFilters.tsx`）、見本の文字の行と大きさ（`SpecimenControls.tsx`）、見本のパターン（`patterns.ts`）、比較ビュー（`CompareView.tsx`）、シェルフの行（`ShelfChip.tsx`）、ウェイト名（`weights.ts`） |
+| フォント | `src/features/fonts/` | フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行とグリッドのタイル（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、絞り込みの行の言語・書体・太さ・特徴（`FontFilters.tsx`）、見本の文字の行と大きさ（`SpecimenControls.tsx`）、見本のパターン（`patterns.ts`）、比較ビュー（`CompareView.tsx`）、シェルフの行（`ShelfChip.tsx`）、ウェイト名（`weights.ts`） |
 | | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`） |
 | ファイル | `src/features/files/` | ビューア（`FileView.tsx`：PDF は `<iframe>`、ほかはサムネイルと「既定のアプリで開く」） |
 | | `src-tauri/src/files/` | 対応する拡張子、サムネイル（Quick Look／Windows.Data.Pdf（`win_pdf.rs`）／中のプレビュー／種類のカード） |

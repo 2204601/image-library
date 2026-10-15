@@ -513,6 +513,18 @@ pub async fn query_items(app: AppHandle, query: ItemQuery) -> CmdResult<Vec<Item
     .map_err(err)?
 }
 
+/// How many of a query's items have each value of each filter condition
+/// (the filter row's menus, docs/NAVIGATION.md).
+#[tauri::command]
+pub async fn facet_counts(app: AppHandle, query: ItemQuery) -> CmdResult<db::Facets> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        with_lib(&state, |lib| db::facet_counts(&lib.conn, &query).map_err(err))
+    })
+    .await
+    .map_err(err)?
+}
+
 #[tauri::command]
 pub fn get_counts(state: State<AppState>, mode: Option<db::Mode>) -> CmdResult<Counts> {
     with_lib(&state, |lib| db::counts(&lib.conn, mode).map_err(err))

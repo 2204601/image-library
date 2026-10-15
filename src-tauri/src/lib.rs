@@ -137,6 +137,7 @@ pub fn run() {
             forget_library,
             transfer_items,
             query_items,
+            facet_counts,
             get_counts,
             selection_info,
             set_note,

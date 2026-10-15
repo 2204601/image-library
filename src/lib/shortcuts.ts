@@ -8,7 +8,8 @@
  * "Click", "Drag", "Wheel" and "Pinch" are mouse gestures, "0-5" and "Arrows"
  * key ranges, "=" the ⌘+ key.
  */
-import { KINDS, type ItemKind } from "./api";
+import { type ItemKind } from "./api";
+import { MODES, modeLabel } from "./modes";
 import { command } from "./commands";
 import type { Layout } from "../store";
 
@@ -46,11 +47,11 @@ export function shortcutSections(): ShortcutSection[] {
       id: "general",
       title: "全体",
       rows: [
-        { label: KINDS.map((k) => k.label).join(" / "), keys: KINDS.map((_, i) => `Mod+${i + 1}`) },
+        { label: MODES.map(modeLabel).join(" / "), keys: MODES.map((_, i) => `Mod+${i + 1}`) },
         cmd("view.sidebar", { label: "サイドバーの表示・非表示" }),
         cmd("view.inspector", { label: "詳細パネルの表示・非表示" }),
         cmd("edit.search"),
-        cmd("edit.filter"),
+        cmd("edit.filter", { label: "絞り込みの行へ" }),
         cmd("go.folder", { label: "フォルダを開く（名前で探す）" }),
         {
           ...pair("view.zoomIn", "view.zoomOut", "サムネイルを大きく / 小さく"),

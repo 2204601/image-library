@@ -197,7 +197,13 @@ export const COMMANDS: Command[] = [
     keys: ["Mod+F"],
     run: () => document.getElementById("search")?.focus(),
   },
-  { id: "edit.filter", title: "絞り込み", keys: ["Mod+Shift+F"], checked: (s) => s.filterOpen, run: (s) => s.toggleFilterOpen() },
+  {
+    id: "edit.filter",
+    title: "絞り込みへ",
+    keys: ["Mod+Shift+F"],
+    // The filter row is always there: the key takes the focus to its first condition.
+    run: () => document.querySelector<HTMLElement>("[data-filter-row] button:not(:disabled)")?.focus(),
+  },
   {
     id: "edit.selectAll",
     title: "すべてを選択",
