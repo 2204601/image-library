@@ -639,7 +639,7 @@ export async function listTargets(source: ListSource, subfolders = true): Promis
     case "smart":
       return queryView({ kind: "smart", id: source.id });
     case "tag":
-      return queryView({ kind: "all" }, { tagIds: [source.id] });
+      return queryView({ kind: "tag", id: source.id });
   }
 }
 

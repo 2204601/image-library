@@ -839,12 +839,12 @@ function Empty({
   if (filtering)
     return (
       <div className="mt-24 flex flex-col items-center gap-3 text-dim">
-        <p>条件に一致する{noun}はありません</p>
+        <p>条件に合う{noun}はありません</p>
         <button
           onClick={() => useStore.getState().clearConditions()}
           className="rounded-md bg-accent px-3 py-1.5 font-medium text-white hover:brightness-110"
         >
-          絞り込みを解除
+          絞り込みをすべて解除
         </button>
       </div>
     );

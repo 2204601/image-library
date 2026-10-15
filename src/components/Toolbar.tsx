@@ -3,7 +3,6 @@ import {
   ArrowUpNarrowWide,
   ChevronDown,
   CopyCheck,
-  Filter as FilterIcon,
   FolderInput,
   FolderSearch,
   ImagePlus,
@@ -14,7 +13,7 @@ import {
   PanelRightOpen,
   Plus,
   Search,
-  Star,
+  Tag as TagIcon,
   Trash2,
   X,
 } from "lucide-react";
@@ -31,27 +30,13 @@ import {
 } from "../lib/actions";
 import { SpecimenControls } from "../features/fonts/SpecimenControls";
 import { kindsNoun } from "../lib/modes";
-import {
-  fontCategoryLabel,
-  fontFeatureLabel,
-  fontScriptLabel,
-  fontWeightLabel,
-  KINDS,
-  type Folder,
-  type ItemKind,
-  type SimilarLevel,
-  type SmartFolder,
-  type SortKey,
-  type View,
-} from "../lib/api";
+import { type Folder, type ItemKind, type SimilarLevel, type SmartFolder, type SortKey, type Tag, type View } from "../lib/api";
 import { colorHex } from "../lib/colors";
-import { describeDate, describeDims, describeRule, describeSize, SHAPE_LABEL } from "../lib/rule";
 import { command } from "../lib/commands";
-import { comboText } from "../lib/shortcuts";
 import { useShallow } from "zustand/react/shallow";
-import { activeConditions, listKinds, shownKinds, usedModes, useStore, type Mode } from "../store";
+import { activeConditions, listKinds, placeTotal, shownKinds, useStore, type Mode } from "../store";
 import { composing } from "../lib/ime";
-import { FilterBar } from "./FilterBar";
+import { FilterRow } from "./FilterRow";
 import { DisplayMenu, GroupMenu, LayoutSwitch } from "./ViewMenu";
 import { Slider } from "./Slider";
 
@@ -77,10 +62,10 @@ const searchHelp = (mode: Mode) =>
     "  ( ) … グループ化、\"語句\" … 完全一致",
   ].join("\n");
 
-function viewTitle(view: View, folders: Folder[], smart: SmartFolder[]): string {
+function viewTitle(view: View, mode: Mode, folders: Folder[], smart: SmartFolder[], tags: Tag[]): string {
   switch (view.kind) {
     case "all":
-      return "すべて";
+      return mode === "font" ? "すべてのフォント" : "すべて";
     case "unfiled":
       return "未分類";
     case "untagged":
@@ -99,6 +84,8 @@ function viewTitle(view: View, folders: Folder[], smart: SmartFolder[]): string 
       return folders.find((f) => f.id === view.id)?.name ?? "";
     case "smart":
       return smart.find((f) => f.id === view.id)?.name ?? "";
+    case "tag":
+      return tags.find((t) => t.id === view.id)?.name ?? "";
   }
 }
 
@@ -121,14 +108,11 @@ export function Toolbar() {
   const toggleSidebar = useStore((s) => s.toggleSidebar);
   const showSubfolders = useStore((s) => s.showSubfolders);
   const setShowSubfolders = useStore((s) => s.setShowSubfolders);
-  const minRating = useStore((s) => s.minRating);
-  const setMinRating = useStore((s) => s.setMinRating);
   const smartFolders = useStore((s) => s.smartFolders);
-  const filterOpen = useStore((s) => s.filterOpen);
-  const toggleFilterOpen = useStore((s) => s.toggleFilterOpen);
   const editingSmart = useStore((s) => s.editingSmart);
-  const startEditSmart = useStore((s) => s.startEditSmart);
   const conditions = useStore(activeConditions);
+  // "5 / 13 件" while narrowed: of the place's items without conditions.
+  const total = useStore((s) => (activeConditions(s) > 0 ? placeTotal(s) : null));
   const mode = useStore((s) => s.mode);
   const kinds = useStore(useShallow(listKinds));
   const addNoun = useStore((s) => kindsNoun(shownKinds(s)));
@@ -177,7 +161,16 @@ export function Toolbar() {
           </button>
           <h1 className="flex items-baseline gap-2 text-base font-semibold">
             {smart && <FolderSearch size={15} className="shrink-0 self-center text-accent" />}
-            <span className="truncate">{viewTitle(view, folders, smartFolders)}</span>
+            {view.kind === "tag" && (
+              <TagIcon
+                size={15}
+                className="shrink-0 self-center"
+                style={{ color: colorHex(tags.find((t) => t.id === view.id)?.color) }}
+              />
+            )}
+            <span className="truncate">
+              {editingSmart ? `「${editingSmart.name}」の条件` : viewTitle(view, mode, folders, smartFolders, tags)}
+            </span>
             {selectedCount > 0 ? (
               <span className="flex shrink-0 items-center gap-1 self-center rounded-full bg-accent/20 py-0.5 pr-0.5 pl-2.5 text-xs font-normal text-accent tabular-nums">
                 {selectedCount} 件を選択中
@@ -191,7 +184,12 @@ export function Toolbar() {
                 </button>
               </span>
             ) : (
-              <span className="shrink-0 text-xs font-normal text-dim tabular-nums">{count} 件</span>
+              <span
+                className={`shrink-0 text-xs font-normal tabular-nums ${total !== null ? "text-accent" : "text-dim"}`}
+                title={total !== null ? `絞り込み中（条件 ${conditions} 個）` : undefined}
+              >
+                {total !== null ? `${count} / ${total} 件` : `${count} 件`}
+              </span>
             )}
           </h1>
           <div className="flex-1" />
@@ -211,26 +209,11 @@ export function Toolbar() {
               placeholder="検索（-除外 / OR）"
               className="w-0 min-w-0 flex-1 bg-transparent outline-none placeholder:text-dim"
             />
-            {text && (
-              <button onClick={() => setText("")} className="text-dim hover:text-fg">
-                <X size={14} />
-              </button>
-            )}
+            {/* Hidden while empty, its room kept (docs/UI.md). */}
+            <button onClick={() => setText("")} className={`text-dim hover:text-fg ${text ? "" : "invisible"}`}>
+              <X size={14} />
+            </button>
           </label>
-          <button
-            title="絞り込み（⌘⇧F）"
-            onClick={toggleFilterOpen}
-            className={`relative flex h-8 w-8 shrink-0 items-center justify-center rounded-md border hover:bg-white/5 ${
-              filterOpen || editingSmart ? "border-accent/60 text-accent" : "border-line"
-            }`}
-          >
-            <FilterIcon size={15} />
-            {conditions > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 animate-pop items-center justify-center rounded-full bg-accent px-1 text-[10px] font-bold text-white">
-                {conditions}
-              </span>
-            )}
-          </button>
           <Divider />
           {isTrash ? (
             <button
@@ -274,19 +257,10 @@ export function Toolbar() {
       </div>
       {/* The font mode's text row stays whatever the layout (docs/UI.md). */}
       {mode === "font" && <SpecimenControls />}
-      <div className="flex min-h-6 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
-        {smart && (
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="text-dim">条件:</span>
-            <span className="truncate">{describeRule(smart.rule, tags).join(" / ") || "なし（すべて）"}</span>
-            <button
-              onClick={() => startEditSmart(smart)}
-              className="shrink-0 rounded px-1.5 py-0.5 text-accent hover:bg-accent/15"
-            >
-              条件を編集
-            </button>
-          </div>
-        )}
+      {/* Where: the conditions narrowing the place, always this one row (docs/NAVIGATION.md). */}
+      <FilterRow />
+      {/* How: the view's own controls on the left, the display's at the right end. */}
+      <div className="flex min-h-7 flex-wrap items-center gap-x-4 gap-y-1.5 text-xs">
         {isFolder && (
           <label className="flex items-center gap-1.5 text-dim hover:text-fg">
             <input
@@ -298,30 +272,6 @@ export function Toolbar() {
             サブフォルダの内容も表示
           </label>
         )}
-        <KindFilter />
-        <div className="flex items-center gap-1" title="評価で絞り込み（この評価以上）">
-          <span className="mr-0.5 text-dim">評価</span>
-          {[1, 2, 3, 4, 5].map((n) => (
-            <button
-              key={n}
-              onClick={() => setMinRating(minRating === n ? 0 : n)}
-              className="p-0.5"
-              title={`★${n} 以上`}
-            >
-              <Star
-                size={13}
-                strokeWidth={1.5}
-                className={n <= minRating ? "text-amber-400" : "text-dim/60 hover:text-dim"}
-                fill={n <= minRating ? "currentColor" : "none"}
-              />
-            </button>
-          ))}
-          {minRating > 0 && (
-            <button onClick={() => setMinRating(0)} className="ml-0.5 text-dim hover:text-fg" title="解除">
-              <X size={12} />
-            </button>
-          )}
-        </div>
         {isSimilar && <SimilarLevelControl />}
         {isSimilar && groups.length > 0 && (
           <span className="text-dim">
@@ -379,8 +329,6 @@ export function Toolbar() {
           {mode !== "font" && <ThumbSize hidden={layout === "list"} />}
         </div>
       </div>
-      {(filterOpen || editingSmart) && <FilterBar />}
-      {conditions > 0 && !editingSmart && <ActiveFilters count={count} />}
     </header>
   );
 }
@@ -408,46 +356,6 @@ function ThumbSize({ hidden }: { hidden: boolean }) {
       <button title="拡大（⌘+）" onClick={() => zoom("view.zoomIn")} className={step}>
         <Plus size={13} />
       </button>
-    </div>
-  );
-}
-
-/**
- * The kind filter of the stock (`filter.kinds`): a click shows one kind, ⌘-click
- * adds or drops one. Made from `KINDS`, so a kind added later gets its chip.
- * It stays from view to view, like the modes it replaces.
- */
-function KindFilter() {
-  const mode = useStore((s) => s.mode);
-  const used = useStore(useShallow(usedModes));
-  const picked = useStore(useShallow((s) => s.filter.kinds));
-  const setKinds = useStore((s) => s.setKinds);
-  // The similar view is of images whatever is picked.
-  const similar = useStore((s) => s.view.kind === "similar");
-  // The stock's kinds only (the fonts are a mode of their own).
-  const kinds = KINDS.filter((k) => k.kind !== "font" && used.includes(k.kind));
-  if (mode !== "stock" || kinds.length < 2 || similar) return null;
-  const chip = (key: string, label: string, on: boolean, title: string, onClick: (e: React.MouseEvent) => void) => (
-    <button
-      key={key}
-      title={title}
-      aria-pressed={on}
-      onClick={onClick}
-      className={`border-line px-2 not-first:border-l ${on ? "bg-accent/25 text-fg" : "text-dim hover:bg-white/5"}`}
-    >
-      {label}
-    </button>
-  );
-  return (
-    <div role="group" aria-label="種類" className="flex h-6 shrink-0 overflow-hidden rounded-md border border-line">
-      {chip("all", "すべて", picked.length === 0, "すべての種類", () => setKinds([]))}
-      {kinds.map(({ kind, label }) => {
-        const on = picked.includes(kind);
-        return chip(kind, label, on, `${label}だけ（${comboText("Mod")}+クリックで種類を足す・外す）`, (e) => {
-          if (e.metaKey || e.ctrlKey) setKinds(on ? picked.filter((k) => k !== kind) : [...picked, kind]);
-          else setKinds(on && picked.length === 1 ? [] : [kind]);
-        });
-      })}
     </div>
   );
 }
@@ -496,108 +404,6 @@ function SimilarLevelControl() {
           </button>
         ))}
       </div>
-    </div>
-  );
-}
-
-/** Everything currently narrowing the list, each removable, plus one "clear all". */
-function ActiveFilters({ count }: { count: number }) {
-  const search = useStore((s) => s.search);
-  const setSearch = useStore((s) => s.setSearch);
-  const tags = useStore((s) => s.tags);
-  const tagFilter = useStore((s) => s.tagFilter);
-  const tagMatchAll = useStore((s) => s.tagMatchAll);
-  const toggleTagFilter = useStore((s) => s.toggleTagFilter);
-  const minRating = useStore((s) => s.minRating);
-  const setMinRating = useStore((s) => s.setMinRating);
-  const filter = useStore((s) => s.filter);
-  const setFilter = useStore((s) => s.setFilter);
-  const clearConditions = useStore((s) => s.clearConditions);
-
-  const chips: { key: string; label: string; color?: string; clear: () => void }[] = [];
-  if (search.trim()) chips.push({ key: "search", label: `検索「${search.trim()}」`, clear: () => setSearch("") });
-  tagFilter.forEach((id, i) => {
-    const t = tags.find((x) => x.id === id);
-    chips.push({
-      key: `tag${id}`,
-      label: `${i > 0 ? (tagMatchAll ? "かつ " : "または ") : "タグ: "}${t?.name ?? ""}`,
-      color: colorHex(t?.color),
-      clear: () => toggleTagFilter(id),
-    });
-  });
-  if (minRating) chips.push({ key: "rating", label: `★${minRating} 以上`, clear: () => setMinRating(0) });
-  if (filter.fontScripts.length)
-    chips.push({
-      key: "fontScripts",
-      label: `言語: ${filter.fontScripts.map(fontScriptLabel).join("・")}`,
-      clear: () => setFilter({ fontScripts: [] }),
-    });
-  if (filter.fontCategories.length)
-    chips.push({
-      key: "fontCategories",
-      label: `書体: ${filter.fontCategories.map(fontCategoryLabel).join("・")}`,
-      clear: () => setFilter({ fontCategories: [] }),
-    });
-  if (filter.fontWeights.length)
-    chips.push({
-      key: "fontWeights",
-      label: `太さ: ${filter.fontWeights.map(fontWeightLabel).join("・")}`,
-      clear: () => setFilter({ fontWeights: [] }),
-    });
-  if (filter.fontFeatures.length)
-    chips.push({
-      key: "fontFeatures",
-      label: `特徴: ${filter.fontFeatures.map(fontFeatureLabel).join("・")}`,
-      clear: () => setFilter({ fontFeatures: [] }),
-    });
-  if (filter.exts.length)
-    chips.push({ key: "exts", label: `形式: ${filter.exts.join(", ")}`, clear: () => setFilter({ exts: [] }) });
-  if (filter.shapes.length)
-    chips.push({
-      key: "shapes",
-      label: filter.shapes.map((x) => SHAPE_LABEL[x]).join("・"),
-      clear: () => setFilter({ shapes: [] }),
-    });
-  const dims = describeDims(filter);
-  if (dims)
-    chips.push({
-      key: "dims",
-      label: `サイズ: ${dims}`,
-      clear: () => setFilter({ minWidth: null, maxWidth: null, minHeight: null, maxHeight: null }),
-    });
-  const date = describeDate(filter);
-  if (date)
-    chips.push({
-      key: "date",
-      label: `追加日: ${date}`,
-      clear: () => setFilter({ importedAfter: null, importedBefore: null }),
-    });
-  const size = describeSize(filter);
-  if (filter.minSize != null || filter.maxSize != null)
-    chips.push({ key: "size", label: `容量: ${size}`, clear: () => setFilter({ minSize: null, maxSize: null }) });
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-xs">
-      <FilterIcon size={13} className="shrink-0 text-accent" />
-      <span className="mr-1 font-medium text-accent">絞り込み中 · {count} 件</span>
-      {chips.map((c) => (
-        <button
-          key={c.key}
-          onClick={c.clear}
-          title="この条件を外す"
-          className="flex items-center gap-1 rounded-full bg-bg/60 py-0.5 pr-1.5 pl-2 hover:bg-bg"
-        >
-          {c.color && <span className="h-2 w-2 rounded-full" style={{ background: c.color }} />}
-          {c.label}
-          <X size={12} className="text-dim" />
-        </button>
-      ))}
-      <button
-        onClick={clearConditions}
-        className="ml-auto flex items-center gap-1 rounded-md bg-accent px-2 py-0.5 font-medium text-white hover:brightness-110"
-      >
-        <X size={12} /> すべて解除
-      </button>
     </div>
   );
 }

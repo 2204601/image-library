@@ -37,7 +37,6 @@ export const SIDEBAR_ENTRIES: { id: string; label: string; modes?: Mode[] }[] = 
   { id: "favorites", label: "お気に入り" },
   { id: "pinned", label: "ピン留め" },
   { id: "similar", label: "重複の候補", modes: ["stock"] },
-  { id: "section:fontFilters", label: "言語・書体・太さ・特徴", modes: ["font"] },
   { id: "section:folders", label: "フォルダ" },
   { id: "section:smart", label: "スマートフォルダ" },
   { id: "section:tags", label: "タグ" },
