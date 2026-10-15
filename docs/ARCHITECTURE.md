@@ -1,51 +1,62 @@
 # 構成の方針：共通基盤と種類ごとの機能
 
-画像・ファイルは「探して使う」、フォントは「比べて選ぶ」と使う場面が違う。そこでモードは見え方が根本的に違う
-フォントだけに分け、**「すべて」と「フォント」の 2 つ** にしている。画像とファイルは「すべて」の中で種類の絞り込みで見る。
+画像・ファイルは「探して使う」、フォントは「比べて選ぶ」と使う場面が違う。そこでモードを **［ストック｜フォント］** に分け、
+フォルダ・タグ・スマートフォルダも **モードごとに別々に持つ**（docs/MODES.md）。画像とファイルはストックの中で種類の絞り込みで見る。
 フォントを別アプリに切り出す案は保留中で、そうなっても困らないように、
 **共通基盤（core）** と **種類ごとの機能（features）** の境界を明確にしておく。
 
 ## モード
 
-- `store.ts` の `mode`（`"all" | "font"`、型と `MODES` は `lib/modes.ts`）。
-  サイドバー上部の切替、⌘1 すべて / ⌘2 フォント（`MODES` の順）。
+- `store.ts` の `mode`（`"stock" | "font"`、型は `lib/api.ts`、`MODES` は `lib/modes.ts`）。項目のモードは種類で決まる
+  （`modeOf`：フォントはフォント、ほかはストック。Rust は `db::Mode::of`）。
+  サイドバー上部の切替、⌘1 ストック / ⌘2 フォント（`MODES` の順）。
   ライブラリの切り替えは頻度が低いのでサイドバーの一番下（`LibrarySwitcher`）
-- **種類の絞り込み**：「すべて」では、ツールバー 2 段目のチップ（`Toolbar.tsx` の `KindFilter`、`KINDS` から作る）で
+- **モードごとのデータ**：`folders` / `tags` / `smart_folders` の `mode` 列（`db.rs`）。一覧は `list_folders(mode)` などで
+  そのモードのものだけを取る。
+  - フォルダにはそのモードの項目しか入らない（`move_to_folder` / `file_unfiled` がほかを無視する）。サブフォルダは親のモード、
+    並び順はモードごとの最上位で別々（`sibling_ids`）。別のモードのフォルダの下へは移せない（`place_folder`）
+  - タグは名前と `mode` で 1 つ（`UNIQUE (name, mode)`）。`add_tags` は項目ごとにそのモードのタグを付ける（無ければ作る）ので、
+    画像とフォントを一緒に選んで同じ名前を付けると、両方のモードに同じ名前のタグができる
+  - スマートフォルダは作ったモードのもの。件数・中身はそのモードの項目の中だけで数える
+  - 取り込み・ライブラリ間のコピー・ブラウザ拡張（ストックのフォルダとタグだけを見せる）・MCP も、項目のモードのフォルダとタグを使う。
+    フォルダへドロップしたときにほかのモードの項目が混ざっていたら、それは未分類のまま入る（取り込み後に `notifyOtherMode` で知らせる）
+  - 分ける前のライブラリは、開いたときに移行する（step 21。`split_modes`）。その前に `library.before-modes.db` へ複製を残す
+    （`back_up_before_modes`）
+- **種類の絞り込み**：ストックでは、ツールバー 2 段目のチップ（`Toolbar.tsx` の `KindFilter`、`KINDS` のうちストックの種類から作る）で
   `filter.kinds` を選ぶ。クリックでその種類だけ、⌘クリックで足す・外す。ほかの条件と違い、表示（フォルダ・タグなど）を
   移っても残る（モードの代わり）。絞り込みの件数バッジには数えない
-- 一覧が持ちうる種類は `listKinds`（`lib/modes.ts`、状態を受け取る純粋関数）の 1 か所で決める：モードの種類（「すべて」は使う種類、
+- 一覧が持ちうる種類は `listKinds`（`lib/modes.ts`、状態を受け取る純粋関数）の 1 か所で決める：モードの種類（使う種類のうちそのモードのもの、
   `kindsOfMode`）を種類の絞り込みで狭め、開いているスマートフォルダの条件と重複の候補（画像だけ）でさらに狭める。
-  問い合わせの `filter.kinds` は `queryKinds`（全種類なら空）
+  問い合わせの `filter.kinds` は `queryKinds`（全種類なら空。ストックとフォントはどちらも全種類にはならない）
 - 画像だけの機能は、一覧が画像だけのとき（`listIs(s, "image")`）に出す：縦横・画像サイズの絞り込み、画像サイズの並び替え。
-  ほかの種類が混ざったら、これらの条件と並び順を外す（`fitToKinds`）。重複の候補は、画像を使うライブラリの「すべて」に出し、
+  ほかの種類が混ざったら、これらの条件と並び順を外す（`fitToKinds`）。重複の候補は、画像を使うライブラリのストックに出し、
   種類の絞り込みにかかわらず画像だけを問い合わせる。回転などの `kinds` 付きの操作は `appliesTo`（`commands.ts`）で、
   一覧がその種類だけなら使え、混ざっていれば選択がその種類だけのときに使える
 - **ライブラリごとに記憶する**：ライブラリは最後に開いていたモードで開く（`library.db` の `settings` テーブルの `lastMode`。
-  無ければフォントがいちばん多いときだけフォント、ほかは「すべて」。`lib/librarySettings.ts` の `openingMode`）。
-  ライブラリごとに「使う種類」（`modes`）を選べ、「すべて」には使う種類だけが出る。
-  「フォント」のモードはフォントをほかの種類と使うときだけ出す（`modesFor`）。docs/SETTINGS.md
-  - 画像・ファイルのモードがあった版の `lastMode: "image"` などは、「すべて」をその種類に絞って開き、`lastMode` を `"all"` に直す。
-    サイドバーで隠した項目は、`hidden:all` が無ければ `hidden:image` / `hidden:file` を引き継ぐ（`parseLibrarySettings`）
-- 件数（`get_counts`）、フォルダ・タグ・スマートフォルダの件数、絞り込みバーの形式一覧（`list_exts`）は `kind` 引数で
-  モードのものだけを数える（`db.rs` の `kind_where`。「すべて」は `kind` なし）。種類の絞り込みでは変えない
+  無ければフォントがほかの種類より多いときだけフォント、ほかはストック。`lib/librarySettings.ts` の `openingMode`）。
+  ライブラリごとに「使う種類」（`modes`）を選べ、使う種類のあるモードだけが切り替えに出る（`modesFor`）。docs/SETTINGS.md
+  - 前の版の `lastMode: "all"` と `hidden:all` はストックのものとして読む。画像・ファイルのモードがあった版の `lastMode: "image"` などは、
+    ストックをその種類に絞って開く。サイドバーで隠した項目は `hidden:stock`、`hidden:all`、`hidden:image` / `hidden:file` の順に引き継ぐ
+    （`parseLibrarySettings`。アプリ全体の設定は `parseSidebarHidden`）
+- 件数（`get_counts`）、絞り込みバーの形式一覧（`list_exts`）は `mode` 引数でそのモードの項目だけを数える（`db.rs` の `mode_where`）。
+  種類の絞り込みでは変えない
   - `Counts.kinds` だけは常に全種類の件数（モード切替のバッジ用）
-- レイアウトとグループ分けはモードごとに保存する（`layout:<mode>`, `groupBy:<mode>`。「すべて」は以前の画像モードのものを引き継ぐ）。
-  使える組み合わせは `MODE_LAYOUTS` / `MODE_GROUPS`（`store.ts`）。「すべて」は標準・Pinterest 風・グリッド・リストで、
+- レイアウトとグループ分けはモードごとに保存する（`layout:<mode>`, `groupBy:<mode>`。ストックは `layout:all`、以前の画像モードのものを引き継ぐ）。
+  使える組み合わせは `MODE_LAYOUTS` / `MODE_GROUPS`（`store.ts`）。ストックは標準・Pinterest 風・グリッド・リストで、
   ツールバーには画像が入りうるなら標準と Pinterest 風、ファイルだけならグリッドとリストを出す。グループ分けに「種類」がある。
   フォントは見本・グリッドで、グループ分けは書体・言語など。一覧は常に 1 ファミリー 1 行（`groupItems` の `families`、代表の行の
   `familyIds` が全スタイル）で、見本では ▸ で開いたファミリー（`openFamilies`）の太さ違いを行の下に出す（`familyMember`）。
   行が表す ID は `rowIds` で取る（選択・範囲選択・見出しのクリック）。docs/FONT_UI.md
 - **シェルフ**（`components/Shelf.tsx`、`store.shelf`）：一覧の下のトレイ。中身は `tray` テーブルを、モードの種類で問い合わせる
-  （`refresh` で一覧と一緒に取る）。一覧として開く表示ではなく、`View` の `tray` はこの問い合わせにだけ使う。
+  （`refresh` で一覧と一緒に取る）ので、モードごとに別のシェルフになる。一覧として開く表示ではなく、`View` の `tray` はこの問い合わせにだけ使う。
   フォントモードは `FONT_SHELF_MAX`（8）件までで、比較ビュー（`features/fonts/CompareView.tsx`、`store.comparing`）を一覧の場所に出す。
   ファミリーの行をシェルフに置くと代表の 1 件になる（`shelfIds`）
-- スマートフォルダの `filter.kinds` はほかと同じ条件（種類のチップで選んだもの）。フォントモードで作ったものは `["font"]` で、
-  フォントモードには `kinds` が空かフォントを含むものだけが出る（`smartFolderInMode`）。「すべて」ではすべてが出る。
+- スマートフォルダの `filter.kinds` はほかと同じ条件（ストックの種類のチップで選んだもの）。フォントモードで作ったものは `kinds` が空。
   条件を編集するときは、`kinds` を種類のチップに読み込む
 
-種類を増やすとき（例：ブックマーク・動画）：`ItemKind` と `KINDS`（`lib/api.ts`）、`features/<kind>/` を足す。
-チップと「使う種類」は `KINDS` から作られる。見え方が根本的に違うならモードにする（`MODES`、`MODE_LAYOUTS` / `MODE_GROUPS`、
-サイドバーの `ModeSwitch`）。
+種類を増やすとき（例：ブックマーク・動画）：`ItemKind` と `KINDS`（`lib/api.ts`）、`features/<kind>/` を足し、`modeOf` と
+`db::Mode::of` でどのモードのものかを決める。チップと「使う種類」は `KINDS` から作られる。見え方が根本的に違うならモードにする
+（`Mode`、`MODES`、`MODE_LAYOUTS` / `MODE_GROUPS`、サイドバーの `ModeSwitch`、`db.rs` の `Mode` と移行）。
 
 ## コマンド
 
