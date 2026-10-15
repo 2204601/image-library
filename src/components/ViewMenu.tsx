@@ -3,7 +3,9 @@
 import {
   ALargeSmall,
   Check,
+  ChevronDown,
   Columns3,
+  Group,
   LayoutGrid,
   LayoutList,
   Rows3,
@@ -150,6 +152,7 @@ export function LayoutSwitch() {
 /**
  * Splitting the list into sections: every choice of the mode side by side,
  * one click each, so nothing on the row moves when it changes (docs/UI.md).
+ * When the toolbar is narrow the same choices fold into a menu in its place.
  */
 export function GroupMenu() {
   const groupBy = useStore((s) => s.groupBy);
@@ -157,10 +160,36 @@ export function GroupMenu() {
   const isSimilar = useStore((s) => s.view.kind === "similar");
   const mode = useStore((s) => s.mode);
   const groups = GROUPS.filter((g) => MODE_GROUPS[mode].includes(g.key));
+  const current = groups.find((g) => g.key === groupBy) ?? groups[0];
   return (
     <div className="flex h-7 shrink-0 items-center gap-1.5">
-      <span className={`text-dim ${isSimilar ? "opacity-40" : ""}`}>グループ</span>
-      <div role="group" aria-label="グループ分け" className="flex h-full items-stretch overflow-hidden rounded-md border border-line">
+      <span className={`text-dim @max-3xl:hidden ${isSimilar ? "opacity-40" : ""}`}>グループ</span>
+      {/* Narrow: a native select over a label, like the sort order next to it. */}
+      <label
+        title={isSimilar ? "グループ分け（重複の候補では使えません）" : `グループ分け：${current.hint}`}
+        className={`relative hidden h-full items-center gap-1.5 rounded-md border border-line bg-bg pr-2 pl-2.5 whitespace-nowrap @max-3xl:flex ${
+          isSimilar ? "opacity-40" : "hover:bg-white/5 focus-within:border-accent"
+        }`}
+      >
+        <span className="text-dim @max-md:hidden">グループ</span>
+        <Group size={14} className="hidden text-dim @max-md:block" />
+        {isSimilar ? "なし" : current.label}
+        <ChevronDown size={14} className="text-dim" />
+        <select
+          aria-label="グループ分け"
+          value={groupBy}
+          disabled={isSimilar}
+          onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+          className="absolute inset-0 cursor-default opacity-0"
+        >
+          {groups.map((g) => (
+            <option key={g.key} value={g.key}>
+              {g.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div role="group" aria-label="グループ分け" className="flex h-full items-stretch overflow-hidden rounded-md border border-line @max-3xl:hidden">
         {groups.map((g, i) => {
           const on = groupBy === g.key && !isSimilar;
           return (

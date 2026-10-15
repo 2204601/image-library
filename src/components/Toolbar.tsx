@@ -291,8 +291,9 @@ export function Toolbar() {
           </>
         )}
         {manual && isFolder && !showSubfolders && <span className="text-dim">画像をドラッグして並べ替えできます</span>}
-        {/* How the list looks, at the right end of the second row. */}
-        <div className="ml-auto flex shrink-0 flex-wrap items-center gap-2">
+        {/* How the list looks, at the right end of the row. Narrow, the grouping
+            folds into a menu; narrower still, the controls wrap rather than get cut off. */}
+        <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
           {/* Native select for the menu, laid over a label sized to the current
               choice so long names aren't clipped and the arrow matches the UI. */}
           <label
