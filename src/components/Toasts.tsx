@@ -125,7 +125,11 @@ export function Toasts() {
   const active = useWindowActive();
   const pct = (r: number) => `${Math.floor(r * 100)}%`;
   return (
-    <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-2">
+    <div
+      className="pointer-events-none fixed right-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-2"
+      // Above the shelf under the list, when there is one.
+      style={{ bottom: "calc(var(--shelf-height, 0px) + 1rem)" }}
+    >
       {importing && (
         <ProgressCard
           icon={<Loader2 size={16} className="animate-spin" />}

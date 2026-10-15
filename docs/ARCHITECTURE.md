@@ -31,7 +31,14 @@
   - `Counts.kinds` だけは常に全種類の件数（モード切替のバッジ用）
 - レイアウトとグループ分けはモードごとに保存する（`layout:<mode>`, `groupBy:<mode>`。「すべて」は以前の画像モードのものを引き継ぐ）。
   使える組み合わせは `MODE_LAYOUTS` / `MODE_GROUPS`（`store.ts`）。「すべて」は標準・Pinterest 風・グリッド・リストで、
-  ツールバーには画像が入りうるなら標準と Pinterest 風、ファイルだけならグリッドとリストを出す。グループ分けに「種類」がある
+  ツールバーには画像が入りうるなら標準と Pinterest 風、ファイルだけならグリッドとリストを出す。グループ分けに「種類」がある。
+  フォントは見本・グリッドで、グループ分けは書体・言語など。一覧は常に 1 ファミリー 1 行（`groupItems` の `families`、代表の行の
+  `familyIds` が全スタイル）で、見本では ▸ で開いたファミリー（`openFamilies`）の太さ違いを行の下に出す（`familyMember`）。
+  行が表す ID は `rowIds` で取る（選択・範囲選択・見出しのクリック）。docs/FONT_UI.md
+- **シェルフ**（`components/Shelf.tsx`、`store.shelf`）：一覧の下のトレイ。中身は `tray` テーブルを、モードの種類で問い合わせる
+  （`refresh` で一覧と一緒に取る）。一覧として開く表示ではなく、`View` の `tray` はこの問い合わせにだけ使う。
+  フォントモードは `FONT_SHELF_MAX`（8）件までで、比較ビュー（`features/fonts/CompareView.tsx`、`store.comparing`）を一覧の場所に出す。
+  ファミリーの行をシェルフに置くと代表の 1 件になる（`shelfIds`）
 - スマートフォルダの `filter.kinds` はほかと同じ条件（種類のチップで選んだもの）。フォントモードで作ったものは `["font"]` で、
   フォントモードには `kinds` が空かフォントを含むものだけが出る（`smartFolderInMode`）。「すべて」ではすべてが出る。
   条件を編集するときは、`kinds` を種類のチップに読み込む
@@ -52,8 +59,8 @@
 - 右クリックメニューの行（`lib/menuItems.ts` の `commandItem` / `commandIcon`）
 - ショートカット一覧（`lib/shortcuts.ts` の `shortcutSections`）。マウス操作やビューアだけのキーは説明の行として持つ
 
-「一覧の中身への操作」（書き出し・まとめて出力・作業台にすべて追加・別のライブラリへ）は、対象を `ListSource`
-（選択・表示中の一覧・フォルダ・スマートフォルダ・タグ・作業台）で受け、中身は `listTargets`（`lib/actions.ts`）で取る。
+「一覧の中身への操作」（書き出し・まとめて出力・シェルフにすべて追加・別のライブラリへ）は、対象を `ListSource`
+（選択・表示中の一覧・フォルダ・スマートフォルダ・タグ・シェルフ）で受け、中身は `listTargets`（`lib/actions.ts`）で取る。
 
 ## 境界
 
@@ -62,7 +69,7 @@
 | 共通基盤（core） | `src/lib/*`, `src/store.ts`, `src/components/*` | ライブラリ・DB・取り込み・フォルダ・タグ・スマートフォルダ・検索・一覧の骨組み（Grid / Sidebar / Toolbar / Inspector / Viewer）・Updater |
 | | `src-tauri/src/{db,import,library,search,webimport,share,loopback,changes,proxy,transfer,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、フォルダの共有、変更の記録と取り消し、ライブラリ間のコピー・移動、共通コマンド |
 | | `src-tauri/src/mcp/` | Claude からの整理（MCP サーバー、`--mcp` の中継）。`docs/MCP.md` |
-| フォント | `src/features/fonts/` | フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、サイドバーの言語・書体（`FontFilters.tsx`）、見本の文字と大きさ（`SpecimenControls.tsx`） |
+| フォント | `src/features/fonts/` | フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行とグリッドのタイル（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、サイドバーの言語・書体（`FontFilters.tsx`）、見本の文字の行と大きさ（`SpecimenControls.tsx`）、見本のパターン（`patterns.ts`）、比較ビュー（`CompareView.tsx`）、シェルフの行（`ShelfChip.tsx`）、ウェイト名（`weights.ts`） |
 | | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`） |
 | ファイル | `src/features/files/` | ビューア（`FileView.tsx`：PDF は `<iframe>`、ほかはサムネイルと「既定のアプリで開く」） |
 | | `src-tauri/src/files/` | 対応する拡張子、サムネイル（Quick Look／Windows.Data.Pdf（`win_pdf.rs`）／中のプレビュー／種類のカード） |
@@ -71,7 +78,7 @@
 依存の向きは **features → core** のみ。core が種類ごとの知識を持つのは、DB に入っている語彙（`ItemKind`、`FONT_SCRIPTS` /
 `FONT_CATEGORIES` のラベル、`Item` のフォント列、`Filter.fontScripts` など）までにとどめ、振る舞いは features に置く。
 
-共通の UI（`Grid.tsx` / `Sidebar.tsx`）が features の部品を描く箇所（見本の行、言語・書体の節）では、
+共通の UI（`Grid.tsx` / `Sidebar.tsx` / `Shelf.tsx` / `App.tsx`）が features の部品を描く箇所（見本の行、言語・書体の節、シェルフの行、比較ビュー）では、
 features 側が core の部品（`Row` / `Section`、`CellProps` / `showItemMenu`）を使うので import が循環する。
 いずれも描画時にしか参照しないので問題ないが、core 側の部品を独立したファイルに出せばほどける。
 

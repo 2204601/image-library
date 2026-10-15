@@ -5,6 +5,7 @@
 // (docs/FONT_UI.md, docs/UI.md).
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ArrowRight, ChevronDown, Layers, X } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
 import {
   clearTray,
   exportTray,
@@ -31,6 +32,19 @@ export function Shelf() {
   const over = useStore((s) => s.drag?.kind === "items" && s.drag.from !== "shelf" && s.dropTarget === "tray");
   const flash = useStore((s) => (s.flash?.target === "tray" ? s.flash.n : null));
   const empty = shelf.length === 0;
+  // Toasts sit above the shelf, not over its buttons (Toasts.tsx reads --shelf-height).
+  const ref = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const root = document.documentElement.style;
+    const ro = new ResizeObserver(() => root.setProperty("--shelf-height", `${el.offsetHeight}px`));
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      root.removeProperty("--shelf-height");
+    };
+  }, []);
 
   const menu = (e: React.MouseEvent) =>
     useMenu.getState().show(e, [
@@ -47,6 +61,7 @@ export function Shelf() {
 
   return (
     <section
+      ref={ref}
       data-drop="tray"
       aria-label="シェルフ"
       className={`relative shrink-0 border-t bg-panel text-xs transition-colors ${
@@ -70,7 +85,7 @@ export function Shelf() {
         <span className="shrink-0 text-dim tabular-nums">
           {fonts ? `${shelf.length} / ${FONT_SHELF_MAX}` : `${shelf.length} 件`}
         </span>
-        <span className="min-w-0 flex-1 truncate text-dim/80 @container">
+        <span className="min-w-0 flex-1 truncate text-dim/80">
           {fonts
             ? `B キー・ドラッグで追加。比べたいフォントを最大 ${FONT_SHELF_MAX} 件まで置いておけます`
             : "B キー・ドラッグで追加。書き出しやまとめて出力の前に集めておけます"}
