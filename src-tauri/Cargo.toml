@@ -48,6 +48,8 @@ tauri-plugin-process = "2"
 tiny_http = "0.12"
 # Images handed to Claude (mcp/tools.rs).
 base64 = "0.22"
+# Texts: reading and writing Shift_JIS (CSV from Excel and in-house systems), texts/mod.rs.
+encoding_rs = "0.8"
 # Files: the preview inside iWork / Office files (files/mod.rs). Reading only.
 zip = { version = "4", default-features = false, features = ["deflate-flate2"] }
 # The window opens at the size and place it had when last closed.

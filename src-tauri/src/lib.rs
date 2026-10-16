@@ -15,6 +15,7 @@ pub mod search;
 pub mod share;
 pub mod sheet;
 pub mod similar;
+pub mod texts;
 pub mod transfer;
 pub mod webimport;
 
@@ -161,6 +162,9 @@ pub fn run() {
             fonts::commands::font_data,
             files::commands::file_preview,
             files::commands::prepare_file_thumbs,
+            texts::commands::read_text,
+            texts::commands::save_text,
+            texts::commands::create_text,
             copy_items,
             export_items,
             add_to_tray,

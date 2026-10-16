@@ -53,6 +53,7 @@ import { currentFolderId, listKinds, MODES, shownModes, useStore } from "../stor
 import { modeLabel } from "./modes";
 import { rowIds } from "./grouping";
 import { useShortcutHelp } from "../components/ShortcutHelp";
+import { createText } from "../features/texts/actions";
 
 type S = ReturnType<typeof useStore.getState>;
 
@@ -78,6 +79,8 @@ export interface Command {
 }
 
 const sel = (s: S) => [...s.selected];
+/** A text field has the focus (keys there are for typing). */
+const typing = () => !!(document.activeElement as HTMLElement | null)?.closest?.("input, textarea, [contenteditable]");
 const any = (s: S) => s.selected.size > 0;
 const notTrash = (s: S) => s.view.kind !== "trash";
 const live = (s: S) => any(s) && notTrash(s);
@@ -250,7 +253,9 @@ export const COMMANDS: Command[] = [
     label: (s) => (s.view.kind === "trash" ? "完全に削除" : "ゴミ箱へ移動"),
     icon: Trash2,
     keys: ["Mod+Backspace", "Delete"],
-    enabled: any,
+    // ⌘⌫ / Ctrl+Backspace reach the menu while typing too: in a text field
+    // (the text editor, the search box) they are for deleting words.
+    enabled: (s) => any(s) && !typing(),
     run: (s) => void deleteSelection(sel(s)),
   },
 
@@ -408,6 +413,14 @@ export const COMMANDS: Command[] = [
     },
   },
   { id: "folder.new", title: "新しいフォルダ", keys: ["Mod+Shift+N"], run: () => void createFolderHere() },
+  {
+    id: "text.new",
+    title: "新規テキスト",
+    keys: ["Mod+N"],
+    // Texts are of the stock (docs/TEXT.md).
+    enabled: (s) => s.mode === "stock",
+    run: () => void createText(),
+  },
   {
     id: "smart.new",
     title: "新しいスマートフォルダ",

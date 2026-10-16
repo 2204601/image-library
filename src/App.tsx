@@ -14,6 +14,7 @@ import { Toasts } from "./components/Toasts";
 import { SelectionBar } from "./components/SelectionBar";
 import { Shelf } from "./components/Shelf";
 import { CompareView } from "./features/fonts/CompareView";
+import { pasteText } from "./features/texts/actions";
 import { ActionHud } from "./components/ActionHud";
 import { Toolbar } from "./components/Toolbar";
 import { Viewer } from "./components/Viewer";
@@ -178,6 +179,13 @@ export default function App() {
       if (files.length) {
         e.preventDefault();
         importClipboardFiles(files);
+        return;
+      }
+      // Words alone become a new text (docs/TEXT.md).
+      const text = e.clipboardData?.getData("text/plain") ?? "";
+      if (text.trim()) {
+        e.preventDefault();
+        void pasteText(text);
       }
     };
     window.addEventListener("paste", onPaste);

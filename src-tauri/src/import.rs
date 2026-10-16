@@ -9,6 +9,7 @@ use crate::formats;
 use crate::library::Library;
 use crate::orient::{self, OrientOp, Orientation};
 use crate::similar;
+use crate::texts;
 use image::codecs::jpeg::JpegEncoder;
 use image::{DynamicImage, ImageFormat};
 use rayon::prelude::*;
@@ -119,7 +120,7 @@ enum Outcome {
 }
 
 /// Keeps file names portable across macOS and Windows.
-fn sanitize(name: &str) -> String {
+pub(crate) fn sanitize(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '_' } else { c })
@@ -279,6 +280,9 @@ fn process(
     if files::is_file(&ext) {
         return process_file(name, ext, data, hash, root);
     }
+    if texts::is_text(&ext) {
+        return texts::new_item(root, name, ext, data, hash).map(Outcome::New);
+    }
     let decoded = formats::decode(&data, &ext)?;
     let img = decoded.image;
     let id = uuid::Uuid::new_v4().simple().to_string();
@@ -329,6 +333,7 @@ fn process(
         phash: Some(phash),
         preview,
         font: None,
+        body: None,
     }))
 }
 
@@ -360,6 +365,7 @@ fn process_font(name: String, ext: String, data: Vec<u8>, hash: String, root: &P
         phash: None,
         preview: None,
         font: Some(meta),
+        body: None,
     }))
 }
 
@@ -394,6 +400,7 @@ fn process_file(name: String, ext: String, data: Vec<u8>, hash: String, root: &P
         phash: None,
         preview: None,
         font: None,
+        body: None,
     }))
 }
 
@@ -613,12 +620,12 @@ mod tests {
         RgbImage::from_pixel(1200, 600, Rgb([200, 10, 10])).save(src_dir.join("red.jpg")).unwrap();
         RgbaImage::from_pixel(64, 64, Rgba([0, 0, 255, 100])).save(src_dir.join("sub/clear.png")).unwrap();
         fs::copy(src_dir.join("red.jpg"), src_dir.join("red-copy.jpg")).unwrap(); // same dir, so placement is deterministic
-        fs::write(src_dir.join("notes.txt"), "x").unwrap();
+        fs::write(src_dir.join("notes.rtf"), "x").unwrap();
         fs::write(src_dir.join("broken.png"), "not an image").unwrap();
         fs::copy(src_dir.join("red.jpg"), src_dir.join(".hidden/x.jpg")).unwrap();
 
         let files = collect_files(std::slice::from_ref(&src_dir));
-        assert_eq!(files.len(), 4); // txt and hidden dir skipped
+        assert_eq!(files.len(), 4); // rtf and hidden dir skipped
         let mut dirs: Vec<Vec<String>> = files.iter().map(|f| f.dirs().to_vec()).collect();
         dirs.sort();
         assert_eq!(dirs[0], ["src"]);
@@ -981,6 +988,35 @@ mod tests {
         assert_eq!((t.width(), t.height()), (files::CARD_W, files::CARD_H));
         assert!(db::missing_phashes(&l.conn).unwrap().is_empty(), "no look-alikes for files");
         assert_eq!(db::counts(&l.conn, None).unwrap().kinds, std::collections::BTreeMap::from([(db::Kind::File, 3)]));
+    }
+
+    #[test]
+    fn imports_texts_and_finds_them_by_their_body() {
+        let (tmp, lib) = setup();
+        let dir = tmp.path().join("notes");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("memo.md"), "# 会議\n- 牛肉の在庫を確認\n").unwrap();
+        let (sjis, _, _) = encoding_rs::SHIFT_JIS.encode("品名,数量\r\n豚肉,5\r\n");
+        fs::write(dir.join("stock.csv"), &sjis).unwrap();
+        fs::write(dir.join("fake.txt"), b"\x00\x01binary").unwrap();
+
+        let sum = run(&lib, collect_files(std::slice::from_ref(&dir)), None, |_, _| {}).unwrap();
+        assert_eq!((sum.imported, sum.failed.len()), (2, 1), "{:?}", sum.failed);
+        assert_eq!(sum.kinds, std::collections::BTreeMap::from([(db::Kind::Text, 2)]));
+
+        let g = lib.lock().unwrap();
+        let l = g.as_ref().unwrap();
+        let find = |search: &str| {
+            let q = db::ItemQuery { search: search.into(), sort: db::SortKey::Name, ..Default::default() };
+            db::query_items(&l.conn, &q).unwrap().into_iter().map(|i| i.name).collect::<Vec<_>>()
+        };
+        assert_eq!(find("在庫"), ["memo.md"], "found by its body");
+        assert_eq!(find("豚肉"), ["stock.csv"], "Shift_JIS read for the search");
+        let csv = db::query_items(&l.conn, &db::ItemQuery { search: "stock".into(), ..Default::default() }).unwrap();
+        let it = &csv[0];
+        assert_eq!((it.kind, it.width, it.height), (db::Kind::Text, 0, 0));
+        assert_eq!(fs::read(l.file_path(it)).unwrap(), sjis.to_vec(), "stored as is");
+        assert!(l.thumb_path(it).is_file());
     }
 
     #[test]

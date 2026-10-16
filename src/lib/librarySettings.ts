@@ -108,6 +108,6 @@ export function openingMode(s: LibrarySettings, kinds: Partial<Record<ItemKind, 
   if (s.lastMode && shown.includes(s.lastMode)) return s.lastMode;
   if (!shown.includes("font")) return shown[0];
   const fonts = kinds.font ?? 0;
-  const rest = (kinds.image ?? 0) + (kinds.file ?? 0);
+  const rest = (kinds.image ?? 0) + (kinds.file ?? 0) + (kinds.text ?? 0);
   return fonts > rest || !shown.includes("stock") ? "font" : "stock";
 }
