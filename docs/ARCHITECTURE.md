@@ -89,6 +89,8 @@
 | | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`） |
 | ファイル | `src/features/files/` | ビューア（`FileView.tsx`：PDF は `<iframe>`、ほかはサムネイルと「既定のアプリで開く」） |
 | | `src-tauri/src/files/` | 対応する拡張子、サムネイル（Quick Look／Windows.Data.Pdf（`win_pdf.rs`）／中のプレビュー／種類のカード） |
+| テキスト | `src/features/texts/` | ビューア（`TextView.tsx`：プレビューと自動保存の編集）、Markdown の HTML 化と掃除（`markdown.ts`）、CSV / TSV（`csv.ts`）、新規作成と貼り付け（`actions.ts`）。docs/TEXT.md |
+| | `src-tauri/src/texts/` | 対応する拡張子、文字コードの判定と書き戻し（Shift_JIS）、サムネイル（先頭を紙に描く SVG）、検索用の本文、読み込み・保存・新規作成のコマンド |
 | 画像 | `src-tauri/src/{formats,orient,similar}.rs`、`components/DuplicateReview.tsx` ほか | デコード、回転・反転、似ている画像の検出（まだ `components/` に混ざっている） |
 
 依存の向きは **features → core** のみ。core が種類ごとの知識を持つのは、DB に入っている語彙（`ItemKind`、`FONT_SCRIPTS` /
@@ -105,6 +107,7 @@ features 側が core の部品（`Row` / `Section`、`CellProps` / `showItemMenu
 - 大きさはファイルに書かれた値をそのまま信じず、上限を設けて読む（WOFF / WOFF2・zip の中のプレビュー・WIC のデコード）。
   リリースビルドは `panic = "abort"` なので、確保の失敗やパニックはアプリごと落ちる
 - SVG の `<image href>` は `data:` URL だけを読む（`formats::svg_options`）。PDF は中身を確かめてから iframe に出す（`files::is_pdf`）
+- Markdown は HTML にしてから、許可した要素と属性だけを残して画面に入れる（`features/texts/markdown.ts`）。リンクは `http(s):` / `mailto:` だけを既定のブラウザで開く
 - Windows のバックグラウンドの Office 変換は、Web から保存したもの（`source_url` あり）を対象にしない
 - フォルダの共有（`share.rs`）だけは LAN から届く。GET だけで、どの要求も共有したフォルダの中のものかを確かめてから返す。
   ファイルは `Content-Security-Policy: sandbox` 付きで返し（SVG の中のスクリプトを動かさない）、ページの文字はすべて `textContent` で入れる

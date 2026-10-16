@@ -15,6 +15,8 @@ pub const SUPPORTED_EXTS: &[&str] = &[
     "ttf", "otf", "woff", "woff2", "ttc", "otc",
     // Files: PDF and office documents (see files/mod.rs `EXTS`).
     "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key",
+    // Texts (see texts/mod.rs `EXTS`).
+    "md", "markdown", "txt", "csv", "tsv",
 ];
 
 /// Font files are imported with a rendered sample as their thumbnail.

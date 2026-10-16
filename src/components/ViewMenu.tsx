@@ -21,7 +21,7 @@ import { Slider } from "./Slider";
 /** Every grouping; each mode offers its own subset (MODE_GROUPS). */
 export const GROUPS: { key: GroupBy; label: string; hint: string }[] = [
   { key: "none", label: "なし", hint: "区切らずに並べる" },
-  { key: "kind", label: "種類", hint: "画像・フォント・ファイルに分ける" },
+  { key: "kind", label: "種類", hint: "画像・ファイル・テキストに分ける" },
   { key: "category", label: "書体", hint: "明朝・ゴシック・丸ゴシック…に分ける" },
   { key: "script", label: "言語", hint: "日本語・欧文・中国語・韓国語に分ける" },
   { key: "rating", label: "評価", hint: "★5 から未評価まで" },

@@ -42,9 +42,10 @@ export interface AppSettings {
 
 /**
  * What a file is. Fonts have no pixel size (0 × 0) and a rendered sample as the thumbnail;
- * files (PDF, office documents) are 0 × 0 too, with a thumbnail from the OS or the file.
+ * files (PDF, office documents) are 0 × 0 too, with a thumbnail from the OS or the file;
+ * texts (Markdown, plain text, CSV) are 0 × 0, can be edited in the app and searched by their body (docs/TEXT.md).
  */
-export type ItemKind = "image" | "font" | "file";
+export type ItemKind = "image" | "font" | "file" | "text";
 
 /**
  * What the app shows (docs/MODES.md): the stock (images and files) or the
@@ -60,6 +61,7 @@ export const KINDS: { kind: ItemKind; label: string }[] = [
   { kind: "image", label: "画像" },
   { kind: "font", label: "フォント" },
   { kind: "file", label: "ファイル" },
+  { kind: "text", label: "テキスト" },
 ];
 
 export const kindLabel = (k: ItemKind) => KINDS.find((x) => x.kind === k)?.label ?? k;
@@ -70,9 +72,21 @@ export const FONT_EXTS = ["ttf", "otf", "woff", "woff2", "ttc", "otc"];
 /** File types imported as files (src-tauri/src/files/mod.rs `EXTS`). */
 export const FILE_EXTS = ["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key"];
 
+/** File types imported as texts (src-tauri/src/texts/mod.rs `EXTS`). */
+export const TEXT_EXTS = ["md", "markdown", "txt", "csv", "tsv"];
+
 /** The kind a file type is imported as. */
 export const kindOfExt = (ext: string): ItemKind =>
-  FONT_EXTS.includes(ext) ? "font" : FILE_EXTS.includes(ext) ? "file" : "image";
+  FONT_EXTS.includes(ext) ? "font" : FILE_EXTS.includes(ext) ? "file" : TEXT_EXTS.includes(ext) ? "text" : "image";
+
+/** Name of a text's type. */
+export function textTypeLabel(ext: string): string {
+  const e = ext.toLowerCase();
+  if (e === "md" || e === "markdown") return "Markdown";
+  if (e === "csv") return "CSV";
+  if (e === "tsv") return "TSV";
+  return "テキスト";
+}
 
 /** Name of a file's type (src-tauri/src/files/mod.rs `type_name`). */
 export function fileTypeLabel(ext: string): string {
@@ -194,6 +208,7 @@ export interface Item {
 export function sizeLabel(item: Pick<Item, "kind" | "width" | "height" | "ext">): string {
   if (item.kind === "font") return "フォント";
   if (item.kind === "file") return fileTypeLabel(item.ext);
+  if (item.kind === "text") return textTypeLabel(item.ext);
   return `${item.width} × ${item.height}`;
 }
 

@@ -33,6 +33,7 @@ import {
   type Placement,
 } from "../lib/layouts";
 import { activeConditions, currentFolderId, listKinds, useStore, type ShowInfo } from "../store";
+import { comboText } from "../lib/shortcuts";
 import { ChangePulse } from "./ActionHud";
 import { useMenu, type MenuItem } from "./ContextMenu";
 import { startPointerDrag } from "./DragLayer";
@@ -878,6 +879,8 @@ function Empty({
           ? "フォントファイルやフォルダをここにドラッグ&ドロップ"
           : only === "file"
             ? "PDF・オフィス文書やフォルダをここにドラッグ&ドロップ"
+            : only === "text"
+              ? `Markdown・テキスト・CSV やフォルダをここにドラッグ&ドロップ、または ${comboText("Mod+N")} で新しく作る`
             : only === "image"
               ? "画像やフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け"
               : "ファイルやフォルダをここにドラッグ&ドロップ、またはクリップボードから貼り付け"}

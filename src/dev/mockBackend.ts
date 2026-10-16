@@ -32,6 +32,8 @@ type MockItem = Omit<
   fontCategory?: string | null;
   fontCategoryUser?: string | null;
   fontFeatures?: string[];
+  /** Texts: the file's content (src-tauri/src/texts). */
+  body?: string;
 };
 
 const items: MockItem[] = [];
@@ -168,6 +170,38 @@ function seed() {
       hue: (i * 67) % 360,
     });
   }
+  // Texts: Markdown, plain text, CSV (docs/TEXT.md), 0 × 0 like files.
+  const texts: [string, string][] = [
+    [
+      "週次ミーティング.md",
+      "# 週次ミーティング\n\n2026-10-16（金）\n\n## 議題\n\n- 牛肉の在庫を確認する\n- [x] 価格表を更新\n- [ ] **新商品**の企画を出す\n\n> 次回までに数字をそろえる\n\n| 部位 | 在庫 | 前週比 |\n|---|--:|--:|\n| ロース | 120 | +8 |\n| バラ | 95 | -3 |\n\n```sql\nSELECT * FROM stock WHERE qty < 10;\n```\n\n詳しくは [社内ポータル](https://example.com) を参照。<script>alert(1)</script>\n",
+    ],
+    ["仕入れ一覧.csv", '品名,部位,数量,単価\n和牛,ロース,12,4800\n国産豚,バラ,30,980\n"鶏,もも",もも,45,620\n輸入牛,肩ロース,8,1980\n'],
+    ["電話メモ.txt", "10/15 14:20 ○○商事 田中様\n見積もりの件で折り返し希望\n03-xxxx-xxxx\n"],
+  ];
+  for (const [i, [file, body]] of texts.entries()) {
+    items.push({
+      id: id(),
+      kind: "text",
+      name: file,
+      fileName: file,
+      ext: file.split(".").pop()!,
+      width: 0,
+      height: 0,
+      size: new TextEncoder().encode(body).length,
+      thumb: "",
+      note: "",
+      rating: 0,
+      importedAt: Date.now() - 10_000 + i,
+      deletedAt: null,
+      favorite: false,
+      pinnedAt: null,
+      rotation: 0,
+      flipped: false,
+      hue: 0,
+      body,
+    });
+  }
   const animals = { id: id(), parentId: null, name: "動物", color: "orange", mode: "stock" as const };
   folders.push(
     animals,
@@ -251,6 +285,19 @@ function fileSvg(it: MockItem) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
 }
 
+/** A text's thumbnail: its first lines on a page with the type (texts/mod.rs draws the real one). */
+function textSvg(it: MockItem) {
+  const esc = (t: string) => t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const lines = (it.body ?? "").split("\n").slice(0, 16);
+  const rows = lines
+    .map((l, k) => `<text x="26" y="${48 + k * 26}" font-family="sans-serif" font-size="17" fill="#333">${esc(l.slice(0, 22))}</text>`)
+    .join("");
+  const label = it.ext === "csv" ? "CSV" : it.ext === "tsv" ? "TSV" : it.ext === "txt" ? "TXT" : "MD";
+  const color = label === "MD" ? "#2563eb" : label === "TXT" ? "#6b7280" : "#16a34a";
+  const s = `<svg xmlns="http://www.w3.org/2000/svg" width="384" height="512"><rect width="100%" height="100%" fill="#fff"/>${rows}<rect x="300" y="470" width="58" height="26" rx="5" fill="${color}"/><text x="329" y="488" font-family="sans-serif" font-size="14" font-weight="bold" fill="#fff" text-anchor="middle">${label}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(s)}`;
+}
+
 /** A one-page PDF with the item's name, for the viewer's PDF frame. */
 function pdfData(it: MockItem) {
   const text = `BT /F1 28 Tf 72 760 Td (${it.name.replace(/[^\x20-\x7e]/g, "?")}) Tj ET`;
@@ -290,7 +337,7 @@ function svg(it: MockItem, scale: number, oriented = false) {
 /** The mock image drawn to PNG data, as the real command hands it out. */
 async function sheetImage(it: MockItem, maxSide: number): Promise<ArrayBuffer> {
   const img = new Image();
-  img.src = it.kind === "font" ? fontSvg(it) : it.kind === "file" ? fileSvg(it) : svg(it, 1, true);
+  img.src = it.kind === "font" ? fontSvg(it) : it.kind === "file" ? fileSvg(it) : it.kind === "text" ? textSvg(it) : svg(it, 1, true);
   await img.decode();
   const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
   const canvas = document.createElement("canvas");
@@ -302,10 +349,12 @@ async function sheetImage(it: MockItem, maxSide: number): Promise<ArrayBuffer> {
 }
 
 const view = (it: MockItem): Item => {
-  const filePath = it.kind === "file" ? (it.ext === "pdf" ? pdfData(it) : fileSvg(it)) : svg(it, 1);
+  const filePath =
+    it.kind === "file" ? (it.ext === "pdf" ? pdfData(it) : fileSvg(it)) : it.kind === "text" ? textSvg(it) : svg(it, 1);
   const folderId = folders.find((f) => inFolder(it.id, f.id))?.id ?? null;
   const tagIds = tags.filter((t) => hasTag(it.id, t.id)).map((t) => t.id);
-  const thumbPath = it.kind === "font" ? fontSvg(it) : it.kind === "file" ? fileSvg(it) : svg(it, 3, true);
+  const thumbPath =
+    it.kind === "font" ? fontSvg(it) : it.kind === "file" ? fileSvg(it) : it.kind === "text" ? textSvg(it) : svg(it, 3, true);
   return {
     ...it,
     sourceUrl: it.sourceUrl ?? null,
@@ -361,6 +410,7 @@ function applyRule(r: MockItem[], rule: Rule): MockItem[] {
       i.name.toLowerCase().includes(w) ||
       i.note.toLowerCase().includes(w) ||
       (i.fontFamily ?? "").toLowerCase().includes(w) ||
+      (i.body ?? "").toLowerCase().includes(w) ||
       tags.some((t) => hasTag(i.id, t.id) && t.name.toLowerCase().includes(w));
     r = r.filter((i) => hit(i) !== neg);
   }
@@ -665,7 +715,7 @@ function handle(cmd: string, a: any): unknown {
         pinned: of(live()).filter((i) => i.pinnedAt !== null).length,
         tray: of(live()).filter((i) => tray.has(i.id)).length,
         kinds: Object.fromEntries(
-          (["image", "font", "file"] as const)
+          (["image", "font", "file", "text"] as const)
             .map((k) => [k, live().filter((i) => i.kind === k).length])
             .filter(([, n]) => n),
         ),
@@ -760,6 +810,44 @@ function handle(cmd: string, a: any): unknown {
       return null;
     case "prepare_file_thumbs":
       return null;
+    case "read_text": {
+      const it = items.find((i) => i.id === a.id);
+      if (!it || it.kind !== "text") throw "テキストではありません";
+      return { text: it.body ?? "", encoding: "UTF-8", truncated: false, editable: true };
+    }
+    case "save_text": {
+      const it = items.find((i) => i.id === a.id)!;
+      it.body = a.text;
+      it.size = new TextEncoder().encode(a.text).length;
+      return { encoding: "UTF-8", encodingChanged: false };
+    }
+    case "create_text": {
+      const ext = String(a.name).split(".").pop()!.toLowerCase();
+      const it: MockItem = {
+        id: id(),
+        kind: "text",
+        name: a.name,
+        fileName: a.name,
+        ext,
+        width: 0,
+        height: 0,
+        size: new TextEncoder().encode(a.text).length,
+        thumb: "",
+        note: "",
+        rating: 0,
+        importedAt: Date.now(),
+        deletedAt: null,
+        favorite: false,
+        pinnedAt: null,
+        rotation: 0,
+        flipped: false,
+        hue: 0,
+        body: a.text,
+      };
+      items.push(it);
+      if (a.folderId && folders.find((f) => f.id === a.folderId)?.mode === "stock") link(it.id, a.folderId);
+      return it.id;
+    }
     case "font_data":
       // No font files in the browser mock: the viewer falls back to the system font.
       throw "モックではフォントを読み込めません";
@@ -874,6 +962,7 @@ function handle(cmd: string, a: any): unknown {
         ...["jpg", "jpeg", "png", "gif", "webp", "bmp", "tif", "tiff", "svg", "heic", "heif", "avif"],
         ...["ttf", "otf", "woff", "woff2", "ttc", "otc"],
         ...["pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "pages", "numbers", "key"],
+        ...["md", "markdown", "txt", "csv", "tsv"],
       ];
     case "import_paths":
     case "import_bytes":

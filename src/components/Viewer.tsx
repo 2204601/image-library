@@ -22,6 +22,7 @@ import { dragRegion } from "../lib/titleBar";
 import { useStore } from "../store";
 import { FontView } from "../features/fonts/FontView";
 import { FileView } from "../features/files/FileView";
+import { TextView } from "../features/texts/TextView";
 import { FlagButtons } from "./Inspector";
 import { RatingStars } from "./RatingStars";
 
@@ -56,7 +57,7 @@ export function Viewer() {
   const suppressClick = useRef(false);
 
   const open = item !== undefined;
-  // Fonts and files get their own body (sample text, document) instead of the zoomable image.
+  // Fonts, files and texts get their own body (sample text, document, text) instead of the zoomable image.
   const isImage = item?.kind === "image";
   useEffect(() => setZoom("fit"), [item?.id]);
   useEffect(() => {
@@ -243,7 +244,7 @@ export function Viewer() {
           <span className="text-xs text-white/40 tabular-nums">
             {sizeLabel(item)}
           </span>
-          {item.kind === "file" && (
+          {(item.kind === "file" || item.kind === "text") && (
             <button className={tool} title="既定のアプリで開く" onClick={() => openSelection([item.id])}>
               <ExternalLink size={15} />
             </button>
@@ -307,6 +308,8 @@ export function Viewer() {
             <FontView item={item} />
           ) : item.kind === "file" ? (
             <FileView item={item} />
+          ) : item.kind === "text" ? (
+            <TextView key={item.id} item={item} />
           ) : (
             <div
               ref={boxRef}

@@ -55,7 +55,7 @@ export const SORTS: { key: SortKey; label: string; only?: ItemKind }[] = [
 
 const searchHelp = (mode: Mode) =>
   [
-    mode === "font" ? "名前・ファミリー名・メモ・タグを検索" : "名前・メモ・タグを検索",
+    mode === "font" ? "名前・ファミリー名・メモ・タグを検索" : "名前・メモ・タグ・テキストの本文を検索",
     "  空白区切り … すべてを含む",
     "  -語 … 除外",
     "  A OR B / A || B … どちらか",

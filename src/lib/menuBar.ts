@@ -170,6 +170,7 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
         : [live(() => "（なし）", () => {}, { enabled: () => false })],
     ),
     sep(),
+    ...(mode === "stock" ? [cmd("text.new")] : []),
     cmd("folder.new"),
     cmd("smart.new"),
     sep(),

@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 21;
+const SCHEMA_VERSION: i32 = 22;
 
 const SETTINGS_TABLE: &str = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
@@ -389,6 +389,11 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
         }
         split_modes(c)
     })?;
+    // Texts (texts/mod.rs): what the search box looks in besides the name.
+    step(22, &|c| {
+        add_column(c, "items", "body", "TEXT")?;
+        Ok(())
+    })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
         conn.query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))? >= SCHEMA_VERSION,
@@ -407,6 +412,8 @@ pub enum Kind {
     Font,
     /// PDF and office documents (files/mod.rs).
     File,
+    /// Markdown, plain text, CSV / TSV (texts/mod.rs).
+    Text,
 }
 
 impl Kind {
@@ -415,6 +422,7 @@ impl Kind {
             Kind::Image => "image",
             Kind::Font => "font",
             Kind::File => "file",
+            Kind::Text => "text",
         }
     }
 
@@ -422,6 +430,7 @@ impl Kind {
         match s {
             "font" => Kind::Font,
             "file" => Kind::File,
+            "text" => Kind::Text,
             _ => Kind::Image,
         }
     }
@@ -798,6 +807,8 @@ pub struct NewItem {
     pub preview: Option<String>,
     /// Fonts: family, weight, script and style (see `Item::font_family`).
     pub font: Option<crate::fonts::FontMeta>,
+    /// Texts: what the search box looks in (texts/mod.rs `body`).
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -1046,11 +1057,12 @@ fn push_rule(rule: &Rule, wheres: &mut Vec<String>, args: &mut Vec<Box<dyn ToSql
     if let Some(expr) = search::parse(&rule.search) {
         let sql = search::to_sql(&expr, &mut |word| {
             let pat = escape_like(word);
-            args.push(Box::new(pat.clone()));
-            args.push(Box::new(pat.clone()));
-            args.push(Box::new(pat.clone()));
+            for _ in 0..4 {
+                args.push(Box::new(pat.clone()));
+            }
             args.push(Box::new(pat));
-            "(items.name LIKE ? ESCAPE '\\' OR items.note LIKE ? ESCAPE '\\' OR IFNULL(items.font_family, '') LIKE ? ESCAPE '\\' OR EXISTS (
+            "(items.name LIKE ? ESCAPE '\\' OR items.note LIKE ? ESCAPE '\\' OR IFNULL(items.font_family, '') LIKE ? ESCAPE '\\'
+               OR IFNULL(items.body, '') LIKE ? ESCAPE '\\' OR EXISTS (
                SELECT 1 FROM item_tags it JOIN tags t ON t.id = it.tag_id
                WHERE it.item_id = items.id AND t.name LIKE ? ESCAPE '\\'))"
                 .into()
@@ -1514,8 +1526,8 @@ pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
 pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
     tx.execute(
         "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview, kind,
-           font_family, font_weight, font_script, font_category, font_weight_min, font_weight_max, font_features)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
+           font_family, font_weight, font_script, font_category, font_weight_min, font_weight_max, font_features, body)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
         params![
             it.id,
             it.name,
@@ -1537,8 +1549,18 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
             it.font.as_ref().and_then(|f| f.category),
             it.font.as_ref().map(|f| f.weight_min),
             it.font.as_ref().map(|f| f.weight_max),
-            it.font.as_ref().map(|f| f.features_text())
+            it.font.as_ref().map(|f| f.features_text()),
+            it.body
         ],
+    )?;
+    Ok(())
+}
+
+/// A text after it was edited (texts/commands.rs `save_text`).
+pub fn set_text(conn: &Connection, id: &str, hash: &str, size: i64, thumb: &str, body: &str) -> DbResult<()> {
+    conn.execute(
+        "UPDATE items SET hash = ?2, size = ?3, thumb = ?4, body = ?5 WHERE id = ?1 AND kind = 'text'",
+        params![id, hash, size, thumb, body],
     )?;
     Ok(())
 }
@@ -2009,7 +2031,7 @@ pub fn used_kinds(conn: &Connection) -> DbResult<Option<Vec<Kind>>> {
         .query_row("SELECT value FROM settings WHERE key = 'modes'", [], |r| r.get(0))
         .optional()?;
     let names: Vec<String> = value.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
-    let kinds: Vec<Kind> = [Kind::Image, Kind::Font, Kind::File]
+    let kinds: Vec<Kind> = [Kind::Image, Kind::Font, Kind::File, Kind::Text]
         .into_iter()
         .filter(|k| names.iter().any(|n| n == k.as_str()))
         .collect();
@@ -2625,6 +2647,7 @@ mod tests {
                 phash: None,
                 preview: None,
                 font: None,
+                body: None,
             },
             at,
         )
