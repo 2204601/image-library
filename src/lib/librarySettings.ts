@@ -34,6 +34,7 @@ export const DEFAULT_LIBRARY_SETTINGS: LibrarySettings = { modes: ALL_KINDS, las
 export const SIDEBAR_ENTRIES: { id: string; label: string; modes?: Mode[] }[] = [
   { id: "unfiled", label: "未分類" },
   { id: "untagged", label: "タグなし" },
+  { id: "system", label: "この端末のフォント", modes: ["font"] },
   { id: "favorites", label: "お気に入り" },
   { id: "pinned", label: "ピン留め" },
   { id: "similar", label: "重複の候補", modes: ["stock"] },

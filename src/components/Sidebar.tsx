@@ -9,6 +9,7 @@ import {
   Images,
   Inbox,
   Keyboard,
+  Monitor,
   MoreHorizontal,
   Pin,
   Shapes,
@@ -674,6 +675,7 @@ function TagList() {
 
 export function Sidebar() {
   const counts = useStore((s) => s.counts);
+  const systemCount = useStore((s) => s.systemCount);
   const sidebarWidth = useStore((s) => s.sidebarWidth);
   const view = useStore((s) => s.view);
   const setView = useStore((s) => s.setView);
@@ -694,6 +696,18 @@ export function Sidebar() {
     },
     { view: { kind: "unfiled" }, label: "未分類", icon: <Inbox size={15} />, count: counts.unfiled },
     { view: { kind: "untagged" }, label: "タグなし", icon: <Tags size={15} />, count: counts.untagged },
+    // Read only, not in the library (docs/SYSTEM_FONTS.md); counted once first listed.
+    ...(mode === "font"
+      ? [
+          {
+            view: { kind: "system" } as View,
+            label: "この端末のフォント",
+            icon: <Monitor size={15} />,
+            count: systemCount ?? undefined,
+            title: "この端末にインストールされているフォント（読み取り専用。ライブラリには入りません）",
+          },
+        ]
+      : []),
   ];
   const marks: Entry[] = [
     { view: { kind: "favorites" }, label: "お気に入り", icon: <Heart size={15} />, count: counts.favorites },

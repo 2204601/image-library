@@ -3,6 +3,7 @@
 // Mirrors the semantics of src-tauri/src/db.rs closely enough for UI work.
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import { modeOf, type Folder, type Item, type ItemQuery, type Mode, type Rule, type SimilarLevel, type Tag } from "../lib/api";
+import type { SystemFont } from "../features/fonts/api";
 
 type MockItem = Omit<
   Item,
@@ -37,6 +38,56 @@ type MockItem = Omit<
 };
 
 const items: MockItem[] = [];
+
+/**
+ * The fonts "installed on this computer" (src-tauri/src/fonts/system.rs): the
+ * font mode's この端末のフォント, read only (docs/SYSTEM_FONTS.md).
+ */
+const systemFonts: SystemFont[] = (
+  [
+    ["ヒラギノ角ゴシック W3", "ヒラギノ角ゴシック", 300, "ja", "gothic", [], "ttc", "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"],
+    ["ヒラギノ角ゴシック W6", "ヒラギノ角ゴシック", 600, "ja", "gothic", [], "ttc", "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc"],
+    ["ヒラギノ明朝 ProN W3", "ヒラギノ明朝 ProN", 300, "ja", "mincho", [], "ttc", "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc"],
+    ["Helvetica", "Helvetica", 400, "latin", "gothic", [], "ttc", "/System/Library/Fonts/Helvetica.ttc"],
+    ["Georgia", "Georgia", 400, "latin", "mincho", [], "ttf", "/System/Library/Fonts/Supplemental/Georgia.ttf"],
+    ["Menlo Regular", "Menlo", 400, "latin", "gothic", ["mono", "coding"], "ttc", "/System/Library/Fonts/Menlo.ttc"],
+    ["SF Pro", "SF Pro", 400, "latin", "gothic", ["variable"], "ttf", "/System/Library/Fonts/SFNS.ttf"],
+    ["Noto Sans JP Regular", "Noto Sans JP", 400, "ja", "gothic", [], "otf", "/Users/me/Library/Fonts/NotoSansJP-Regular.otf"],
+  ] as [string, string, number, string, string, string[], string, string][]
+).map(([name, family, weight, script, category, features, ext, path], k) => ({
+  id: `sys:mock${k}`,
+  path,
+  fileName: path.split("/").pop()!,
+  ext,
+  size: 1_000_000 + k * 731_000,
+  modified: Date.UTC(2025, k % 12, 1 + k),
+  name,
+  family,
+  weight,
+  weightMin: features.includes("variable") ? 100 : weight,
+  weightMax: features.includes("variable") ? 900 : weight,
+  script,
+  category,
+  features,
+}));
+
+/** A library font, or an installed one shaped like it (the font commands take both ids). */
+const fontItem = (fid: string): MockItem => {
+  const it = items.find((i) => i.id === fid);
+  if (it) return it;
+  const f = systemFonts.find((x) => x.id === fid);
+  if (!f) throw "フォントが見つかりません";
+  return {
+    ...({} as MockItem),
+    id: f.id,
+    kind: "font",
+    name: f.name,
+    ext: f.ext,
+    fontFamily: f.family,
+    fontWeight: f.weight,
+    fontScript: f.script,
+  };
+};
 
 /** Weight ranges of the sidebar's 太さ, as in db.rs `FONT_WEIGHTS`. */
 const FONT_WEIGHT_RANGES: [string, number, number][] = [
@@ -776,9 +827,13 @@ function handle(cmd: string, a: any): unknown {
     case "set_pinned":
       items.filter((i) => a.ids.includes(i.id)).forEach((i) => (i.pinnedAt = a.on ? (i.pinnedAt ?? Date.now()) : null));
       return;
+    case "system_fonts":
+      return systemFonts;
+    case "reveal_system_font":
+      return;
     case "font_info":
     case "font_faces": {
-      const it = items.find((i) => i.id === a.id)!;
+      const it = fontItem(a.id);
       const ja = it.fontScript === "ja";
       const latin = Array.from({ length: 94 }, (_, k) => 0x21 + k);
       const kana = Array.from({ length: 83 }, (_, k) => 0x3041 + k);
@@ -798,7 +853,7 @@ function handle(cmd: string, a: any): unknown {
       return fonts.length;
     }
     case "font_list_preview": {
-      const it = items.find((i) => i.id === a.id)!;
+      const it = fontItem(a.id);
       return {
         sample: it.fontScript === "ja" ? "永遠の青い空 いろは アイウ Aa 123" : "The quick brown fox jumps over 0123",
         style: it.ext === "ttc" ? "W3" : (it.name.split(/[-.]/)[1] ?? "Regular"),

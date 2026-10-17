@@ -15,7 +15,17 @@ import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { GroupBy } from "../lib/grouping";
 import type { ItemKind } from "../lib/api";
-import { listKinds, MODE_GROUPS, MODE_LAYOUTS, useStore, type Layout, type Mode, type ShowInfo } from "../store";
+import {
+  LIBRARY_GROUPS,
+  listKinds,
+  MODE_GROUPS,
+  MODE_LAYOUTS,
+  shownGroupBy,
+  useStore,
+  type Layout,
+  type Mode,
+  type ShowInfo,
+} from "../store";
 import { Slider } from "./Slider";
 
 /** Every grouping; each mode offers its own subset (MODE_GROUPS). */
@@ -155,7 +165,10 @@ export function LayoutSwitch() {
  * When the toolbar is narrow the same choices fold into a menu in its place.
  */
 export function GroupMenu() {
-  const groupBy = useStore((s) => s.groupBy);
+  const groupBy = useStore(shownGroupBy);
+  // The installed fonts have no rating, tags or folder (docs/SYSTEM_FONTS.md).
+  const system = useStore((s) => s.view.kind === "system");
+  const off = (g: GroupBy) => system && LIBRARY_GROUPS.includes(g);
   const setGroupBy = useStore((s) => s.setGroupBy);
   const isSimilar = useStore((s) => s.view.kind === "similar");
   const mode = useStore((s) => s.mode);
@@ -183,7 +196,7 @@ export function GroupMenu() {
           className="absolute inset-0 cursor-default opacity-0"
         >
           {groups.map((g) => (
-            <option key={g.key} value={g.key}>
+            <option key={g.key} value={g.key} disabled={off(g.key)}>
               {g.label}
             </option>
           ))}
@@ -195,9 +208,15 @@ export function GroupMenu() {
           return (
             <button
               key={g.key}
-              disabled={isSimilar}
+              disabled={isSimilar || off(g.key)}
               aria-pressed={on}
-              title={isSimilar ? "グループ分け（重複の候補では使えません）" : `${g.label}：${g.hint}`}
+              title={
+                isSimilar
+                  ? "グループ分け（重複の候補では使えません）"
+                  : off(g.key)
+                    ? `${g.label}：この端末のフォントには使えません（ライブラリのフォントだけ）`
+                    : `${g.label}：${g.hint}`
+              }
               onClick={() => setGroupBy(g.key)}
               className={`px-2 whitespace-nowrap disabled:opacity-40 ${i > 0 ? "border-l border-line" : ""} ${
                 on ? "bg-accent font-medium text-white" : "text-dim enabled:hover:bg-white/5 enabled:hover:text-fg"

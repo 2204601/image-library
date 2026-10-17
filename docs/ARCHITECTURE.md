@@ -85,8 +85,8 @@
 | 共通基盤（core） | `src/lib/*`, `src/store.ts`, `src/components/*` | ライブラリ・DB・取り込み・フォルダ・タグ・スマートフォルダ・検索・一覧の骨組み（Grid / Sidebar / Toolbar / Inspector / Viewer）・Updater |
 | | `src-tauri/src/{db,import,library,search,webimport,share,loopback,changes,proxy,transfer,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、フォルダの共有、変更の記録と取り消し、ライブラリ間のコピー・移動、共通コマンド |
 | | `src-tauri/src/mcp/` | Claude からの整理（MCP サーバー、`--mcp` の中継）。`docs/MCP.md` |
-| フォント | `src/features/fonts/` | フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行とグリッドのタイル（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、絞り込みの行の言語・書体・太さ・特徴（`FontFilters.tsx`）、見本の文字の行と大きさ（`SpecimenControls.tsx`）、見本のパターン（`patterns.ts`）、比較ビュー（`CompareView.tsx`）、シェルフの行（`ShelfChip.tsx`）、ウェイト名（`weights.ts`） |
-| | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`） |
+| フォント | `src/features/fonts/` | この端末のフォントの一覧・絞り込み・件数（`system.ts`）と詳細パネル（`SystemFontPanel.tsx`）、フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行とグリッドのタイル（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、絞り込みの行の言語・書体・太さ・特徴（`FontFilters.tsx`）、見本の文字の行と大きさ（`SpecimenControls.tsx`）、見本のパターン（`patterns.ts`）、比較ビュー（`CompareView.tsx`）、シェルフの行（`ShelfChip.tsx`）、ウェイト名（`weights.ts`） |
+| | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`）、この端末のフォントの読み込みとキャッシュ（`system.rs`） |
 | ファイル | `src/features/files/` | ビューア（`FileView.tsx`：PDF は `<iframe>`、ほかはサムネイルと「既定のアプリで開く」） |
 | | `src-tauri/src/files/` | 対応する拡張子、サムネイル（Quick Look／Windows.Data.Pdf（`win_pdf.rs`）／中のプレビュー／種類のカード） |
 | テキスト | `src/features/texts/` | ビューア（`TextView.tsx`：プレビューと自動保存の編集）、Markdown の HTML 化と掃除（`markdown.ts`）、CSV / TSV（`csv.ts`）、新規作成と貼り付け（`actions.ts`）。docs/TEXT.md |
@@ -95,6 +95,11 @@
 
 依存の向きは **features → core** のみ。core が種類ごとの知識を持つのは、DB に入っている語彙（`ItemKind`、`FONT_SCRIPTS` /
 `FONT_CATEGORIES` のラベル、`Item` のフォント列、`Filter.fontScripts` など）までにとどめ、振る舞いは features に置く。
+
+この端末のフォント（`View` の `{ kind: "system" }`、ID が `sys:` で始まる行）はライブラリの項目ではない（[SYSTEM_FONTS.md](SYSTEM_FONTS.md)）。
+core が持つのはその語彙（`isSystemId` / `libraryIds`、`lib/api.ts`）まで。一覧と絞り込みの件数は `store.ts` の `refresh` と `FilterRow.tsx` の
+`useFacets` で `features/fonts/system.ts` へ振り分ける。書き込みの操作は `commands.ts` の `mine` / `library` で無効にし、`actions.ts` の各操作の入口でも
+`libraryIds` で外して、`sys:` の ID をライブラリのコマンドへ渡さない。
 
 共通の UI（`Grid.tsx` / `Sidebar.tsx` / `Shelf.tsx` / `App.tsx`）が features の部品を描く箇所（見本の行、言語・書体の節、シェルフの行、比較ビュー）では、
 features 側が core の部品（`Row` / `Section`、`CellProps` / `showItemMenu`）を使うので import が循環する。
@@ -117,8 +122,7 @@ features 側が core の部品（`Row` / `Section`、`CellProps` / `showItemMenu
 ## 今後
 
 - 画像だけの機能（重複の候補・回転）も `features/images/` に寄せる
-- システムフォントの読み込み（デザインサンプル用）は、ライブラリに取り込まない **読み取り専用のソース** として
-  フォントモードに足す想定。`Item` に入れずに済む形（仮想の一覧）を検討する
+- この端末のフォント（[SYSTEM_FONTS.md](SYSTEM_FONTS.md)）のフェーズ 2（シェルフ・比較に混ぜる）とフェーズ 3（ライブラリとつなぐ印）
 - **URL（ブックマーク）を種類として足す**想定。画像・ファイルと同じフォルダに並べたいのでモードにはしない。
   `Item` はファイル前提（`fileName`・`ext`・`size`）なので、データの形は作るときに決める。ブラウザ拡張の保存と
   `Item.sourceUrl`（画像の保存元ページ）とつなげる

@@ -12,6 +12,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Plus,
+  RefreshCw,
   Search,
   Tag as TagIcon,
   Trash2,
@@ -29,6 +30,7 @@ import {
   similarGroups,
 } from "../lib/actions";
 import { SpecimenControls } from "../features/fonts/SpecimenControls";
+import { reloadSystemFonts } from "../features/fonts/system";
 import { kindsNoun } from "../lib/modes";
 import { type Folder, type ItemKind, type SimilarLevel, type SmartFolder, type SortKey, type Tag, type View } from "../lib/api";
 import { colorHex } from "../lib/colors";
@@ -86,6 +88,8 @@ function viewTitle(view: View, mode: Mode, folders: Folder[], smart: SmartFolder
       return smart.find((f) => f.id === view.id)?.name ?? "";
     case "tag":
       return tags.find((t) => t.id === view.id)?.name ?? "";
+    case "system":
+      return "この端末のフォント";
   }
 }
 
@@ -121,6 +125,8 @@ export function Toolbar() {
   const isTrash = view.kind === "trash";
   const isFolder = view.kind === "folder";
   const isSimilar = view.kind === "similar";
+  const isSystem = view.kind === "system";
+  const [reloading, setReloading] = useState(false);
   const manual = sort === "manual";
   const canManual = isFolder;
   const groups = useMemo(() => (isSimilar ? similarGroups(items) : []), [isSimilar, items]);
@@ -233,6 +239,20 @@ export function Toolbar() {
             >
               <CopyCheck size={15} /> <span className="@max-3xl:hidden">まとめて整理…</span>
             </button>
+          ) : isSystem ? (
+            // Fonts installed or removed since they were read (docs/SYSTEM_FONTS.md).
+            <button
+              title="フォントのフォルダを読み直して、インストール・削除したフォントを反映"
+              disabled={reloading}
+              onClick={() => {
+                setReloading(true);
+                void reloadSystemFonts().finally(() => setReloading(false));
+              }}
+              className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-3 whitespace-nowrap enabled:hover:bg-white/5 disabled:opacity-40 @max-3xl:px-2"
+            >
+              <RefreshCw size={15} className={reloading ? "animate-spin" : ""} />
+              <span className="@max-3xl:hidden">読み込み直す</span>
+            </button>
           ) : (
             // One bordered group, like the other controls.
             <div className="flex h-8 shrink-0 items-stretch overflow-hidden rounded-md border border-line">
@@ -308,8 +328,16 @@ export function Toolbar() {
               className="absolute inset-0 cursor-default opacity-0"
             >
               {sorts.map((s) => (
-                <option key={s.key} value={s.key} disabled={s.key === "manual" && !canManual}>
-                  {s.key === "manual" && !canManual ? "手動（フォルダのみ）" : s.label}
+                <option
+                  key={s.key}
+                  value={s.key}
+                  disabled={(s.key === "manual" && !canManual) || (isSystem && s.key === "rating")}
+                >
+                  {s.key === "manual" && !canManual
+                    ? "手動（フォルダのみ）"
+                    : isSystem && s.key === "rating"
+                      ? "評価（ライブラリのフォントのみ）"
+                      : s.label}
                 </option>
               ))}
             </select>

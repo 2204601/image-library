@@ -3,6 +3,7 @@
 //! the thumbnail. The original file is stored as is, like images.
 
 pub mod commands;
+pub mod system;
 
 use image::{DynamicImage, RgbaImage};
 use serde::Serialize;
