@@ -3,7 +3,12 @@
 // Rust reads the font folders (src-tauri/src/fonts/system.rs); the list is
 // filtered, searched and sorted here instead of in SQL (db.rs `query_where`),
 // with the same meaning for the conditions the font mode offers.
-import { type Facets, type Item, type ItemQuery } from "../../lib/api";
+//
+// Installed fonts also go on the font shelf next to the library's (`fontShelf`),
+// and the same font in the library and installed is marked on both sides
+// (`useFontLinks`, matched by PostScript name).
+import { create } from "zustand";
+import { isSystemId, type Facets, type Item, type ItemQuery } from "../../lib/api";
 import { useStore } from "../../store";
 import { fontApi, type SystemFont } from "./api";
 
@@ -59,6 +64,7 @@ export function systemItem(f: SystemFont): Item {
     fontCategory: f.category,
     fontCategoryUser: null,
     fontFeatures: f.features,
+    fontPsName: f.psName || null,
     inTray: false,
     filePath: f.path,
     // No rendered sample: rows and tiles draw in the font itself.
@@ -169,4 +175,91 @@ export async function reloadSystemFonts(): Promise<void> {
     return;
   }
   await s.refresh();
+}
+
+/** An installed font on the shelf that this computer doesn't have: its name, nothing to load. */
+function unavailableItem(id: string, name: string): Item {
+  return {
+    ...systemItem({
+      id,
+      path: "",
+      fileName: "",
+      ext: "",
+      size: 0,
+      modified: 0,
+      name,
+      psName: "",
+      family: name,
+      weight: 400,
+      weightMin: 400,
+      weightMax: 400,
+      script: "",
+      category: null,
+      features: [],
+    }),
+    fontScript: null,
+    unavailable: true,
+  };
+}
+
+/**
+ * The font shelf: the library's fonts on it (`items`, in their order) with
+ * the installed ones put in their places (one order, db.rs `tray_order`).
+ */
+export async function fontShelf(items: Item[]): Promise<Item[]> {
+  const tray = await fontApi.systemTray();
+  if (!tray.fonts.length) return items;
+  let installed = new Map<string, SystemFont>();
+  try {
+    installed = new Map((await systemFonts()).map((f) => [f.id, f]));
+  } catch {
+    // Not readable now: shown by name, as on a computer without them.
+  }
+  const byId = new Map(items.map((i) => [i.id, i]));
+  for (const f of tray.fonts) {
+    const font = installed.get(f.id);
+    byId.set(f.id, font ? systemItem(font) : unavailableItem(f.id, f.name));
+  }
+  const placed = new Set(tray.order);
+  return [...tray.order.flatMap((id) => byId.get(id) ?? []), ...items.filter((i) => !placed.has(i.id))];
+}
+
+/** The installed fonts of `family`, for the comparison's style picker (empty until listed). */
+export async function systemFamily(family: string): Promise<Item[]> {
+  return (await systemFonts()).filter((f) => f.family === family).map(systemItem);
+}
+
+/**
+ * PostScript names of the fonts installed on this computer and of the
+ * library's: the same font on both sides is marked (null until known).
+ */
+export const useFontLinks = create<{ installed: ReadonlySet<string> | null; library: ReadonlySet<string> | null }>(
+  () => ({ installed: null, library: null }),
+);
+
+/**
+ * Reads both sides again (the font mode's refresh). The installed fonts are
+ * read in the background the first time, so the library's list isn't held up.
+ */
+export function refreshFontLinks() {
+  fontApi
+    .libraryPsNames()
+    .then((names) => useFontLinks.setState({ library: new Set(names) }))
+    .catch(() => {});
+  systemFonts()
+    .then((fonts) => {
+      useFontLinks.setState({ installed: new Set(fonts.flatMap((f) => (f.psName ? [f.psName] : []))) });
+      useStore.setState({ systemCount: fonts.length });
+    })
+    .catch(() => {});
+}
+
+/** The mark a font gets: the library's one is installed here too, or the installed one is in the library. */
+export function useFontLink(item: Item): "installed" | "inLibrary" | null {
+  return useFontLinks((s) => {
+    const ps = item.fontPsName;
+    if (!ps) return null;
+    if (isSystemId(item.id)) return s.library?.has(ps) ? "inLibrary" : null;
+    return s.installed?.has(ps) ? "installed" : null;
+  });
 }

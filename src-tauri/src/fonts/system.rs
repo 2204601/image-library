@@ -25,7 +25,7 @@ pub const ID_PREFIX: &str = "sys:";
 const MAX_FILE: u64 = 256 << 20;
 
 /// Bumped when what is read from a font changes, so the cache is read again.
-const CACHE_VERSION: u32 = 1;
+const CACHE_VERSION: u32 = 2;
 const CACHE_FILE: &str = "system-fonts.json";
 
 /// One font file installed on this computer (a collection is one entry, like
@@ -33,7 +33,8 @@ const CACHE_FILE: &str = "system-fonts.json";
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemFont {
-    /// `ID_PREFIX` and a hash of the path: the same file keeps its id.
+    /// `ID_PREFIX` and a hash of the PostScript name (see `assign_ids`): the
+    /// same font has the same id on another computer.
     pub id: String,
     pub path: PathBuf,
     pub file_name: String,
@@ -44,6 +45,9 @@ pub struct SystemFont {
     pub modified: i64,
     /// Full name of the first font, e.g. "Hiragino Sans W3".
     pub name: String,
+    /// PostScript name of the first font ("" when it has none): what tells the
+    /// same font in the library (`items.font_ps_name`).
+    pub ps_name: String,
     pub family: String,
     pub weight: u32,
     pub weight_min: u32,
@@ -67,9 +71,34 @@ pub fn is_system_id(id: &str) -> bool {
     id.starts_with(ID_PREFIX)
 }
 
-fn id_of(path: &Path) -> String {
-    let hash = Sha256::digest(path.to_string_lossy().as_bytes());
+fn hash_id(key: &str) -> String {
+    let hash = Sha256::digest(key.as_bytes());
     format!("{ID_PREFIX}{}", hex::encode(&hash[..12]))
+}
+
+/// Ids from the PostScript name, so a font put on a library's shelf is found
+/// again when the library is opened on another computer that has it. A second
+/// file with the same name (another copy installed by hand) is told by its
+/// place among them (by path); a font without one by its path.
+fn assign_ids(fonts: &mut [SystemFont]) {
+    let mut order: Vec<usize> = (0..fonts.len()).collect();
+    order.sort_by(|&a, &b| fonts[a].path.cmp(&fonts[b].path));
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    for i in order {
+        let f = &mut fonts[i];
+        let key = if f.ps_name.is_empty() {
+            format!("path\0{}", f.path.to_string_lossy())
+        } else {
+            let n = seen.entry(f.ps_name.clone()).or_insert(0);
+            *n += 1;
+            if *n == 1 {
+                f.ps_name.clone()
+            } else {
+                format!("{}\0{n}", f.ps_name)
+            }
+        };
+        f.id = hash_id(&key);
+    }
 }
 
 /// Font files in the OS's font folders (fontdb knows them on every platform,
@@ -113,13 +142,15 @@ fn read_font(path: &Path, size: u64, modified: i64) -> Option<SystemFont> {
         return None;
     }
     let sfnt = to_sfnt(&std::fs::read(path).ok()?, &ext).ok()?;
-    let FontMeta { family, weight, weight_min, weight_max, script, category, features } = meta(&sfnt).ok()?;
+    let FontMeta { family, weight, weight_min, weight_max, script, category, features, ps_name } = meta(&sfnt).ok()?;
     let name = super::faces(&sfnt).ok()?.into_iter().next().map(|f| f.full_name).unwrap_or_default();
     let file_name = path.file_name()?.to_string_lossy().into_owned();
     Some(SystemFont {
-        id: id_of(path),
+        // Set once every font is read (`assign_ids`).
+        id: String::new(),
         path: path.to_path_buf(),
         name: if name.is_empty() { file_name.clone() } else { name },
+        ps_name,
         file_name,
         ext,
         size,
@@ -164,6 +195,7 @@ fn read_all(paths: &[PathBuf], cached: &HashMap<PathBuf, SystemFont>) -> Vec<Sys
         })
         .collect();
     fonts.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.path.cmp(&b.path)));
+    assign_ids(&mut fonts);
     fonts
 }
 
@@ -219,7 +251,6 @@ mod tests {
         assert_eq!(fonts.len(), 1);
         let f = &fonts[0];
         assert!(is_system_id(&f.id));
-        assert_eq!(f.id, id_of(path), "the same file keeps its id");
         assert!(!f.family.is_empty() && !f.name.is_empty());
 
         // Unchanged files come from the cache (here marked by a name the file doesn't have).
@@ -233,17 +264,16 @@ mod tests {
         assert_eq!(changed[0].name, f.name);
     }
 
-    #[test]
-    fn the_cache_round_trips_and_ignores_other_versions() {
-        let dir = tempfile::tempdir().unwrap();
-        let font = SystemFont {
-            id: id_of(Path::new("/fonts/A.ttf")),
-            path: "/fonts/A.ttf".into(),
+    fn font(path: &str, ps_name: &str) -> SystemFont {
+        SystemFont {
+            id: String::new(),
+            path: path.into(),
             file_name: "A.ttf".into(),
             ext: "ttf".into(),
             size: 10,
             modified: 1,
             name: "A Regular".into(),
+            ps_name: ps_name.into(),
             family: "A".into(),
             weight: 400,
             weight_min: 400,
@@ -251,7 +281,31 @@ mod tests {
             script: "latin".into(),
             category: None,
             features: vec!["mono".into()],
-        };
+        }
+    }
+
+    #[test]
+    fn ids_follow_the_postscript_name() {
+        let mut here = vec![font("/Library/Fonts/A.ttf", "A-Regular"), font("/fonts/B.ttf", "")];
+        let mut there = vec![font("/Users/me/Library/Fonts/A.ttf", "A-Regular"), font("/other/B.ttf", "")];
+        assign_ids(&mut here);
+        assign_ids(&mut there);
+        assert_eq!(here[0].id, there[0].id, "the same font elsewhere has the same id");
+        assert_ne!(here[1].id, there[1].id, "without a name, the path tells it");
+        assert!(here.iter().all(|f| is_system_id(&f.id)));
+
+        // Two copies of one font: both listed, the first by path keeps the plain id.
+        let mut both = vec![font("/z/A.ttf", "A-Regular"), font("/a/A.ttf", "A-Regular")];
+        assign_ids(&mut both);
+        assert_eq!(both[1].id, here[0].id);
+        assert_ne!(both[0].id, both[1].id);
+    }
+
+    #[test]
+    fn the_cache_round_trips_and_ignores_other_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut font = font("/fonts/A.ttf", "A-Regular");
+        assign_ids(std::slice::from_mut(&mut font));
         write_cache(dir.path(), std::slice::from_ref(&font));
         assert_eq!(read_cache(dir.path()).get(Path::new("/fonts/A.ttf")), Some(&font));
 

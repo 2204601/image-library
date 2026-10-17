@@ -5,7 +5,7 @@ import { startDrag } from "@crabnebula/tauri-plugin-drag";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { useEffect, useRef } from "react";
 import { addToTray, moveToFolder, reorder, reorderShelf } from "../lib/actions";
-import { api, type Folder } from "../lib/api";
+import { api, isSystemId, libraryIds, type Folder } from "../lib/api";
 import { warn } from "../lib/log";
 import { useStore, type Drag } from "../store";
 
@@ -58,7 +58,9 @@ function targetAt(x: number, y: number, drag: Drag): string | null {
   const t = el?.dataset.drop ?? null;
   if (!t || !el) return null;
   if (drag.kind === "items") {
-    if (t.startsWith("folder:")) return t;
+    // Installed fonts only go on the shelf (docs/SYSTEM_FONTS.md).
+    const system = drag.ids.some(isSystemId);
+    if (t.startsWith("folder:")) return system ? null : t;
     // From the list: anywhere on the shelf adds. On the shelf: beside another one reorders.
     if (t === "tray") return drag.from === "shelf" ? null : t;
     if (t.startsWith("shelf:")) {
@@ -67,7 +69,7 @@ function targetAt(x: number, y: number, drag: Drag): string | null {
       const r = el.getBoundingClientRect();
       return `${t}:${x < r.left + r.width / 2 ? "before" : "after"}`;
     }
-    if (t.startsWith("item:") && !drag.ids.includes(t.slice(5))) {
+    if (t.startsWith("item:") && !system && !drag.ids.includes(t.slice(5))) {
       const r = el.getBoundingClientRect();
       // List rows stack vertically; everything else flows left to right.
       const first = el.dataset.axis === "y" ? y < r.top + r.height / 2 : x < r.left + r.width / 2;
@@ -131,10 +133,16 @@ async function drop(drag: Drag, target: string) {
   }
 }
 
-/** Leaving the window with images hands the drag to the OS (drop into other apps). */
+/**
+ * Leaving the window with images hands the drag to the OS (drop into other
+ * apps). Not the installed fonts: they aren't handed out as files.
+ */
 function dragOut(drag: Drag & { kind: "items" }) {
   const s = useStore.getState();
-  const items = [...s.items, ...s.shelf].filter((i, n, all) => drag.ids.includes(i.id) && all.findIndex((x) => x.id === i.id) === n);
+  const ids = libraryIds(drag.ids);
+  const items = [...s.items, ...s.shelf].filter(
+    (i, n, all) => ids.includes(i.id) && all.findIndex((x) => x.id === i.id) === n,
+  );
   if (!items.length) return;
   startDrag({ item: items.map((i) => i.filePath), icon: items[0].thumbPath }).catch((e) =>
     warn("drag out failed", e),
@@ -251,7 +259,12 @@ export function DragLayer() {
           label ? "bg-accent text-white" : "bg-black/70 text-white/70"
         }`}
       >
-        {label ?? (drag.kind === "items" ? "フォルダへドロップ / 窓の外で他のアプリへ" : "移動先のフォルダへドロップ")}
+        {label ??
+          (drag.kind === "items"
+            ? drag.ids.some(isSystemId)
+              ? "シェルフへドロップ"
+              : "フォルダへドロップ / 窓の外で他のアプリへ"
+            : "移動先のフォルダへドロップ")}
       </div>
     </div>
   );

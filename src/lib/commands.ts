@@ -318,7 +318,8 @@ export const COMMANDS: Command[] = [
     label: (s) => (sel(s).length && onShelf(sel(s)) ? "シェルフから外す" : "シェルフに追加"),
     icon: Layers,
     keys: ["B"],
-    enabled: live,
+    // Installed fonts go on the font shelf too, to be compared (docs/SYSTEM_FONTS.md).
+    enabled: (s) => any(s) && notTrash(s),
     checked: (s) => sel(s).length > 0 && onShelf(sel(s)),
     run: (s) => void toggleTray(sel(s)),
   },

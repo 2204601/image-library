@@ -372,6 +372,9 @@ pub struct FontMeta {
     pub category: Option<&'static str>,
     /// Traits a font has any number of, in `FEATURES` order: see `features`.
     pub features: Vec<&'static str>,
+    /// PostScript name ("" when the font has none): what tells the same font
+    /// in the library and installed on this computer (docs/SYSTEM_FONTS.md).
+    pub ps_name: String,
 }
 
 impl FontMeta {
@@ -410,6 +413,7 @@ pub fn meta(sfnt: &[u8]) -> Result<FontMeta, String> {
         script: script(&font),
         category: category(&font),
         features: features(&font),
+        ps_name: name(&font, &[StringId::POSTSCRIPT_NAME]),
     })
 }
 

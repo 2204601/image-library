@@ -1,9 +1,11 @@
 // The details panel for fonts installed on this computer (docs/SYSTEM_FONTS.md):
 // the same rows as a library font's, read only, with where the file is.
-// Rating, tags, folder and note are library things, so they aren't offered.
-import { FolderOpen, Monitor } from "lucide-react";
-import { useEffect, useState } from "react";
+// Rating, tags, folder and note are library things, so they aren't offered;
+// the shelf is (to compare it with the library's fonts).
+import { FolderOpen, Layers, Monitor } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { formatBytes, type Item } from "../../lib/api";
+import { onShelf, toggleTray } from "../../lib/actions";
 import { useStore } from "../../store";
 import { fontApi } from "./api";
 import { FontDetails } from "./FontDetails";
@@ -48,9 +50,11 @@ function Glyphs({ item }: { item: Item }) {
   );
 }
 
-/** What the details panel shows for a selection with installed fonts in it (`n` selected). */
-export function SystemFontPanel({ single, n }: { single: Item | undefined; n: number }) {
+/** What the details panel shows for a selection (`ids`) with installed fonts in it. */
+export function SystemFontPanel({ single, ids }: { single: Item | undefined; ids: string[] }) {
   const run = useStore((s) => s.run);
+  const shelf = useStore((s) => s.shelf);
+  const shelved = useMemo(() => shelf.length > 0 && onShelf(ids), [shelf, ids]);
   return (
     <>
       {single ? (
@@ -86,15 +90,25 @@ export function SystemFontPanel({ single, n }: { single: Item | undefined; n: nu
         </>
       ) : (
         <div className="rounded-lg bg-raised p-4 text-center">
-          <div className="text-2xl font-semibold tabular-nums">{n}</div>
+          <div className="text-2xl font-semibold tabular-nums">{ids.length}</div>
           <div className="text-dim">件を選択中</div>
         </div>
       )}
+      <button
+        onClick={() => void toggleTray(ids)}
+        title="シェルフに置いて、ライブラリのフォントと並べて比べる（B）"
+        className={`mt-4 flex h-8 items-center justify-center gap-1.5 rounded-md border border-line hover:bg-white/5 ${
+          shelved ? "text-emerald-400" : ""
+        }`}
+      >
+        <Layers size={14} />
+        {shelved ? "シェルフから外す" : "シェルフに追加"}
+      </button>
       <div className="mt-4 flex gap-2 rounded-lg border border-line/70 p-3 text-xs text-dim">
         <Monitor size={14} className="mt-0.5 shrink-0" />
         <p>
           この端末にインストールされているフォントです。読み取り専用で、ライブラリには入りません。
-          評価・タグ・フォルダ・メモ・シェルフは、ライブラリのフォントだけに使えます。
+          評価・タグ・フォルダ・メモは、ライブラリのフォントだけに使えます。
         </p>
       </div>
     </>

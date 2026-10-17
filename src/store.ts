@@ -22,7 +22,7 @@ import {
   type View,
 } from "./lib/api";
 import { fontApi } from "./features/fonts/api";
-import { querySystemFonts, systemFonts } from "./features/fonts/system";
+import { fontShelf, querySystemFonts, refreshFontLinks, systemFonts } from "./features/fonts/system";
 import { filesApi, onFileThumbs } from "./features/files/api";
 import {
   kindsNoun,
@@ -1218,7 +1218,9 @@ export const useStore = create<State>((set, get) => ({
       }
       // The installed fonts aren't in the library: listed by features/fonts/system.ts.
       const system = view.kind === "system";
-      const [rawItems, folders, tags, counts, smartFolders, exts, shelf] = await Promise.all([
+      // Which fonts are both in the library and installed (marked on both sides).
+      if (mode === "font") refreshFontLinks();
+      const [rawItems, folders, tags, counts, smartFolders, exts, trayItems] = await Promise.all([
         system ? querySystemFonts(listQuery(get())) : api.queryItems(listQuery(get())),
         api.listFolders(mode),
         api.listTags(mode),
@@ -1239,6 +1241,8 @@ export const useStore = create<State>((set, get) => ({
           desc: false,
         }),
       ]);
+      // The font shelf holds installed fonts too (docs/SYSTEM_FONTS.md).
+      const shelf = mode === "font" ? await fontShelf(trayItems) : trayItems;
       const systemCount = system ? (await systemFonts()).length : null;
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
       const { items, sections } = arrange({ ...get(), view, rawItems, tags, folders });
