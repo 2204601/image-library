@@ -57,6 +57,7 @@ npm test               # Rust のユニットテスト + 型チェック
 | [DEVELOPMENT.md](docs/DEVELOPMENT.md) | 開発環境、ソースの構成、リリース |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | モードの考え方、共通基盤と種類ごとのコードの境界 |
 | [MCP.md](docs/MCP.md) | Claude との連携 |
+| [FROM_APPS.md](docs/FROM_APPS.md) | ほかのアプリ（Feedability）から受け取る（計画） |
 | [SETTINGS.md](docs/SETTINGS.md) | 設定画面とライブラリごとの設定 |
 | [MENUS.md](docs/MENUS.md) | メニューの構成 |
 | [UI.md](docs/UI.md) | 画面の原則（表示を切り替えても操作の位置を不必要に変えない） |
