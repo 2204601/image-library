@@ -47,6 +47,7 @@ src-tauri/src/
   share.rs              フォルダの共有：LAN への待ち受け（見るだけ、URL の秘密の文字列が鍵）、`shares` テーブル、アドレス・QR コード
   share.html            フォルダの共有の閲覧ページ（スマホ向け、1 ファイル。share.rs に埋め込む）
   loopback.rs           HTTP の待ち受け（受付サーバー・MCP・フォルダの共有で共通）
+  export.rs             書き出し：一覧の書き出し、ライブラリ全体をフォルダ構成どおりに（docs/EXPORT.md）
   commands.rs           フロントから呼ぶコマンド（共通）
   appdirs.rs            アプリのフォルダ（旧名 Image Library のフォルダからの移し替え）
 src-tauri/windows/hooks.nsh  Windows インストーラの追加処理（旧名のアプリのアンインストール）

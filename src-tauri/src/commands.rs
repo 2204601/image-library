@@ -281,7 +281,7 @@ fn activate(app: &AppHandle, state: &AppState, mut lib: Library) -> CmdResult<Li
     Ok(info)
 }
 
-fn library_name(root: &std::path::Path) -> String {
+pub(crate) fn library_name(root: &std::path::Path) -> String {
     root.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
@@ -714,68 +714,6 @@ pub fn copy_items(state: State<AppState>, ids: Vec<String>) -> CmdResult<usize> 
     }
     ctx.set(contents).map_err(err)?;
     Ok(paths.len())
-}
-
-/// Copies the original files into `dest`, never overwriting existing files.
-/// Off the main thread (gigabytes may be copied), holding the library only
-/// to look the items up.
-#[tauri::command]
-pub async fn export_items(
-    app: AppHandle,
-    ids: Vec<String>,
-    dest: PathBuf,
-    subdirs: Option<Vec<String>>,
-) -> CmdResult<usize> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let items = item_paths(&app.state::<AppState>(), &ids)?;
-        for (item, src) in &items {
-            // The folder under `dest` given for this item (same position as its id).
-            let sub = subdirs
-                .as_ref()
-                .and_then(|s| s.get(ids.iter().position(|x| *x == item.id)?))
-                .map_or("", String::as_str);
-            let dir = export_dir(&dest, sub);
-            fs::create_dir_all(&dir).map_err(err)?;
-            fs::copy(src, export_target(&dir, &item.name, &item.ext)).map_err(err)?;
-        }
-        Ok(items.len())
-    })
-    .await
-    .map_err(err)?
-}
-
-/// `dest` plus a relative folder path ("旅行/2025/京都", `/`-separated), each
-/// part made safe as a file name. Empty parts, "." and ".." are dropped so
-/// nothing lands outside `dest`.
-fn export_dir(dest: &std::path::Path, rel: &str) -> PathBuf {
-    rel.split('/')
-        .map(str::trim)
-        .filter(|p| !p.is_empty() && *p != "." && *p != "..")
-        .fold(dest.to_path_buf(), |d, p| d.join(safe_name(p)))
-}
-
-/// Characters not allowed in file names on Windows (or anywhere) become `_`.
-fn safe_name(name: &str) -> String {
-    name.chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
-        .collect()
-}
-
-/// `dest/name.ext`, or `name (2).ext`… when taken. Keeps a renamed item's
-/// display name but makes sure the extension is there.
-fn export_target(dest: &std::path::Path, name: &str, ext: &str) -> PathBuf {
-    let has_ext = std::path::Path::new(name)
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case(ext));
-    let stem = if has_ext { &name[..name.len() - ext.len() - 1] } else { name };
-    let clean = safe_name(stem);
-    let mut candidate = dest.join(format!("{clean}.{ext}"));
-    let mut n = 2;
-    while candidate.exists() {
-        candidate = dest.join(format!("{clean} ({n}).{ext}"));
-        n += 1;
-    }
-    candidate
 }
 
 // ------------------------------------------------------------ work tray
@@ -1608,28 +1546,6 @@ pub fn delete_tag(state: State<AppState>, id: i64) -> CmdResult<()> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn export_names() {
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        assert_eq!(super::export_target(d, "cat.PNG", "png"), d.join("cat.png"));
-        assert_eq!(super::export_target(d, "renamed", "jpg"), d.join("renamed.jpg"));
-        assert_eq!(super::export_target(d, "a/b:c", "jpg"), d.join("a_b_c.jpg"));
-        std::fs::write(d.join("cat.png"), "x").unwrap();
-        std::fs::write(d.join("cat (2).png"), "x").unwrap();
-        assert_eq!(super::export_target(d, "cat.png", "png"), d.join("cat (3).png"));
-    }
-
-    #[test]
-    fn export_folders() {
-        let d = std::path::Path::new("/out");
-        assert_eq!(super::export_dir(d, ""), d);
-        assert_eq!(super::export_dir(d, "旅行/2025/京都"), d.join("旅行").join("2025").join("京都"));
-        // Names unsafe on Windows are replaced; nothing climbs out of `dest`.
-        assert_eq!(super::export_dir(d, "a:b/../c*"), d.join("a_b").join("c_"));
-        assert_eq!(super::export_dir(d, "/./ x /"), d.join("x"));
-    }
-
     #[test]
     fn percent_decode_utf8() {
         assert_eq!(super::percent_decode("%E7%94%BB%E5%83%8F.png"), "画像.png");
