@@ -24,6 +24,16 @@ import {
 import { FontConditions } from "../features/fonts/FontFilters";
 import { activeConditions, CLEARED, listIs, listQuery, usedModes, useStore, type ConditionKey } from "../store";
 import { RangeCalendar } from "./RangeCalendar";
+import { systemFacetCounts } from "../features/fonts/system";
+
+/**
+ * Conditions the fonts installed on this computer don't have (they have no
+ * rating, tags or import date): greyed out there, with why (docs/SYSTEM_FONTS.md).
+ */
+function useNotForSystem(what: string): { disabled?: boolean; title?: string } {
+  const system = useStore((s) => s.view.kind === "system");
+  return system ? { disabled: true, title: `この端末のフォントには${what}がありません（ライブラリのフォントだけ）` } : {};
+}
 
 /** The conditions a row shows: the open ones (editable), or a smart folder's (locked). */
 export interface Cond {
@@ -40,8 +50,9 @@ export function useFacets(key: ConditionKey, open: boolean): Facets | null {
   useEffect(() => {
     if (!open) return;
     let live = true;
-    api
-      .facetCounts(listQuery(useStore.getState(), key))
+    const s = useStore.getState();
+    // The installed fonts aren't in the library: counted where they are listed.
+    (s.view.kind === "system" ? systemFacetCounts(listQuery(s, key)) : api.facetCounts(listQuery(s, key)))
       .then((f) => live && setFacets(f))
       .catch(() => {});
     return () => {
@@ -324,10 +335,12 @@ export function FilterRow() {
               すべて解除
             </button>
             <button
-              disabled={active === 0}
+              disabled={active === 0 || view.kind === "system"}
               onClick={() => createSmartFolder()}
               title={
-                view.kind === "tag"
+                view.kind === "system"
+                  ? "スマートフォルダはライブラリのフォントだけを集めます（この端末のフォントの条件は保存できません）"
+                  : view.kind === "tag"
                   ? "今の条件（このタグも）をスマートフォルダとして保存（⌘⇧⌥N）"
                   : "今の検索と絞り込みの条件をスマートフォルダとして保存（⌘⇧⌥N）"
               }
@@ -348,8 +361,10 @@ export type CondProps = { cond: Cond; locked: boolean; onLocked: () => void };
 function RatingCondition({ cond, locked, onLocked }: CondProps) {
   const setMinRating = useStore((s) => s.setMinRating);
   const n = cond.minRating;
+  const notForSystem = useNotForSystem("評価");
   return (
     <Pill
+      {...notForSystem}
       label="評価"
       value={n ? `★${n} 以上` : ""}
       locked={locked}
@@ -394,8 +409,10 @@ function TagCondition({ cond, locked, onLocked }: CondProps) {
   const refresh = () => useStore.getState().refresh();
   const names = cond.tagFilter.map((id) => tags.find((t) => t.id === id)?.name).filter(Boolean);
   const all = cond.tagMatchAll && names.length > 1;
+  const notForSystem = useNotForSystem("タグ");
   return (
     <Pill
+      {...notForSystem}
       label="タグ"
       value={names.length ? `${names.join("・")}${all ? "（すべて）" : ""}` : ""}
       locked={locked}
@@ -596,8 +613,10 @@ function DimsMenu({ open, f }: { open: boolean; f: Filter }) {
 function DateCondition({ cond, locked, onLocked }: CondProps) {
   const setFilter = useStore((s) => s.setFilter);
   const f = cond.filter;
+  const notForSystem = useNotForSystem("追加日");
   return (
     <Pill
+      {...notForSystem}
       label="追加日"
       value={describeDate(f)}
       locked={locked}

@@ -160,6 +160,8 @@ pub fn run() {
             fonts::commands::index_fonts,
             fonts::commands::set_font_category,
             fonts::commands::font_data,
+            fonts::commands::system_fonts,
+            fonts::commands::reveal_system_font,
             files::commands::file_preview,
             files::commands::prepare_file_thumbs,
             texts::commands::read_text,

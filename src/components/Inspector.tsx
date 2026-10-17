@@ -18,8 +18,18 @@ import {
   toggleTray,
 } from "../lib/actions";
 import { listNoun } from "../store";
-import { api, formatBytes, sizeLabel, type Folder, type Item, type SelectionInfo, type Tag } from "../lib/api";
+import {
+  api,
+  formatBytes,
+  isSystemId,
+  sizeLabel,
+  type Folder,
+  type Item,
+  type SelectionInfo,
+  type Tag,
+} from "../lib/api";
 import { FontCategorySelect, FontDetails } from "../features/fonts/FontDetails";
+import { SystemFontPanel } from "../features/fonts/SystemFontPanel";
 import { useStore } from "../store";
 import { composing } from "../lib/ime";
 import { RatingStars } from "./RatingStars";
@@ -349,6 +359,8 @@ export function Inspector() {
   const [adding, setAdding] = useState(false);
 
   const ids = useMemo(() => [...selected], [selected]);
+  // Installed fonts aren't library items: nothing to ask the library about them.
+  const system = ids.some(isSystemId);
   const single = ids.length === 1 ? items.find((i) => i.id === ids[0]) : undefined;
   // With tag grouping an item can be listed more than once.
   const selectedItems = useMemo(
@@ -376,12 +388,12 @@ export function Inspector() {
   useEffect(() => {
     let live = true;
     setAdding(false);
-    if (!ids.length) return setInfo({ tags: [], folders: [] });
+    if (!ids.length || system) return setInfo({ tags: [], folders: [] });
     api.selectionInfo(ids).then((i) => live && setInfo(i));
     return () => {
       live = false;
     };
-  }, [ids, rev]);
+  }, [ids, rev, system]);
 
   const tagIds = useMemo(() => new Set(info.tags.map((t) => t.id)), [info.tags]);
 
@@ -397,6 +409,16 @@ export function Inspector() {
   }
 
   const n = ids.length;
+  if (system) {
+    return (
+      <aside
+        className="flex shrink-0 flex-col overflow-y-auto border-l border-line bg-panel p-4"
+        style={{ width: inspectorWidth }}
+      >
+        <SystemFontPanel single={single} n={n} />
+      </aside>
+    );
+  }
   const countSuffix = (c: number) => (n > 1 && c < n ? ` (${c}/${n})` : "");
   const unusedFolders = folders.filter((f) => !info.folders.some((x) => x.id === f.id && x.count === n));
 

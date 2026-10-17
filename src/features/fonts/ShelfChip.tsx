@@ -4,20 +4,39 @@ import type { Item } from "../../lib/api";
 import { holdFont, loadFont } from "./loader";
 import { weightName } from "./weights";
 
-/** The font's mark and name, for the shelf's chip (the chip itself is Shelf.tsx's). */
-export function FontShelfLabel({ item }: { item: Item }) {
+/** The font of `id`, loaded while shown (its CSS family once loaded). */
+function useLoadedFont(id: string): string | null {
   const [family, setFamily] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
-    const release = holdFont(item.id);
-    loadFont(item.id)
+    const release = holdFont(id);
+    loadFont(id)
       .then((f) => live && setFamily(f))
       .catch(() => {});
     return () => {
       live = false;
       release();
     };
-  }, [item.id]);
+  }, [id]);
+  return family;
+}
+
+/** "Aa" or "あ" in the font, where a font has no rendered sample (an installed font in the viewer's strip). */
+export function FontMark({ item, className }: { item: Item; className?: string }) {
+  const family = useLoadedFont(item.id);
+  return (
+    <span
+      className={`transition-opacity ${family ? "" : "opacity-40"} ${className ?? ""}`}
+      style={{ fontFamily: family ? `"${family}"` : undefined }}
+    >
+      {item.fontScript === "latin" ? "Aa" : "あ"}
+    </span>
+  );
+}
+
+/** The font's mark and name, for the shelf's chip (the chip itself is Shelf.tsx's). */
+export function FontShelfLabel({ item }: { item: Item }) {
+  const family = useLoadedFont(item.id);
   return (
     <>
       <span

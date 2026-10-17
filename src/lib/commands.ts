@@ -47,7 +47,8 @@ import {
   transferList,
   trayList,
 } from "./actions";
-import { api, kindLabel, type Item, type ItemKind } from "./api";
+import { api, isSystemId, kindLabel, type Item, type ItemKind } from "./api";
+import { fontApi } from "../features/fonts/api";
 import { checkForUpdate } from "./update";
 import { currentFolderId, listKinds, MODES, shownModes, useStore } from "../store";
 import { modeLabel } from "./modes";
@@ -83,7 +84,14 @@ const sel = (s: S) => [...s.selected];
 const typing = () => !!(document.activeElement as HTMLElement | null)?.closest?.("input, textarea, [contenteditable]");
 const any = (s: S) => s.selected.size > 0;
 const notTrash = (s: S) => s.view.kind !== "trash";
-const live = (s: S) => any(s) && notTrash(s);
+/**
+ * Something selected, and all of it library items: the fonts installed on this
+ * computer can be looked at but not changed, copied or taken out (docs/SYSTEM_FONTS.md).
+ */
+const mine = (s: S) => any(s) && !sel(s).some(isSystemId);
+/** The list is the library's (not the installed fonts). */
+const library = (s: S) => s.view.kind !== "system";
+const live = (s: S) => mine(s) && notTrash(s);
 const selItems = (s: S): Item[] => {
   const byId = new Map(s.rawItems.map((i) => [i.id, i]));
   return sel(s).flatMap((id) => byId.get(id) ?? []);
@@ -219,14 +227,14 @@ export const COMMANDS: Command[] = [
     title: "コピー",
     icon: Copy,
     keys: ["Mod+C"],
-    enabled: any,
+    enabled: mine,
     run: (s) => void copySelection(sel(s)),
   },
   {
     id: "item.copyTags",
     title: "タグをコピー",
     keys: ["Mod+Shift+C"],
-    enabled: any,
+    enabled: mine,
     run: (s) => void copyTags(sel(s)),
   },
   {
@@ -241,7 +249,7 @@ export const COMMANDS: Command[] = [
     title: "名前を変更",
     keys: ["F2", "Mod+R"],
     // Nothing selected in a folder: the folder's own name.
-    enabled: (s) => s.selected.size === 1 || (s.selected.size === 0 && s.view.kind === "folder"),
+    enabled: (s) => (s.selected.size === 1 && mine(s)) || (s.selected.size === 0 && s.view.kind === "folder"),
     run: (s) => {
       if (s.selected.size === 1) s.requestItemRename();
       else if (s.view.kind === "folder") s.setRenamingFolder(s.view.id);
@@ -255,7 +263,7 @@ export const COMMANDS: Command[] = [
     keys: ["Mod+Backspace", "Delete"],
     // ⌘⌫ / Ctrl+Backspace reach the menu while typing too: in a text field
     // (the text editor, the search box) they are for deleting words.
-    enabled: (s) => any(s) && !typing(),
+    enabled: (s) => mine(s) && !typing(),
     run: (s) => void deleteSelection(sel(s)),
   },
 
@@ -272,12 +280,16 @@ export const COMMANDS: Command[] = [
       if (i >= 0) s.openViewer(i);
     },
   },
-  { id: "item.open", title: "既定のアプリで開く", enabled: any, run: (s) => void openSelection(sel(s)) },
+  { id: "item.open", title: "既定のアプリで開く", enabled: mine, run: (s) => void openSelection(sel(s)) },
   {
     id: "item.reveal",
     title: "Finder / エクスプローラで表示",
     enabled: (s) => s.selected.size === 1,
-    run: (s) => void s.run(() => api.revealItem(sel(s)[0])),
+    // An installed font: its file in the OS's font folder.
+    run: (s) => {
+      const id = sel(s)[0];
+      void s.run(() => (isSystemId(id) ? fontApi.revealSystem(id) : api.revealItem(id)));
+    },
   },
   {
     id: "item.favorite",
@@ -370,16 +382,23 @@ export const COMMANDS: Command[] = [
     id: "list.export",
     title: "書き出し…",
     keys: ["Mod+E"],
+    enabled: library,
     run: () => exportList(selectionOrShown()),
   },
-  { id: "list.sheet", title: "まとめて出力…", run: () => void sheetList(selectionOrShown()) },
+  { id: "list.sheet", title: "まとめて出力…", enabled: library, run: () => void sheetList(selectionOrShown()) },
   {
     id: "list.transfer",
     title: "別のライブラリへ…",
     icon: FolderInput,
+    enabled: library,
     run: () => void transferList(selectionOrShown()),
   },
-  { id: "list.tray", title: "シェルフにすべて追加", run: () => void trayList({ kind: "shown" }) },
+  {
+    id: "list.tray",
+    title: "シェルフにすべて追加",
+    enabled: library,
+    run: () => void trayList({ kind: "shown" }),
+  },
 
   // -------------------------------------------------------------- organize
   {
@@ -406,7 +425,7 @@ export const COMMANDS: Command[] = [
   {
     id: "item.unfile",
     title: "未分類に戻す",
-    enabled: (s) => any(s) && s.view.kind === "folder",
+    enabled: (s) => mine(s) && s.view.kind === "folder",
     run: (s) => {
       const folder = currentFolderId();
       if (folder) void s.run(() => api.removeFromFolder(sel(s), folder));
@@ -425,6 +444,8 @@ export const COMMANDS: Command[] = [
     id: "smart.new",
     title: "新しいスマートフォルダ",
     keys: ["Mod+Shift+Alt+N"],
+    // It saves the conditions on screen, which are of the installed fonts there.
+    enabled: library,
     run: () => void createSmartFolder(),
   },
   ...(

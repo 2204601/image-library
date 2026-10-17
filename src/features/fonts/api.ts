@@ -47,6 +47,27 @@ export interface FontInfo {
   chars: number[];
 }
 
+/** A font file installed on this computer (src-tauri/src/fonts/system.rs `SystemFont`). */
+export interface SystemFont {
+  /** "sys:…" (see `isSystemId`). */
+  id: string;
+  path: string;
+  fileName: string;
+  ext: string;
+  size: number;
+  /** When the file was last changed (ms). */
+  modified: number;
+  /** Full name of the first font in the file. */
+  name: string;
+  family: string;
+  weight: number;
+  weightMin: number;
+  weightMax: number;
+  script: string;
+  category: string | null;
+  features: string[];
+}
+
 export const fontApi = {
   /** Names of every font in the file and the characters of font `face`. */
   info: (id: string, face: number) => invoke<FontInfo>("font_info", { id, face }),
@@ -58,6 +79,13 @@ export const fontApi = {
   /** Sets fonts' typeface style by hand; null = back to the guess. */
   setCategory: (ids: string[], category: string | null) =>
     invoke<number>("set_font_category", { ids, category }),
+  /**
+   * The fonts installed on this computer (docs/SYSTEM_FONTS.md); `reload`
+   * reads the font folders again. The commands above take their ids too.
+   */
+  systemFonts: (reload: boolean) => invoke<SystemFont[]>("system_fonts", { reload }),
+  /** Shows an installed font's file in Finder / Explorer. */
+  revealSystem: (id: string) => invoke<void>("reveal_system_font", { id }),
   /** Reads the family of fonts imported before it was stored; returns how many. */
   index: () => invoke<number>("index_fonts"),
 };

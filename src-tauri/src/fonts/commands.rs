@@ -7,9 +7,26 @@ use crate::import;
 use std::fs;
 use tauri::{AppHandle, Manager, State};
 
-/// The font file of a font item, unpacked (WOFF / WOFF2) and, for a
-/// collection, cut down to one font.
+/// The fonts installed on this computer (fonts/system.rs); `reload` reads the
+/// font folders again.
+#[tauri::command]
+pub async fn system_fonts(app: AppHandle, reload: bool) -> CmdResult<Vec<super::system::SystemFont>> {
+    let cache = app.path().app_cache_dir().map_err(err)?;
+    tauri::async_runtime::spawn_blocking(move || super::system::list(&cache, reload).to_vec()).await.map_err(err)
+}
+
+/// Shows an installed font's file in Finder / Explorer.
+#[tauri::command]
+pub fn reveal_system_font(id: String) -> CmdResult<()> {
+    tauri_plugin_opener::reveal_item_in_dir(super::system::find(&id)?.path).map_err(err)
+}
+
+/// The font file of a font item, or of a font installed on this computer
+/// (`system`), unpacked (WOFF / WOFF2) and, for a collection, cut down to one font.
 fn font_sfnt(state: &AppState, id: &str) -> CmdResult<Vec<u8>> {
+    if super::system::is_system_id(id) {
+        return super::system::sfnt(id);
+    }
     let (item, path) = item_paths(state, &[id.to_string()])?.pop().ok_or("フォントが見つかりません")?;
     if item.kind != db::Kind::Font {
         return Err("フォントではありません".into());

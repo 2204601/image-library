@@ -56,6 +56,16 @@ export type Mode = "stock" | "font";
 /** The mode an item of `kind` belongs to. */
 export const modeOf = (kind: ItemKind): Mode => (kind === "font" ? "font" : "stock");
 
+/**
+ * Ids of the fonts installed on this computer (docs/SYSTEM_FONTS.md) start
+ * with this: they are listed in the font mode but are not library items, so
+ * nothing that changes items may be asked of them (src-tauri/src/fonts/system.rs).
+ */
+export const SYSTEM_ID_PREFIX = "sys:";
+export const isSystemId = (id: string) => id.startsWith(SYSTEM_ID_PREFIX);
+/** The ids that are library items (installed fonts left out). */
+export const libraryIds = (ids: string[]) => ids.filter((id) => !isSystemId(id));
+
 /** Kinds in the order the sidebar lists them. */
 export const KINDS: { kind: ItemKind; label: string }[] = [
   { kind: "image", label: "画像" },
@@ -239,7 +249,12 @@ export type View =
   | { kind: "folder"; id: string }
   | { kind: "smart"; id: string }
   /** Items carrying a tag: the sidebar's tags are places like folders (docs/NAVIGATION.md). */
-  | { kind: "tag"; id: number };
+  | { kind: "tag"; id: number }
+  /**
+   * Font mode: the fonts installed on this computer, read only and not in the
+   * library (docs/SYSTEM_FONTS.md). Never sent to Rust: features/fonts/system.ts lists them.
+   */
+  | { kind: "system" };
 
 export type Shape = "landscape" | "portrait" | "square";
 

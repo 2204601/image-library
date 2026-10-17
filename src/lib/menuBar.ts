@@ -22,7 +22,16 @@ import { warn } from "./log";
 import { comboText, isMac } from "./shortcuts";
 import { GROUPS, LAYOUTS } from "../components/ViewMenu";
 import { SORTS } from "../components/Toolbar";
-import { listIs, MODE_GROUPS, MODE_LAYOUTS, shownModes, usedModes, useStore } from "../store";
+import {
+  LIBRARY_GROUPS,
+  listIs,
+  MODE_GROUPS,
+  MODE_LAYOUTS,
+  shownGroupBy,
+  shownModes,
+  usedModes,
+  useStore,
+} from "../store";
 
 type S = ReturnType<typeof useStore.getState>;
 type Item = MenuItem | CheckMenuItem | Submenu | PredefinedMenuItem;
@@ -256,7 +265,11 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
         live(
           () => g.label,
           () => st().setGroupBy(g.key),
-          { checked: (x) => x.groupBy === g.key, enabled: (x) => x.view.kind !== "similar" },
+          {
+            checked: (x) => shownGroupBy(x) === g.key,
+            // The installed fonts have no rating, tags or folder (docs/SYSTEM_FONTS.md).
+            enabled: (x) => x.view.kind !== "similar" && !(x.view.kind === "system" && LIBRARY_GROUPS.includes(g.key)),
+          },
         ),
       ),
     ),

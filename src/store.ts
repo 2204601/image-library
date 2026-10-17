@@ -22,6 +22,7 @@ import {
   type View,
 } from "./lib/api";
 import { fontApi } from "./features/fonts/api";
+import { querySystemFonts, systemFonts } from "./features/fonts/system";
 import { filesApi, onFileThumbs } from "./features/files/api";
 import {
   kindsNoun,
@@ -274,6 +275,8 @@ interface State {
   counts: Counts;
   /** Bumped after every refresh so dependents (inspector) can re-fetch. */
   rev: number;
+  /** Font files installed on this computer (docs/SYSTEM_FONTS.md); null until first listed. */
+  systemCount: number | null;
 
   selected: Set<string>;
   /** Start of a shift-range. */
@@ -537,8 +540,15 @@ function arrange(s: {
 }): { items: Item[]; sections: Section[] } {
   if (s.view.kind === "similar") return { items: s.rawItems, sections: similarSections(s.rawItems) };
   const families = s.mode === "font" ? { open: s.layout === "specimen" ? s.openFamilies : NO_FAMILIES } : null;
-  return groupItems(s.rawItems, s.groupBy, s.tags, s.folders, families);
+  return groupItems(s.rawItems, shownGroupBy(s), s.tags, s.folders, families);
 }
+
+/** Groupings by what only library items have (docs/SYSTEM_FONTS.md). */
+export const LIBRARY_GROUPS: GroupBy[] = ["rating", "tag", "folder"];
+
+/** The grouping in effect: none for the installed fonts' list when it is by rating, tag or folder. */
+export const shownGroupBy = (s: { view: View; groupBy: GroupBy }): GroupBy =>
+  s.view.kind === "system" && LIBRARY_GROUPS.includes(s.groupBy) ? "none" : s.groupBy;
 
 /** Re-arranges the list after a display change, keeping the viewer on the item it showed. */
 function rearrange(s: State, patch: Partial<State>): Partial<State> {
@@ -636,7 +646,9 @@ export function listQuery(s: QueryState, without?: ConditionKey): ItemQuery {
  * How many items the open place has without any condition, for "5 / 13 件";
  * null where it isn't known (the similar view).
  */
-export function placeTotal(s: Pick<State, "view" | "counts" | "folders" | "tags" | "smartFolders" | "showSubfolders">): number | null {
+export function placeTotal(
+  s: Pick<State, "view" | "counts" | "folders" | "tags" | "smartFolders" | "showSubfolders" | "systemCount">,
+): number | null {
   const v = s.view;
   switch (v.kind) {
     case "all":
@@ -660,6 +672,8 @@ export function placeTotal(s: Pick<State, "view" | "counts" | "folders" | "tags"
     }
     case "similar":
       return null;
+    case "system":
+      return s.systemCount;
   }
 }
 
@@ -784,6 +798,7 @@ export const useStore = create<State>((set, get) => ({
     fontFeatures: {},
   },
   rev: 0,
+  systemCount: null,
 
   selected: new Set(),
   anchor: null,
@@ -962,9 +977,10 @@ export const useStore = create<State>((set, get) => ({
     api.setAppSettings(next).catch((e) => get().toast(String(e), true));
   },
   setView: (view) => {
-    // The similar view may take a moment to prepare; don't leave the old list up.
-    const clear =
-      view.kind === "similar" && get().view.kind !== "similar" ? { items: [], rawItems: [], sections: [] } : {};
+    // The similar view and the installed fonts (read the first time) may take
+    // a moment to prepare; don't leave the old list up.
+    const slow = view.kind === "similar" || view.kind === "system";
+    const clear = slow && get().view.kind !== view.kind ? { items: [], rawItems: [], sections: [] } : {};
     // Conditions belong to the view they were set in: moving to another one
     // starts clean (re-selecting the open view keeps them).
     // The kind filter stays: it is what the user browses, like a mode.
@@ -1200,8 +1216,10 @@ export const useStore = create<State>((set, get) => ({
         }
         dismissedGroups = await api.countDismissedDuplicates();
       }
+      // The installed fonts aren't in the library: listed by features/fonts/system.ts.
+      const system = view.kind === "system";
       const [rawItems, folders, tags, counts, smartFolders, exts, shelf] = await Promise.all([
-        api.queryItems(listQuery(get())),
+        system ? querySystemFonts(listQuery(get())) : api.queryItems(listQuery(get())),
         api.listFolders(mode),
         api.listTags(mode),
         api.getCounts(mode),
@@ -1221,6 +1239,7 @@ export const useStore = create<State>((set, get) => ({
           desc: false,
         }),
       ]);
+      const systemCount = system ? (await systemFonts()).length : null;
       if (seq !== refreshSeq) return; // a newer refresh superseded this one
       const { items, sections } = arrange({ ...get(), view, rawItems, tags, folders });
       const present = new Set(rowIds(items));
@@ -1264,6 +1283,7 @@ export const useStore = create<State>((set, get) => ({
         selected,
         rev: get().rev + 1,
         ...(dismissedGroups !== null ? { dismissedGroups } : {}),
+        ...(systemCount !== null ? { systemCount } : {}),
         recentFolders: get().recentFolders.filter((f) => folderIds.has(f)),
         recentTags,
         viewer: viewerNow,

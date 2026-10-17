@@ -17,7 +17,8 @@ import {
 import { command, isEnabled, runKey } from "../lib/commands";
 import { applicable, commandIcon, commandItem } from "../lib/menuItems";
 import { FontTile, SpecimenRow } from "../features/fonts/FontRows";
-import { api, formatBytes, sizeLabel, type Item, type ItemKind } from "../lib/api";
+import { api, formatBytes, isSystemId, sizeLabel, type Item, type ItemKind } from "../lib/api";
+import { fontApi } from "../features/fonts/api";
 import { itemsNoun, kindsNoun } from "../lib/modes";
 import { colorHex } from "../lib/colors";
 import { rowIds, type Section } from "../lib/grouping";
@@ -61,6 +62,12 @@ export function onItemPointerDown(e: React.PointerEvent, item: Item, index: numb
   if (e.shiftKey) s.select(item.id, "range", index);
   else if (mod) s.select(item.id, "toggle", index);
   else if (!s.selected.has(item.id)) s.select(item.id, "only", index);
+  // The installed fonts don't go anywhere: not to folders or the shelf, nor
+  // out of the app as files (docs/SYSTEM_FONTS.md). A click just selects.
+  if (isSystemId(item.id)) {
+    if (!e.shiftKey && !mod) s.select(item.id, "only", index);
+    return;
+  }
   startPointerDrag(
     e,
     () => ({ kind: "items", ids: [...useStore.getState().selected] }),
@@ -395,6 +402,19 @@ export function showItemMenu(e: React.MouseEvent | { clientX: number; clientY: n
       ...header,
       { label: "復元", onClick: () => s.run(() => api.restoreItems(ids)) },
       commandItem("item.trash", { label: "完全に削除", danger: true }),
+    ]);
+    return;
+  }
+  if (ids.some(isSystemId)) {
+    // Installed fonts: looked at only (docs/SYSTEM_FONTS.md).
+    useMenu.getState().show(e, [
+      ...header,
+      commandItem("item.show", { onClick: () => s.openViewer(index) }),
+      commandItem("item.reveal", { onClick: () => s.run(() => fontApi.revealSystem(item.id)) }),
+      { separator: true },
+      {
+        header: "この端末のフォントは読み取り専用です。評価・タグ・フォルダ・シェルフはライブラリのフォントだけに使えます",
+      },
     ]);
     return;
   }
@@ -747,7 +767,7 @@ export function Grid() {
                           match: Math.round((1 - (item.distance ?? 0) / 64) * 100),
                         }
                   }
-                  flags={viewKind !== "similar" && viewKind !== "trash"}
+                  flags={viewKind !== "similar" && viewKind !== "trash" && viewKind !== "system"}
                 />
               </div>
             );
@@ -828,6 +848,7 @@ function Empty({
   filtering: boolean;
   analyzing: boolean;
 }) {
+  const systemCount = useStore((s) => s.systemCount);
   const noun = kindsNoun(kinds);
   const only = kinds.length === 1 ? kinds[0] : null;
   if (kind === "trash") return <p className="mt-24 text-center text-dim">ゴミ箱は空です</p>;
@@ -848,6 +869,14 @@ function Empty({
           絞り込みをすべて解除
         </button>
       </div>
+    );
+  if (kind === "system")
+    return (
+      <p className="mt-24 text-center text-dim">
+        {systemCount === null
+          ? "この端末のフォントを読み込んでいます…（初めてのときは時間がかかります）"
+          : "この端末のフォントは見つかりませんでした"}
+      </p>
     );
   if (kind === "unfiled" || kind === "untagged")
     return <p className="mt-24 text-center text-dim">該当する{noun}はありません</p>;
