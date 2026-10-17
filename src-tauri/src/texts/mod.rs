@@ -10,10 +10,10 @@
 
 use crate::db::{self, NewItem};
 use crate::import::{sanitize, write_thumb, THUMB_MAX};
+use crate::library;
 use image::DynamicImage;
 use serde::Serialize;
 use std::fmt::Write as _;
-use std::fs;
 use std::path::Path;
 
 pub mod commands;
@@ -139,12 +139,9 @@ pub fn new_item(root: &Path, name: String, ext: String, data: Vec<u8>, hash: Str
     let decoded = decode(&data);
     let id = uuid::Uuid::new_v4().simple().to_string();
     let file_name = sanitize(&name);
-    let item_dir = root.join("images").join(&id);
-    fs::create_dir_all(&item_dir).map_err(|e| e.to_string())?;
-    fs::write(item_dir.join(&file_name), &data).map_err(|e| e.to_string())?;
-    let thumb = write_thumb(&thumbnail(&decoded.text, &ext), &root.join("thumbs"), &id).inspect_err(|_| {
-        let _ = fs::remove_dir_all(&item_dir);
-    })?;
+    library::store_file(root, &id, &file_name, &data)?;
+    let thumb = write_thumb(&thumbnail(&decoded.text, &ext), &root.join("thumbs"), &id)
+        .inspect_err(|_| library::remove_item_dir(root, &id))?;
     Ok(NewItem {
         id,
         kind: db::Kind::Text,

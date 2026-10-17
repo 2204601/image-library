@@ -5,6 +5,7 @@ use super::{decode, encode, Encoding, EDIT_MAX};
 use crate::commands::{err, item_paths, with_lib, AppState, CmdResult};
 use crate::db;
 use crate::import::write_thumb;
+use crate::library;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -131,7 +132,7 @@ pub async fn create_text(app: AppHandle, name: String, text: String, folder_id: 
         let item = super::new_item(&root, name, ext, data, hash)?;
         with_lib(&state, |lib| {
             if lib.root != root {
-                let _ = fs::remove_dir_all(root.join("images").join(&item.id));
+                library::remove_item_dir(&root, &item.id);
                 return Err("作成中にライブラリが切り替わりました".into());
             }
             let tx = lib.conn.transaction().map_err(err)?;

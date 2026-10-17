@@ -20,6 +20,9 @@ use std::path::{Path, PathBuf};
 
 pub const DB_FILE: &str = "library.db";
 pub const LOCK_FILE: &str = "library.lock";
+/// Where the items' files are kept, one folder per item. Named before there
+/// were other kinds than images; kept so existing libraries open as they are.
+const FILES_DIR: &str = "images";
 
 /// How often an open library's lock is refreshed (ms).
 pub const LOCK_REFRESH_MS: u64 = 2 * 60 * 1000;
@@ -108,7 +111,7 @@ impl Library {
     }
 
     fn load(root: &Path) -> Result<Self, String> {
-        fs::create_dir_all(root.join("images")).map_err(|e| e.to_string())?;
+        fs::create_dir_all(root.join(FILES_DIR)).map_err(|e| e.to_string())?;
         fs::create_dir_all(root.join("thumbs")).map_err(|e| e.to_string())?;
         fs::create_dir_all(root.join("previews")).map_err(|e| e.to_string())?;
         let conn = db::open(&root.join(DB_FILE)).map_err(|e| e.to_string())?;
@@ -165,7 +168,32 @@ impl Library {
 
 /// An item's paths in the library at `root` (also without the library held).
 pub fn file_path(root: &Path, item: &Item) -> PathBuf {
-    root.join("images").join(&item.id).join(&item.file_name)
+    stored_file(root, &item.id, &item.file_name)
+}
+
+/// The folder that holds only the item `id`'s file (`images/<id>`).
+pub fn item_dir(root: &Path, id: &str) -> PathBuf {
+    root.join(FILES_DIR).join(id)
+}
+
+/// `file_path` from the two columns it needs, for queries that read only those.
+pub fn stored_file(root: &Path, id: &str, file_name: &str) -> PathBuf {
+    item_dir(root, id).join(file_name)
+}
+
+/// Writes a new item's file into its own folder; returns where it went.
+/// Undone with `remove_item_dir`.
+pub fn store_file(root: &Path, id: &str, file_name: &str, data: &[u8]) -> Result<PathBuf, String> {
+    let dir = item_dir(root, id);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join(file_name);
+    fs::write(&path, data).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
+/// Removes the item `id`'s file (its whole folder). Missing is fine.
+pub fn remove_item_dir(root: &Path, id: &str) {
+    let _ = fs::remove_dir_all(item_dir(root, id));
 }
 
 pub fn thumb_path(root: &Path, item: &Item) -> PathBuf {
@@ -182,7 +210,7 @@ pub fn display_path(root: &Path, item: &Item) -> PathBuf {
 /// Removes the files of deleted items (`Library::delete_rows`).
 pub fn remove_files(root: &Path, removed: &[Item]) {
     for item in removed {
-        let _ = fs::remove_dir_all(root.join("images").join(&item.id));
+        remove_item_dir(root, &item.id);
         let _ = fs::remove_file(thumb_path(root, item));
         // The unrotated thumbnail is kept next to a rotated one.
         let _ = fs::remove_file(root.join("thumbs").join(crate::orient::base_thumb(&item.thumb)));
@@ -265,7 +293,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("A.library");
         Library::create(&root).unwrap();
-        assert!(root.join("images").is_dir() && root.join(DB_FILE).is_file());
+        assert!(root.join(FILES_DIR).is_dir() && root.join(DB_FILE).is_file());
         Library::open(&root).unwrap();
         Library::create(&root).unwrap(); // existing library just opens
 
@@ -274,5 +302,19 @@ mod tests {
         fs::write(other.join("x.txt"), "x").unwrap();
         assert!(Library::create(&other).is_err());
         assert!(Library::open(&other).is_err());
+    }
+
+    #[test]
+    fn item_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let path = store_file(root, "abc", "cat.png", b"x").unwrap();
+        // The layout existing libraries have.
+        assert_eq!(path, root.join("images").join("abc").join("cat.png"));
+        assert_eq!(stored_file(root, "abc", "cat.png"), path);
+        assert_eq!(fs::read(&path).unwrap(), b"x");
+        remove_item_dir(root, "abc");
+        assert!(!item_dir(root, "abc").exists());
+        remove_item_dir(root, "abc"); // already gone: fine
     }
 }

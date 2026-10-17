@@ -40,7 +40,7 @@ src-tauri/src/
   search.rs             検索構文のパーサ
   similar.rs            似ている画像の検出（dHash）
   orient.rs             回転・反転（向きの合成とサムネイルへの適用）
-  library.rs            ライブラリの作成・オープン・ファイル削除
+  library.rs            ライブラリの作成・オープン・項目のファイルの場所・ファイル削除
   webimport.rs          ブラウザ拡張の受付サーバー（127.0.0.1、接続キー必須、「アプリと接続」の確認）
   mcp/                  Claude からの整理：MCP サーバー（127.0.0.1、トークン必須）、ツール、`--mcp` の stdio 中継
   changes.rs            Claude がした変更の記録と取り消し

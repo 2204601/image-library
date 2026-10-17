@@ -8,7 +8,7 @@
 //! app's open connection isn't held while files are copied.
 
 use crate::db::{self, Item};
-use crate::library::{Library, DB_FILE};
+use crate::library::{self, Library, DB_FILE};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
@@ -113,12 +113,12 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 /// Copies the item's files; returns what was written so it can be undone.
 fn copy_files(src: &Path, dst: &Path, item: &Item) -> Result<Vec<PathBuf>, String> {
     let mut written = vec![];
-    let dir = Path::new("images").join(&item.id);
-    if !src.join(&dir).join(&item.file_name).is_file() {
+    if !library::file_path(src, item).is_file() {
         return Err("元のファイルが見つかりません".into());
     }
-    copy_dir(&src.join(&dir), &dst.join(&dir)).map_err(|e| e.to_string())?;
-    written.push(dst.join(&dir));
+    let dir = library::item_dir(dst, &item.id);
+    copy_dir(&library::item_dir(src, &item.id), &dir).map_err(|e| e.to_string())?;
+    written.push(dir);
     // Thumbnails and the display copy can be made again; a missing one is fine.
     let mut extra = vec![
         Path::new("thumbs").join(&item.thumb),
@@ -309,9 +309,7 @@ mod tests {
     use crate::db::{ItemQuery, NewItem};
 
     fn add(lib: &Library, id: &str, hash: &str) {
-        let dir = lib.root.join("images").join(id);
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("a.png"), hash).unwrap();
+        library::store_file(&lib.root, id, "a.png", hash.as_bytes()).unwrap();
         fs::write(lib.root.join("thumbs").join(format!("{id}.jpg")), "t").unwrap();
         let mut conn = db::open(&lib.root.join(DB_FILE)).unwrap();
         let tx = conn.transaction().unwrap();
@@ -438,7 +436,7 @@ mod tests {
         let src = Source::read(&a, &["i1".into()]).unwrap();
         assert!(copy_into(&src, &a.root, |_, _| {}).is_err());
 
-        fs::remove_dir_all(a.root.join("images/i1")).unwrap();
+        library::remove_item_dir(&a.root, "i1");
         let sum = copy_into(&src, &b_root, |_, _| {}).unwrap();
         assert_eq!((sum.copied, sum.failed.len()), (0, 1));
         assert!(all(&Library::open(&b_root).unwrap()).is_empty());

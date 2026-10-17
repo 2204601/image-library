@@ -6,7 +6,7 @@ use crate::db::{self, NewItem};
 use crate::files;
 use crate::fonts;
 use crate::formats;
-use crate::library::Library;
+use crate::library::{self, Library};
 use crate::orient::{self, OrientOp, Orientation};
 use crate::similar;
 use crate::texts;
@@ -287,9 +287,7 @@ fn process(
     let img = decoded.image;
     let id = uuid::Uuid::new_v4().simple().to_string();
     let file_name = sanitize(&name);
-    let item_dir = root.join("images").join(&id);
-    fs::create_dir_all(&item_dir).map_err(|e| e.to_string())?;
-    fs::write(item_dir.join(&file_name), &data).map_err(|e| e.to_string())?;
+    library::store_file(root, &id, &file_name, &data)?;
     // The perceptual hash comes from the thumbnail, like the backfill in
     // `compute_missing_phashes`, so old and new items hash the same way.
     let small = img.thumbnail(THUMB_MAX, THUMB_MAX);
@@ -297,7 +295,7 @@ fn process(
     let thumb = match write_thumb(&small, &root.join("thumbs"), &id) {
         Ok(t) => t,
         Err(e) => {
-            let _ = fs::remove_dir_all(&item_dir);
+            library::remove_item_dir(root, &id);
             return Err(e);
         }
     };
@@ -310,7 +308,7 @@ fn process(
             img.clone()
         };
         if let Err(e) = write_jpeg(&big, &root.join("previews").join(&name), 90) {
-            let _ = fs::remove_dir_all(&item_dir);
+            library::remove_item_dir(root, &id);
             let _ = fs::remove_file(root.join("thumbs").join(&thumb));
             return Err(e);
         }
@@ -345,12 +343,8 @@ fn process_font(name: String, ext: String, data: Vec<u8>, hash: String, root: &P
     let meta = fonts::meta(&sfnt)?;
     let id = uuid::Uuid::new_v4().simple().to_string();
     let file_name = sanitize(&name);
-    let item_dir = root.join("images").join(&id);
-    fs::create_dir_all(&item_dir).map_err(|e| e.to_string())?;
-    fs::write(item_dir.join(&file_name), &data).map_err(|e| e.to_string())?;
-    let thumb = write_thumb(&sample, &root.join("thumbs"), &id).inspect_err(|_| {
-        let _ = fs::remove_dir_all(&item_dir);
-    })?;
+    library::store_file(root, &id, &file_name, &data)?;
+    let thumb = write_thumb(&sample, &root.join("thumbs"), &id).inspect_err(|_| library::remove_item_dir(root, &id))?;
     Ok(Outcome::New(NewItem {
         id,
         kind: db::Kind::Font,
@@ -377,15 +371,10 @@ fn process_file(name: String, ext: String, data: Vec<u8>, hash: String, root: &P
     }
     let id = uuid::Uuid::new_v4().simple().to_string();
     let file_name = sanitize(&name);
-    let item_dir = root.join("images").join(&id);
-    fs::create_dir_all(&item_dir).map_err(|e| e.to_string())?;
-    let path = item_dir.join(&file_name);
-    fs::write(&path, &data).map_err(|e| e.to_string())?;
+    let path = library::store_file(root, &id, &file_name, &data)?;
     // Made from the stored copy: the OS needs a file with the right extension.
     let thumb = files::thumbnail(&path, &ext, THUMB_MAX);
-    let thumb = write_thumb(&thumb, &root.join("thumbs"), &id).inspect_err(|_| {
-        let _ = fs::remove_dir_all(&item_dir);
-    })?;
+    let thumb = write_thumb(&thumb, &root.join("thumbs"), &id).inspect_err(|_| library::remove_item_dir(root, &id))?;
     Ok(Outcome::New(NewItem {
         id,
         kind: db::Kind::File,
@@ -489,7 +478,7 @@ pub fn compute_missing_font_meta(lib: &Mutex<Option<Library>>) -> Result<usize, 
     let metas: Vec<(String, fonts::FontMeta)> = missing
         .par_iter()
         .map(|(id, file_name, ext)| {
-            let path = root.join("images").join(id).join(file_name);
+            let path = library::stored_file(&root, id, file_name);
             // A file that can't be read is filed as "other", so it isn't retried every time.
             let meta = fs::read(&path)
                 .map_err(|e| e.to_string())
@@ -673,7 +662,7 @@ mod tests {
         let red = &items[1];
         assert_eq!((red.width, red.height), (1200, 600));
         assert!(red.thumb.ends_with(".jpg"));
-        assert!(l.root.join("images").join(&red.id).join(&red.file_name).is_file());
+        assert!(l.file_path(red).is_file());
         let t = image::open(l.root.join("thumbs").join(&red.thumb)).unwrap();
         assert_eq!((t.width(), t.height()), (512, 256));
     }
