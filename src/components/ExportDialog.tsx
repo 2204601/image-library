@@ -1,16 +1,18 @@
 // 書き出し…: copies the files of a list into a folder (docs/MENUS.md §4). A
 // folder can be written with its subfolders, keeping their structure
-// ("旅行/2025/京都/…"). The files are copied as they are; format conversion
-// and resizing (ROADMAP phase 3) will be added to this dialog.
+// ("旅行/2025/京都/…"). ライブラリ全体を書き出し… copies everything into a new
+// "<library name>" folder laid out like the app's folders (docs/EXPORT.md).
+// The files are copied as they are; format conversion and resizing (ROADMAP
+// phase 3) will be added to this dialog.
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderDown, FolderOpen } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { listTargets } from "../lib/actions";
-import { api, type Folder, type Item } from "../lib/api";
-import { itemsNoun } from "../lib/modes";
+import { listTargets, writeLibrary } from "../lib/actions";
+import { api, modeOf, type Folder, type Item, type ItemKind } from "../lib/api";
+import { itemsNoun, MODES, modeLabel } from "../lib/modes";
 import { notifyIfAway } from "../lib/osNotify";
 import { composing } from "../lib/ime";
-import { useStore, type ExportRequest } from "../store";
+import { useStore, type ListSource } from "../store";
 
 const LAST_DEST = "exportDest";
 
@@ -24,7 +26,30 @@ function load(key: string): string | null {
 
 export function ExportDialog() {
   const req = useStore((s) => s.exporting);
-  return req ? <Dialog req={req} /> : null;
+  if (!req) return null;
+  return req.source.kind === "library" ? (
+    <LibraryDialog title={req.title} />
+  ) : (
+    <Dialog source={req.source} title={req.title} />
+  );
+}
+
+const close = () => useStore.getState().setExporting(null);
+
+function useEscapeToClose() {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !composing(e) && close();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
+
+function remember(dest: string) {
+  try {
+    localStorage.setItem(LAST_DEST, dest);
+  } catch {
+    /* not essential */
+  }
 }
 
 /**
@@ -52,11 +77,10 @@ export function relativeDirs(items: Item[], rootId: string, folders: Folder[]): 
   return items.map((i) => pathOf(i.folderId));
 }
 
-function Dialog({ req }: { req: ExportRequest }) {
-  const close = () => useStore.getState().setExporting(null);
+function Dialog({ source, title }: { source: ListSource; title: string }) {
   const folders = useStore((s) => s.folders);
-  const isFolder = req.source.kind === "folder";
-  const hasSubfolders = isFolder && folders.some((f) => f.parentId === (req.source as { id: string }).id);
+  const isFolder = source.kind === "folder";
+  const hasSubfolders = isFolder && folders.some((f) => f.parentId === (source as { id: string }).id);
   const [subfolders, setSubfolders] = useState(true);
   const [structure, setStructure] = useState(true);
   const [items, setItems] = useState<Item[] | null>(null);
@@ -66,39 +90,26 @@ function Dialog({ req }: { req: ExportRequest }) {
   useEffect(() => {
     let live = true;
     setItems(null);
-    listTargets(req.source, subfolders).then(
+    listTargets(source, subfolders).then(
       (xs) => live && setItems(xs),
       (e) => useStore.getState().toast(String(e), true),
     );
     return () => {
       live = false;
     };
-  }, [req.source, subfolders]);
+  }, [source, subfolders]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !composing(e) && close();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  useEscapeToClose();
 
   const keep = isFolder && hasSubfolders && subfolders && structure;
   const dirs = useMemo(
-    () => (keep && items && req.source.kind === "folder" ? relativeDirs(items, req.source.id, folders) : null),
-    [keep, items, req.source, folders],
+    () => (keep && items && source.kind === "folder" ? relativeDirs(items, source.id, folders) : null),
+    [keep, items, source, folders],
   );
-
-  const pick = async () => {
-    const p = await open({ title: "書き出し先のフォルダを選択", directory: true, defaultPath: dest ?? undefined });
-    if (typeof p === "string") setDest(p);
-  };
 
   const run = async () => {
     if (!dest || !items?.length) return;
-    try {
-      localStorage.setItem(LAST_DEST, dest);
-    } catch {
-      /* not essential */
-    }
+    remember(dest);
     setBusy(true);
     const since = Date.now();
     try {
@@ -138,8 +149,96 @@ function Dialog({ req }: { req: ExportRequest }) {
     </label>
   );
 
-  const rootName = isFolder ? folders.find((f) => f.id === (req.source as { id: string }).id)?.name : "";
+  const rootName = isFolder ? folders.find((f) => f.id === (source as { id: string }).id)?.name : "";
 
+  return (
+    <Frame
+      title={title}
+      summary={
+        items === null
+          ? "数えています…"
+          : `${itemsNoun(items)} ${items.length} 件${isFolder && hasSubfolders && subfolders ? "（サブフォルダを含む）" : ""}`
+      }
+      ready={!!dest && !!items?.length && !busy}
+      busy={busy}
+      run={run}
+    >
+      {isFolder && hasSubfolders && (
+        <div>
+          {check(subfolders, setSubfolders, "サブフォルダを含める", "中のフォルダにある項目も書き出します")}
+          {check(
+            structure,
+            setStructure,
+            "フォルダ構成を保つ",
+            `書き出し先に「${rootName}/…」のフォルダを作ります。オフなら書き出し先にすべて並べます`,
+            !subfolders,
+          )}
+        </div>
+      )}
+      <DestField dest={dest} setDest={setDest} note="同じ名前のファイルがあるときは「名前 (2)」のように番号を付けます" />
+    </Frame>
+  );
+}
+
+/**
+ * ライブラリ全体を書き出し: every item not in the trash, into a new
+ * "<library name>" folder in "<mode>/<folders>/…". The copying runs after the
+ * dialog closes, with progress and a キャンセル (`writeLibrary`).
+ */
+function LibraryDialog({ title }: { title: string }) {
+  const kinds = useStore((s) => s.counts.kinds);
+  const name = useStore((s) => s.library?.name ?? "");
+  const [dest, setDest] = useState<string | null>(() => load(LAST_DEST));
+  useEscapeToClose();
+
+  const byMode = MODES.map((m) => {
+    const n = (Object.entries(kinds) as [ItemKind, number][])
+      .filter(([k]) => modeOf(k) === m)
+      .reduce((a, [, c]) => a + c, 0);
+    return { m, n };
+  }).filter((x) => x.n > 0);
+  const total = byMode.reduce((a, x) => a + x.n, 0);
+
+  const run = () => {
+    if (!dest || !total) return;
+    remember(dest);
+    close();
+    void writeLibrary(dest);
+  };
+
+  return (
+    <Frame
+      title={title}
+      summary={`${total.toLocaleString()} 件${byMode.length > 1 ? `（${byMode.map((x) => `${modeLabel(x.m)} ${x.n.toLocaleString()}`).join("・")}）` : ""}`}
+      ready={!!dest && total > 0}
+      busy={false}
+      run={run}
+    >
+      <DestField
+        dest={dest}
+        setDest={setDest}
+        note={`「${name}」フォルダを作り、フォルダ構成どおりに書き出します（同じ名前があれば「${name} (2)」）。ゴミ箱の項目は含めません`}
+      />
+    </Frame>
+  );
+}
+
+function Frame({
+  title,
+  summary,
+  ready,
+  busy,
+  run,
+  children,
+}: {
+  title: string;
+  /** What is written ("画像 12 件"). */
+  summary: string;
+  ready: boolean;
+  busy: boolean;
+  run: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <div data-modal className="fixed inset-0 z-50 flex animate-fade-in items-center justify-center bg-black/50" onPointerDown={close}>
       <div
@@ -150,50 +249,14 @@ function Dialog({ req }: { req: ExportRequest }) {
         <div className="border-b border-line px-5 pt-4 pb-3">
           <div className="flex items-center gap-2 text-base font-semibold">
             <FolderDown size={18} className="text-accent" />
-            {req.title}
+            {title}
           </div>
           <p className="mt-1 text-xs text-dim tabular-nums">
-            対象：
-            {items === null
-              ? "数えています…"
-              : `${itemsNoun(items)} ${items.length} 件${isFolder && hasSubfolders && subfolders ? "（サブフォルダを含む）" : ""}`}
-            。ファイルはそのままの形式でコピーします
+            対象：{summary}。ファイルはそのままの形式でコピーします
           </p>
         </div>
 
-        <div className="space-y-3 px-5 py-4">
-          {isFolder && hasSubfolders && (
-            <div>
-              {check(subfolders, setSubfolders, "サブフォルダを含める", "中のフォルダにある項目も書き出します")}
-              {check(
-                structure,
-                setStructure,
-                "フォルダ構成を保つ",
-                `書き出し先に「${rootName}/…」のフォルダを作ります。オフなら書き出し先にすべて並べます`,
-                !subfolders,
-              )}
-            </div>
-          )}
-          <div>
-            <div className="mb-1 text-xs text-dim">書き出し先</div>
-            <div className="flex items-center gap-2">
-              <code
-                className={`min-w-0 flex-1 truncate rounded-md border border-line bg-bg px-2 py-1.5 text-xs ${dest ? "" : "text-dim"}`}
-                title={dest ?? undefined}
-              >
-                {dest ?? "フォルダを選んでください"}
-              </code>
-              <button
-                onClick={pick}
-                className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-3 text-xs hover:bg-white/5"
-              >
-                <FolderOpen size={14} />
-                選ぶ…
-              </button>
-            </div>
-            <p className="mt-1 text-[11px] text-dim">同じ名前のファイルがあるときは「名前 (2)」のように番号を付けます</p>
-          </div>
-        </div>
+        <div className="space-y-3 px-5 py-4">{children}</div>
 
         <div className="flex justify-end gap-2 border-t border-line px-5 py-3">
           <button onClick={close} className="h-8 rounded-md border border-line px-3 hover:bg-white/5">
@@ -201,7 +264,7 @@ function Dialog({ req }: { req: ExportRequest }) {
           </button>
           <button
             autoFocus
-            disabled={!dest || !items?.length || busy}
+            disabled={!ready}
             onClick={run}
             className="h-8 rounded-md bg-accent px-4 font-medium text-white enabled:hover:brightness-110 disabled:opacity-40"
           >
@@ -209,6 +272,34 @@ function Dialog({ req }: { req: ExportRequest }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DestField({ dest, setDest, note }: { dest: string | null; setDest: (d: string) => void; note: string }) {
+  const pick = async () => {
+    const p = await open({ title: "書き出し先のフォルダを選択", directory: true, defaultPath: dest ?? undefined });
+    if (typeof p === "string") setDest(p);
+  };
+  return (
+    <div>
+      <div className="mb-1 text-xs text-dim">書き出し先</div>
+      <div className="flex items-center gap-2">
+        <code
+          className={`min-w-0 flex-1 truncate rounded-md border border-line bg-bg px-2 py-1.5 text-xs ${dest ? "" : "text-dim"}`}
+          title={dest ?? undefined}
+        >
+          {dest ?? "フォルダを選んでください"}
+        </code>
+        <button
+          onClick={pick}
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-line px-3 text-xs hover:bg-white/5"
+        >
+          <FolderOpen size={14} />
+          選ぶ…
+        </button>
+      </div>
+      <p className="mt-1 text-[11px] text-dim">{note}</p>
     </div>
   );
 }

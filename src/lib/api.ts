@@ -31,6 +31,17 @@ export interface TransferSummary {
   trashed: number | null;
 }
 
+/** Result of "ライブラリ全体を書き出し" (src-tauri/src/export.rs). */
+export interface LibraryExport {
+  /** The folder made for it ("<dest>/<library name>"). */
+  folder: string;
+  copied: number;
+  total: number;
+  /** Names of the items whose file couldn't be copied. */
+  failed: string[];
+  cancelled: boolean;
+}
+
 /** Settings of the whole app (settings.json): the settings screen's "一般" tab. */
 export interface AppSettings {
   /** At launch: open the last library, or show the list to choose from. */
@@ -539,6 +550,14 @@ export const api = {
   /** `subdirs[i]`: folder under `dest` for `ids[i]` ("旅行/2025", "" = `dest` itself). */
   exportItems: (ids: string[], dest: string, subdirs?: string[]) =>
     invoke<number>("export_items", { ids, dest, subdirs: subdirs ?? null }),
+  /**
+   * Every item not in the trash into a new "<library name>" folder in `dest`,
+   * in "<mode>/<folders>/…" (`labels` names the modes' folders). Reports "export-progress".
+   */
+  exportLibrary: (dest: string, labels: Record<Mode, string>) =>
+    invoke<LibraryExport>("export_library", { dest, labels }),
+  /** Stops `exportLibrary` after the file it is copying. */
+  cancelExport: () => invoke<void>("cancel_export"),
 
   /** Puts items on the work tray, after the ones there; returns how many were new. */
   addToTray: (ids: string[]) => invoke<number>("add_to_tray", { ids }),

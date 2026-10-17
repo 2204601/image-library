@@ -990,6 +990,12 @@ function handle(cmd: string, a: any): unknown {
     case "copy_items":
     case "export_items":
       return a.ids.length;
+    case "export_library": {
+      const n = live().length;
+      return { folder: `${a.dest}/Mock`, copied: n, total: n, failed: [], cancelled: false };
+    }
+    case "cancel_export":
+      return null;
     case "index_similar":
     case "index_fonts":
       return 0;

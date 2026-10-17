@@ -17,6 +17,7 @@
 use super::{preview, win_office, win_pdf};
 use crate::commands::AppState;
 use crate::db;
+use crate::library;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,7 +61,7 @@ fn pass(app: &AppHandle) {
             .into_iter()
             .filter(|(id, _, _, thumb)| !from_pdf(thumb) && !failed(id))
             .map(|(id, ext, file_name, thumb)| {
-                let path = lib.root.join("images").join(&id).join(&file_name);
+                let path = library::stored_file(&lib.root, &id, &file_name);
                 (lib.root.clone(), id, ext, path, thumb)
             })
             .collect::<Vec<_>>()

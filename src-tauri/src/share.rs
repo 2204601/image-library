@@ -516,9 +516,7 @@ mod tests {
 
     /// An image item filed in `folder` (thumbnail "t-<id>", file "f-<id>").
     fn add(lib: &mut Library, id: &str, folder: &str) {
-        let dir = lib.root.join("images").join(id);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a.png"), format!("f-{id}")).unwrap();
+        library::store_file(&lib.root, id, "a.png", format!("f-{id}").as_bytes()).unwrap();
         std::fs::write(lib.root.join("thumbs").join(format!("{id}.jpg")), format!("t-{id}")).unwrap();
         let tx = lib.conn.transaction().unwrap();
         let it = NewItem {

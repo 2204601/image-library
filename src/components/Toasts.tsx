@@ -90,12 +90,14 @@ function ProgressCard({
   label,
   right,
   ratio,
+  cancel,
 }: {
   icon: React.ReactNode;
   label: string;
   right: string;
   /** 0..1, or null when the size isn't known yet. */
   ratio: number | null;
+  cancel?: () => void;
 }) {
   return (
     <div className={`${card} animate-toast-in border-accent/40 p-3`}>
@@ -103,6 +105,11 @@ function ProgressCard({
         <span className="text-accent">{icon}</span>
         <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
         <span className="shrink-0 text-xs tabular-nums text-dim">{right}</span>
+        {cancel && (
+          <button onClick={cancel} className="-my-1 shrink-0 rounded-md px-2 py-0.5 text-xs text-dim hover:bg-white/5 hover:text-fg">
+            キャンセル
+          </button>
+        )}
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-bg">
         {ratio === null ? (
@@ -136,6 +143,7 @@ export function Toasts() {
           label={importing.label}
           right={`${importing.done} / ${importing.total}`}
           ratio={importing.total ? importing.done / importing.total : null}
+          cancel={importing.cancel}
         />
       )}
       {updating && (

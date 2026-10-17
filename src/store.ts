@@ -147,9 +147,9 @@ export type ListSource =
   | { kind: "tag"; id: number }
   | { kind: "tray" };
 
-/** The export dialog: what to write and its title ("「旅行」を書き出し"). */
+/** The export dialog: what to write and its title ("「旅行」を書き出し"); the whole library (docs/EXPORT.md). */
 export interface ExportRequest {
-  source: ListSource;
+  source: ListSource | { kind: "library" };
   title: string;
 }
 
@@ -174,6 +174,8 @@ export interface Progress {
   label: string;
   done: number;
   total: number;
+  /** Shows a キャンセル button. */
+  cancel?: () => void;
 }
 
 interface State {

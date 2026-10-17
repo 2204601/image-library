@@ -2,6 +2,7 @@ pub mod appdirs;
 pub mod changes;
 pub mod commands;
 pub mod db;
+pub mod export;
 pub mod files;
 pub mod fonts;
 pub mod formats;
@@ -171,7 +172,9 @@ pub fn run() {
             texts::commands::save_text,
             texts::commands::create_text,
             copy_items,
-            export_items,
+            export::export_items,
+            export::export_library,
+            export::cancel_export,
             add_to_tray,
             remove_from_tray,
             clear_tray,

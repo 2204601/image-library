@@ -184,6 +184,7 @@ async function build(libraries: LibraryEntry[]): Promise<Menu> {
     cmd("smart.new"),
     sep(),
     cmd("list.export"),
+    cmd("library.export"),
     cmd("list.sheet"),
     cmd("list.transfer"),
     cmd("library.transferAll"),

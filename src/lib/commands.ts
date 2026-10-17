@@ -28,6 +28,7 @@ import {
   createLibraryDialog,
   createSmartFolder,
   deleteSelection,
+  exportLibrary,
   exportList,
   moveToLastFolder,
   onShelf,
@@ -385,6 +386,13 @@ export const COMMANDS: Command[] = [
     keys: ["Mod+E"],
     enabled: library,
     run: () => exportList(selectionOrShown()),
+  },
+  {
+    id: "library.export",
+    title: "ライブラリ全体を書き出し…",
+    // Every item not in the trash, whatever the list shows (docs/EXPORT.md).
+    enabled: (s) => !!s.library && Object.values(s.counts.kinds).some((n) => (n ?? 0) > 0),
+    run: () => exportLibrary(),
   },
   { id: "list.sheet", title: "まとめて出力…", enabled: library, run: () => void sheetList(selectionOrShown()) },
   {

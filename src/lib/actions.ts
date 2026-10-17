@@ -1,8 +1,8 @@
 // User-level actions shared by several components (dialogs + API + refresh).
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { api, EMPTY_FILTER, isSystemId, kindLabel, kindOfExt, libraryIds, type DuplicateEffect, type Item, type ItemKind, type LibraryInfo, type OrientOp, type View } from "./api";
-import { itemsNoun, kindsNoun } from "./modes";
+import { api, EMPTY_FILTER, isSystemId, kindLabel, kindOfExt, libraryIds, type DuplicateEffect, type Item, type ItemKind, type LibraryInfo, type Mode, type OrientOp, type View } from "./api";
+import { itemsNoun, kindsNoun, MODES, modeLabel } from "./modes";
 import { fontApi } from "../features/fonts/api";
 import {
   activeConditions,
@@ -709,6 +709,47 @@ async function withTargets(source: ListSource, fn: (items: Item[]) => unknown) {
 /** 書き出し… for a list (the dialog asks where, and for folders how). */
 export function exportList(source: ListSource) {
   st().setExporting({ source, title: `${sourceName(source)}を書き出し` });
+}
+
+/** ライブラリ全体を書き出し… (docs/EXPORT.md). */
+export function exportLibrary() {
+  st().setExporting({ source: { kind: "library" }, title: "ライブラリ全体を書き出し" });
+}
+
+/**
+ * Copies every item not in the trash into a new "<library name>" folder in
+ * `dest`, laid out like the app's folders, with progress and a キャンセル.
+ */
+export async function writeLibrary(dest: string) {
+  const label = "ライブラリを書き出し中…";
+  const since = Date.now();
+  const cancel = () => void api.cancelExport();
+  st().setImporting({ label, done: 0, total: 0, cancel });
+  const unlisten = await listen<{ done: number; total: number }>("export-progress", (e) =>
+    st().setImporting({ label, ...e.payload, cancel }),
+  );
+  try {
+    const labels = Object.fromEntries(MODES.map((m) => [m, modeLabel(m)])) as Record<Mode, string>;
+    const r = await api.exportLibrary(dest, labels);
+    const title = r.cancelled ? `書き出しを中止しました（${r.copied} / ${r.total} 件）` : `${r.copied} 件を書き出しました`;
+    const parts = [r.folder];
+    if (r.failed.length) parts.push(`${r.failed.length} 件は失敗：${r.failed.slice(0, 2).join("、")}`);
+    const detail = parts.join(" / ");
+    st().notify({
+      title,
+      detail,
+      kind: r.cancelled || r.failed.length ? "info" : "success",
+      action: { label: "書き出し先を表示", onClick: () => st().run(() => api.revealPath(r.folder)) },
+      duration: 10000,
+    });
+    notifyIfAway(since, title, detail);
+    if (r.failed.length) warn("export failures", r.failed);
+  } catch (e) {
+    st().notify({ title: "書き出せませんでした", detail: String(e), kind: "error" });
+  } finally {
+    unlisten();
+    st().setImporting(null);
+  }
 }
 
 /** まとめて出力… for a list. */

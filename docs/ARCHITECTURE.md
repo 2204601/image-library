@@ -13,6 +13,8 @@
   ライブラリの切り替えは頻度が低いのでサイドバーの一番下（`LibrarySwitcher`）
 - **モードごとのデータ**：`folders` / `tags` / `smart_folders` の `mode` 列（`db.rs`）。一覧は `list_folders(mode)` などで
   そのモードのものだけを取る。
+  - 項目が入るフォルダは 1 つまで（`item_folders` の `idx_item_folders_item`、移行 step 5）。テーブルは多対多の形のままだが、
+    フォルダは置き場所で、フォルダをまたぐまとまりはタグで表す。`move_to_folder` は前のフォルダから外し、`file_unfiled` は未分類のものだけを入れる
   - フォルダにはそのモードの項目しか入らない（`move_to_folder` / `file_unfiled` がほかを無視する）。サブフォルダは親のモード、
     並び順はモードごとの最上位で別々（`sibling_ids`）。別のモードのフォルダの下へは移せない（`place_folder`）
   - タグは名前と `mode` で 1 つ（`UNIQUE (name, mode)`）。`add_tags` は項目ごとにそのモードのタグを付ける（無ければ作る）ので、
@@ -83,7 +85,7 @@
 | 層 | 場所 | 中身 |
 |---|---|---|
 | 共通基盤（core） | `src/lib/*`, `src/store.ts`, `src/components/*` | ライブラリ・DB・取り込み・フォルダ・タグ・スマートフォルダ・検索・一覧の骨組み（Grid / Sidebar / Toolbar / Inspector / Viewer）・Updater |
-| | `src-tauri/src/{db,import,library,search,webimport,share,loopback,changes,proxy,transfer,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、フォルダの共有、変更の記録と取り消し、ライブラリ間のコピー・移動、共通コマンド |
+| | `src-tauri/src/{db,import,library,search,webimport,share,loopback,changes,proxy,transfer,export,commands}.rs` | スキーマ・クエリ、取り込み、受付サーバー、フォルダの共有、変更の記録と取り消し、ライブラリ間のコピー・移動、書き出し、共通コマンド |
 | | `src-tauri/src/mcp/` | Claude からの整理（MCP サーバー、`--mcp` の中継）。`docs/MCP.md` |
 | フォント | `src/features/fonts/` | この端末のフォントの一覧・絞り込み・件数・シェルフへの差し込み・ライブラリとの照合（`system.ts`）、詳細パネル（`SystemFontPanel.tsx`）、照合の印（`FontLink.tsx`）、フォント専用コマンドのラッパ（`api.ts`）、フォントの読み込み（`loader.ts`）、見本の行とグリッドのタイル（`FontRows.tsx`）、ビューア（`FontView.tsx`）、詳細パネルの行（`FontDetails.tsx`）、絞り込みの行の言語・書体・太さ・特徴（`FontFilters.tsx`）、見本の文字の行と大きさ（`SpecimenControls.tsx`）、見本のパターン（`patterns.ts`）、比較ビュー（`CompareView.tsx`）、シェルフの行（`ShelfChip.tsx`）、ウェイト名（`weights.ts`） |
 | | `src-tauri/src/fonts/` | パース・分類・見本の描画（`mod.rs`）、フォント専用コマンド（`commands.rs`）、この端末のフォントの読み込みとキャッシュ（`system.rs`） |
@@ -105,6 +107,12 @@ core が持つのはその語彙（`isSystemId` / `libraryIds`、`lib/api.ts`）
 共通の UI（`Grid.tsx` / `Sidebar.tsx` / `Shelf.tsx` / `App.tsx`）が features の部品を描く箇所（見本の行、言語・書体の節、シェルフの行、比較ビュー）では、
 features 側が core の部品（`Row` / `Section`、`CellProps` / `showItemMenu`）を使うので import が循環する。
 いずれも描画時にしか参照しないので問題ないが、core 側の部品を独立したファイルに出せばほどける。
+
+## ライブラリの中のファイル
+
+項目のファイルは `images/<id>/<元のファイル名>`（画像以外の種類も同じ。フォルダ名は前からのまま）。この場所は `library.rs` の関数だけで組み立て、
+ほかで `"images"` を書かない：`file_path`（`Item` から）、`stored_file`（id とファイル名だけを問い合わせたとき）、`item_dir`（項目のフォルダ）、
+`store_file`（取り込み・新規作成で書く）、`remove_item_dir`（失敗したときの後始末・削除）。アプリのフォルダ構成どおりの写しは書き出しで作る（docs/EXPORT.md）
 
 ## 外から来るファイルとセキュリティ
 
