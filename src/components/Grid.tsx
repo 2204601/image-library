@@ -62,12 +62,8 @@ export function onItemPointerDown(e: React.PointerEvent, item: Item, index: numb
   if (e.shiftKey) s.select(item.id, "range", index);
   else if (mod) s.select(item.id, "toggle", index);
   else if (!s.selected.has(item.id)) s.select(item.id, "only", index);
-  // The installed fonts don't go anywhere: not to folders or the shelf, nor
-  // out of the app as files (docs/SYSTEM_FONTS.md). A click just selects.
-  if (isSystemId(item.id)) {
-    if (!e.shiftKey && !mod) s.select(item.id, "only", index);
-    return;
-  }
+  // The installed fonts are dragged to the shelf only, not to folders or out of
+  // the app as files (DragLayer.tsx, docs/SYSTEM_FONTS.md).
   startPointerDrag(
     e,
     () => ({ kind: "items", ids: [...useStore.getState().selected] }),
@@ -411,9 +407,10 @@ export function showItemMenu(e: React.MouseEvent | { clientX: number; clientY: n
       ...header,
       commandItem("item.show", { onClick: () => s.openViewer(index) }),
       commandItem("item.reveal", { onClick: () => s.run(() => fontApi.revealSystem(item.id)) }),
+      commandItem("item.tray"),
       { separator: true },
       {
-        header: "この端末のフォントは読み取り専用です。評価・タグ・フォルダ・シェルフはライブラリのフォントだけに使えます",
+        header: "この端末のフォントは読み取り専用です。評価・タグ・フォルダはライブラリのフォントだけに使えます",
       },
     ]);
     return;

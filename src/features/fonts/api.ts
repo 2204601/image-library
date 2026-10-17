@@ -59,6 +59,8 @@ export interface SystemFont {
   modified: number;
   /** Full name of the first font in the file. */
   name: string;
+  /** PostScript name of the first font ("" when it has none): what tells the same font in the library. */
+  psName: string;
   family: string;
   weight: number;
   weightMin: number;
@@ -66,6 +68,14 @@ export interface SystemFont {
   script: string;
   category: string | null;
   features: string[];
+}
+
+/** Installed fonts on the font shelf (src-tauri/src/fonts/commands.rs `SystemTray`). */
+export interface SystemTray {
+  /** Every id on the shelf in its order: library items and installed fonts. */
+  order: string[];
+  /** The installed fonts on it, with the name kept for a computer that doesn't have one. */
+  fonts: { id: string; name: string }[];
 }
 
 export const fontApi = {
@@ -86,6 +96,12 @@ export const fontApi = {
   systemFonts: (reload: boolean) => invoke<SystemFont[]>("system_fonts", { reload }),
   /** Shows an installed font's file in Finder / Explorer. */
   revealSystem: (id: string) => invoke<void>("reveal_system_font", { id }),
+  /** Puts installed fonts on the font shelf (taken off with `api.removeFromTray`, like items). */
+  addSystemToTray: (ids: string[]) => invoke<number>("add_system_to_tray", { ids }),
+  /** The installed fonts on the shelf, and the shelf's order across them and the items. */
+  systemTray: () => invoke<SystemTray>("system_tray"),
+  /** PostScript names of the library's fonts (not in the trash). */
+  libraryPsNames: () => invoke<string[]>("library_font_ps_names"),
   /** Reads the family of fonts imported before it was stored; returns how many. */
   index: () => invoke<number>("index_fonts"),
 };

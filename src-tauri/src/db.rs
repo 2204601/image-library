@@ -10,7 +10,7 @@ use crate::{search, similar};
 
 pub type DbResult<T> = rusqlite::Result<T>;
 
-const SCHEMA_VERSION: i32 = 22;
+const SCHEMA_VERSION: i32 = 23;
 
 const SETTINGS_TABLE: &str = "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)";
 
@@ -393,6 +393,25 @@ pub fn migrate(conn: &Connection) -> DbResult<()> {
     step(22, &|c| {
         add_column(c, "items", "body", "TEXT")?;
         Ok(())
+    })?;
+    // Fonts installed on this computer (docs/SYSTEM_FONTS.md): a font's
+    // PostScript name tells the same font in the library and installed (read
+    // again for fonts imported before: NULL features = not read yet, see
+    // `missing_font_meta`), and installed fonts go on the font shelf too, in
+    // the same order as the library's (`position` shared with `tray`). They
+    // aren't items: `id` is fonts/system.rs's, `name` is for when this computer
+    // doesn't have the font.
+    step(23, &|c| {
+        if add_column(c, "items", "font_ps_name", "TEXT")? {
+            c.execute("UPDATE items SET font_features = NULL WHERE kind = 'font'", [])?;
+        }
+        c.execute_batch(
+            "CREATE TABLE IF NOT EXISTS tray_system (
+               id       TEXT PRIMARY KEY,
+               name     TEXT NOT NULL,
+               position REAL NOT NULL
+             )",
+        )
     })?;
     // New steps go above; the last one must be SCHEMA_VERSION.
     debug_assert!(
@@ -779,6 +798,8 @@ pub struct Item {
     pub font_category_user: Option<String>,
     /// Fonts: features ("mono", "coding", ...), see `fonts::FEATURES`. Empty until read.
     pub font_features: Vec<String>,
+    /// Fonts: PostScript name of the first font (None until read, or when it has none).
+    pub font_ps_name: Option<String>,
     /// On the shelf (シェルフ; the `tray` table).
     pub in_tray: bool,
     /// Similar view only: which group of look-alikes the item belongs to.
@@ -940,7 +961,7 @@ const ITEM_COLS: &str = "items.id, items.name, items.file_name, items.ext, items
      (SELECT group_concat(tag_id) FROM item_tags WHERE item_id = items.id), \
      items.rotation, items.flipped, items.kind, items.source_url, items.font_family, items.font_weight, \
      items.font_script, items.font_category, items.font_category_user, \
-     EXISTS (SELECT 1 FROM tray WHERE tray.item_id = items.id), items.font_features";
+     EXISTS (SELECT 1 FROM tray WHERE tray.item_id = items.id), items.font_features, items.font_ps_name";
 
 fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
     let tag_ids: Option<String> = r.get(16)?;
@@ -978,6 +999,7 @@ fn row_to_item(r: &rusqlite::Row) -> DbResult<Item> {
             .get::<_, Option<String>>(27)?
             .map(|s| s.split(',').filter(|f| !f.is_empty()).map(str::to_string).collect())
             .unwrap_or_default(),
+        font_ps_name: r.get::<_, Option<String>>(28)?.filter(|s| !s.is_empty()),
         group: None,
         distance: None,
     })
@@ -1468,7 +1490,7 @@ pub fn set_font_meta(conn: &mut Connection, metas: &[(String, crate::fonts::Font
     {
         let mut stmt = tx.prepare(
             "UPDATE items SET font_family = ?2, font_weight = ?3, font_script = ?4, font_category = ?5,
-               font_weight_min = ?6, font_weight_max = ?7, font_features = ?8 WHERE id = ?1",
+               font_weight_min = ?6, font_weight_max = ?7, font_features = ?8, font_ps_name = ?9 WHERE id = ?1",
         )?;
         for (id, m) in metas {
             stmt.execute(params![
@@ -1479,11 +1501,23 @@ pub fn set_font_meta(conn: &mut Connection, metas: &[(String, crate::fonts::Font
                 m.category,
                 m.weight_min,
                 m.weight_max,
-                m.features_text()
+                m.features_text(),
+                m.ps_name
             ])?;
         }
     }
     tx.commit()
+}
+
+/// PostScript names of the library's fonts (not in the trash): which of the
+/// fonts installed on this computer are in the library (docs/SYSTEM_FONTS.md).
+pub fn font_ps_names(conn: &Connection) -> DbResult<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT font_ps_name FROM items
+         WHERE kind = 'font' AND deleted_at IS NULL AND font_ps_name IS NOT NULL AND font_ps_name != ''",
+    )?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    rows.collect()
 }
 
 /// The user's typeface style for fonts (None = back to the guess). Not fonts are skipped.
@@ -1526,8 +1560,9 @@ pub fn hash_index(conn: &Connection) -> DbResult<HashMap<String, String>> {
 pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult<()> {
     tx.execute(
         "INSERT INTO items (id, name, file_name, ext, width, height, size, hash, thumb, imported_at, phash, pcolor, preview, kind,
-           font_family, font_weight, font_script, font_category, font_weight_min, font_weight_max, font_features, body)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+           font_family, font_weight, font_script, font_category, font_weight_min, font_weight_max, font_features, body,
+           font_ps_name)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
         params![
             it.id,
             it.name,
@@ -1550,7 +1585,8 @@ pub fn insert_item(tx: &Transaction, it: &NewItem, imported_at: i64) -> DbResult
             it.font.as_ref().map(|f| f.weight_min),
             it.font.as_ref().map(|f| f.weight_max),
             it.font.as_ref().map(|f| f.features_text()),
-            it.body
+            it.body,
+            it.font.as_ref().map(|f| &f.ps_name)
         ],
     )?;
     Ok(())
@@ -1603,10 +1639,50 @@ pub fn set_pinned(conn: &Connection, ids: &[String], on: bool) -> DbResult<()> {
 
 // ---------------------------------------------------------------- work tray
 
+/// The shelf's order across the items (`tray`) and the fonts installed on
+/// this computer (`tray_system`, docs/SYSTEM_FONTS.md): their ids by position.
+const TRAY_ORDER: &str = "SELECT item_id FROM (SELECT item_id, position, 0 AS k, rowid AS r FROM tray
+       UNION ALL SELECT id, position, 1, rowid FROM tray_system) ORDER BY position, k, r";
+
+/// The last position on the shelf (0 when it is empty).
+fn tray_last(conn: &Connection) -> DbResult<f64> {
+    conn.query_row(
+        "SELECT MAX(COALESCE((SELECT MAX(position) FROM tray), 0), COALESCE((SELECT MAX(position) FROM tray_system), 0))",
+        [],
+        |r| r.get(0),
+    )
+}
+
+/// Every id on the shelf in its order: items and installed fonts together.
+pub fn tray_order(conn: &Connection) -> DbResult<Vec<String>> {
+    let mut stmt = conn.prepare(TRAY_ORDER)?;
+    let rows = stmt.query_map([], |r| r.get(0))?;
+    rows.collect()
+}
+
+/// Installed fonts on the shelf (id, name), in its order.
+pub fn system_tray(conn: &Connection) -> DbResult<Vec<(String, String)>> {
+    let mut stmt = conn.prepare("SELECT id, name FROM tray_system ORDER BY position, rowid")?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    rows.collect()
+}
+
+/// Puts installed fonts (id, name) on the shelf after what is there. Fonts
+/// already on it keep their place.
+pub fn add_system_to_tray(conn: &Connection, fonts: &[(String, String)]) -> DbResult<usize> {
+    let last = tray_last(conn)?;
+    let mut stmt = conn.prepare("INSERT OR IGNORE INTO tray_system (id, name, position) VALUES (?1, ?2, ?3)")?;
+    let mut added = 0;
+    for (id, name) in fonts {
+        added += stmt.execute(params![id, name, last + (added + 1) as f64])?;
+    }
+    Ok(added)
+}
+
 /// Puts items on the work tray, after the ones already there (in the given
 /// order). Items already on it keep their place.
 pub fn add_to_tray(conn: &Connection, ids: &[String]) -> DbResult<usize> {
-    let last: f64 = conn.query_row("SELECT COALESCE(MAX(position), 0) FROM tray", [], |r| r.get(0))?;
+    let last = tray_last(conn)?;
     let mut stmt = conn.prepare(
         "INSERT OR IGNORE INTO tray (item_id, position) SELECT id, ?2 FROM items WHERE id = ?1",
     )?;
@@ -1617,33 +1693,29 @@ pub fn add_to_tray(conn: &Connection, ids: &[String]) -> DbResult<usize> {
     Ok(added)
 }
 
+/// Takes items and installed fonts off the shelf.
 pub fn remove_from_tray(conn: &Connection, ids: &[String]) -> DbResult<()> {
-    let mut stmt = conn.prepare("DELETE FROM tray WHERE item_id = ?1")?;
+    let mut items = conn.prepare("DELETE FROM tray WHERE item_id = ?1")?;
+    let mut system = conn.prepare("DELETE FROM tray_system WHERE id = ?1")?;
     for id in ids {
-        stmt.execute([id])?;
+        items.execute([id])?;
+        system.execute([id])?;
     }
     Ok(())
 }
 
-/// Empties the tray; returns what was on it, in order (to put it back).
+/// Empties the tray (installed fonts too); returns what was on it, in order (to put it back).
 pub fn clear_tray(conn: &Connection) -> DbResult<Vec<String>> {
-    let ids: Vec<String> = {
-        let mut stmt = conn.prepare("SELECT item_id FROM tray ORDER BY position, rowid")?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
-        rows.collect::<DbResult<_>>()?
-    };
-    conn.execute("DELETE FROM tray", [])?;
+    let ids = tray_order(conn)?;
+    conn.execute_batch("DELETE FROM tray; DELETE FROM tray_system;")?;
     Ok(ids)
 }
 
-/// Moves `ids` in front of `before` (None = to the end) in the tray's order.
+/// Moves `ids` in front of `before` (None = to the end) in the tray's order
+/// (items and installed fonts together).
 pub fn reorder_tray(conn: &mut Connection, ids: &[String], before: Option<&str>) -> DbResult<()> {
     let tx = conn.transaction()?;
-    let mut order: Vec<String> = {
-        let mut stmt = tx.prepare("SELECT item_id FROM tray ORDER BY position, rowid")?;
-        let rows = stmt.query_map([], |r| r.get(0))?;
-        rows.collect::<DbResult<_>>()?
-    };
+    let mut order = tray_order(&tx)?;
     let moving: Vec<String> = ids.iter().filter(|id| order.contains(id)).cloned().collect();
     order.retain(|id| !moving.contains(id));
     let at = before
@@ -1651,9 +1723,11 @@ pub fn reorder_tray(conn: &mut Connection, ids: &[String], before: Option<&str>)
         .unwrap_or(order.len());
     order.splice(at..at, moving);
     {
-        let mut stmt = tx.prepare("UPDATE tray SET position = ?2 WHERE item_id = ?1")?;
+        let mut items = tx.prepare("UPDATE tray SET position = ?2 WHERE item_id = ?1")?;
+        let mut system = tx.prepare("UPDATE tray_system SET position = ?2 WHERE id = ?1")?;
         for (i, id) in order.iter().enumerate() {
-            stmt.execute(params![id, (i + 1) as f64])?;
+            items.execute(params![id, (i + 1) as f64])?;
+            system.execute(params![id, (i + 1) as f64])?;
         }
     }
     tx.commit()
@@ -3193,6 +3267,31 @@ mod tests {
     }
 
     #[test]
+    fn installed_fonts_share_the_shelf() {
+        let mut conn = mem();
+        for (id, at) in [("a", 1), ("b", 2)] {
+            add(&mut conn, id, id, at);
+        }
+        let sys = |ids: &[&str]| ids.iter().map(|i| (i.to_string(), format!("{i} name"))).collect::<Vec<_>>();
+        // One order across items and installed fonts, each added after what is there.
+        add_to_tray(&conn, &s(&["a"])).unwrap();
+        assert_eq!(add_system_to_tray(&conn, &sys(&["sys:x", "sys:y"])).unwrap(), 2);
+        assert_eq!(add_system_to_tray(&conn, &sys(&["sys:x"])).unwrap(), 0, "no duplicates");
+        add_to_tray(&conn, &s(&["b"])).unwrap();
+        assert_eq!(tray_order(&conn).unwrap(), s(&["a", "sys:x", "sys:y", "b"]));
+        assert_eq!(system_tray(&conn).unwrap(), sys(&["sys:x", "sys:y"]));
+
+        reorder_tray(&mut conn, &s(&["b", "sys:y"]), Some("a")).unwrap();
+        assert_eq!(tray_order(&conn).unwrap(), s(&["b", "sys:y", "a", "sys:x"]));
+        remove_from_tray(&conn, &s(&["sys:y", "a"])).unwrap();
+        assert_eq!(tray_order(&conn).unwrap(), s(&["b", "sys:x"]));
+        // The items' own shelf (the font mode merges in the installed ones) and its count.
+        assert_eq!(counts(&conn, None).unwrap().tray, 1);
+        assert_eq!(clear_tray(&conn).unwrap(), s(&["b", "sys:x"]));
+        assert!(tray_order(&conn).unwrap().is_empty() && system_tray(&conn).unwrap().is_empty());
+    }
+
+    #[test]
     fn items_carry_folder_and_tags() {
         let mut conn = mem();
         add(&mut conn, "a", "a.png", 1);
@@ -3420,6 +3519,45 @@ mod tests {
     fn add_font(conn: &mut Connection, id: &str, at: i64) {
         add(conn, id, &format!("{id}.ttf"), at);
         conn.execute("UPDATE items SET kind = 'font', ext = 'ttf', width = 0, height = 0 WHERE id = ?1", [id]).unwrap();
+    }
+
+    #[test]
+    fn postscript_names_tell_the_library_fonts() {
+        let mut conn = mem();
+        for (id, at) in [("f1", 1), ("f2", 2), ("f3", 3)] {
+            add_font(&mut conn, id, at);
+        }
+        let meta = |ps: &str| crate::fonts::FontMeta {
+            family: "F".into(),
+            weight: 400,
+            weight_min: 400,
+            weight_max: 400,
+            script: "latin",
+            category: None,
+            features: vec![],
+            ps_name: ps.into(),
+        };
+        let metas = [("f1".into(), meta("F-Regular")), ("f2".into(), meta("F-Bold")), ("f3".into(), meta(""))];
+        set_font_meta(&mut conn, &metas).unwrap();
+        let item = get_items(&conn, &s(&["f1", "f3"])).unwrap();
+        assert_eq!(item.iter().find(|i| i.id == "f1").unwrap().font_ps_name.as_deref(), Some("F-Regular"));
+        assert_eq!(item.iter().find(|i| i.id == "f3").unwrap().font_ps_name, None, "none is no name");
+        // Not the trash's, and no empty names.
+        trash_items(&conn, &s(&["f2"])).unwrap();
+        assert_eq!(font_ps_names(&conn).unwrap(), s(&["F-Regular"]));
+    }
+
+    #[test]
+    fn step_23_reads_fonts_again_for_their_postscript_names() {
+        let mut conn = mem();
+        add_font(&mut conn, "f", 1);
+        conn.execute("UPDATE items SET font_features = '', font_script = 'latin'", []).unwrap();
+        assert!(missing_font_meta(&conn).unwrap().is_empty());
+        conn.execute_batch("ALTER TABLE items DROP COLUMN font_ps_name; DROP TABLE tray_system; PRAGMA user_version = 22;")
+            .unwrap();
+        migrate(&conn).unwrap();
+        assert_eq!(missing_font_meta(&conn).unwrap().len(), 1);
+        assert!(system_tray(&conn).unwrap().is_empty());
     }
 
     #[test]

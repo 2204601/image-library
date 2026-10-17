@@ -9,9 +9,17 @@ import { onItemPointerDown, rowSelection, showItemMenu, Stars, type CellProps } 
 import { ChangePulse } from "../../components/ActionHud";
 import { toggleTray } from "../../lib/actions";
 import { rowIds } from "../../lib/grouping";
-import { fontCategoryLabel, fontCategoryOf, fontFeatureLabel, fontScriptLabel, type Item } from "../../lib/api";
+import {
+  fontCategoryLabel,
+  fontCategoryOf,
+  fontFeatureLabel,
+  fontScriptLabel,
+  isSystemId,
+  type Item,
+} from "../../lib/api";
 import { useStore } from "../../store";
 import { type FontListPreview } from "./api";
+import { FontLinkBadge } from "./FontLink";
 import { fontChars, fontPreview, holdFont, loadFont } from "./loader";
 import { mostlyMissing, Sample } from "./Sample";
 
@@ -172,7 +180,9 @@ export const SpecimenRow = memo(function SpecimenRow(props: CellProps) {
               {item.fontScript === "latin" ? "欧文見本" : "フォントの見本"}
             </span>
           )}
-          {flags && <ShelfButton item={item} className="h-4 w-4" />}
+          <FontLinkBadge item={item} />
+          {/* Installed fonts have no flags, but go on the shelf to be compared. */}
+          {(flags || isSystemId(item.id)) && <ShelfButton item={item} className="h-4 w-4" />}
           {flags && item.pinnedAt !== null && <Pin size={11} className="text-accent" fill="currentColor" />}
           {flags && item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
           {item.rating > 0 && <Stars n={item.rating} />}
@@ -275,7 +285,12 @@ export const FontTile = memo(function FontTile(props: CellProps) {
             {item.favorite && <Heart size={11} className="text-pink-400" fill="currentColor" />}
           </span>
         )}
-        {flags && <ShelfButton item={item} className="absolute top-1 left-1 h-6 w-6 bg-black/45" />}
+        {(flags || isSystemId(item.id)) && (
+          <ShelfButton item={item} className="absolute top-1 left-1 h-6 w-6 bg-black/45" />
+        )}
+        <span className="pointer-events-none absolute bottom-1.5 left-1.5">
+          <FontLinkBadge item={item} compact />
+        </span>
         <ChangePulse id={item.id} />
       </div>
       {insert && (

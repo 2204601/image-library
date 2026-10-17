@@ -20,6 +20,7 @@ type MockItem = Omit<
   | "fontCategory"
   | "fontCategoryUser"
   | "fontFeatures"
+  | "fontPsName"
   | "inTray"
 > & {
   hue: number;
@@ -33,6 +34,7 @@ type MockItem = Omit<
   fontCategory?: string | null;
   fontCategoryUser?: string | null;
   fontFeatures?: string[];
+  fontPsName?: string;
   /** Texts: the file's content (src-tauri/src/texts). */
   body?: string;
 };
@@ -45,16 +47,16 @@ const items: MockItem[] = [];
  */
 const systemFonts: SystemFont[] = (
   [
-    ["ヒラギノ角ゴシック W3", "ヒラギノ角ゴシック", 300, "ja", "gothic", [], "ttc", "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"],
-    ["ヒラギノ角ゴシック W6", "ヒラギノ角ゴシック", 600, "ja", "gothic", [], "ttc", "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc"],
-    ["ヒラギノ明朝 ProN W3", "ヒラギノ明朝 ProN", 300, "ja", "mincho", [], "ttc", "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc"],
-    ["Helvetica", "Helvetica", 400, "latin", "gothic", [], "ttc", "/System/Library/Fonts/Helvetica.ttc"],
-    ["Georgia", "Georgia", 400, "latin", "mincho", [], "ttf", "/System/Library/Fonts/Supplemental/Georgia.ttf"],
-    ["Menlo Regular", "Menlo", 400, "latin", "gothic", ["mono", "coding"], "ttc", "/System/Library/Fonts/Menlo.ttc"],
-    ["SF Pro", "SF Pro", 400, "latin", "gothic", ["variable"], "ttf", "/System/Library/Fonts/SFNS.ttf"],
-    ["Noto Sans JP Regular", "Noto Sans JP", 400, "ja", "gothic", [], "otf", "/Users/me/Library/Fonts/NotoSansJP-Regular.otf"],
-  ] as [string, string, number, string, string, string[], string, string][]
-).map(([name, family, weight, script, category, features, ext, path], k) => ({
+    ["ヒラギノ角ゴシック W3", "HiraginoSans-W3", "ヒラギノ角ゴシック", 300, "ja", "gothic", [], "ttc", "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc"],
+    ["ヒラギノ角ゴシック W6", "HiraginoSans-W6", "ヒラギノ角ゴシック", 600, "ja", "gothic", [], "ttc", "/System/Library/Fonts/ヒラギノ角ゴシック W6.ttc"],
+    ["ヒラギノ明朝 ProN W3", "HiraMinProN-W3", "ヒラギノ明朝 ProN", 300, "ja", "mincho", [], "ttc", "/System/Library/Fonts/ヒラギノ明朝 ProN.ttc"],
+    ["Helvetica", "Helvetica", "Helvetica", 400, "latin", "gothic", [], "ttc", "/System/Library/Fonts/Helvetica.ttc"],
+    ["Georgia", "Georgia", "Georgia", 400, "latin", "mincho", [], "ttf", "/System/Library/Fonts/Supplemental/Georgia.ttf"],
+    ["Menlo Regular", "Menlo-Regular", "Menlo", 400, "latin", "gothic", ["mono", "coding"], "ttc", "/System/Library/Fonts/Menlo.ttc"],
+    ["SF Pro", "SFNS-Regular", "SF Pro", 400, "latin", "gothic", ["variable"], "ttf", "/System/Library/Fonts/SFNS.ttf"],
+    ["Noto Sans JP Regular", "NotoSansJP-Regular", "Noto Sans JP", 400, "ja", "gothic", [], "otf", "/Users/me/Library/Fonts/NotoSansJP-Regular.otf"],
+  ] as [string, string, string, number, string, string, string[], string, string][]
+).map(([name, psName, family, weight, script, category, features, ext, path], k) => ({
   id: `sys:mock${k}`,
   path,
   fileName: path.split("/").pop()!,
@@ -62,6 +64,7 @@ const systemFonts: SystemFont[] = (
   size: 1_000_000 + k * 731_000,
   modified: Date.UTC(2025, k % 12, 1 + k),
   name,
+  psName,
   family,
   weight,
   weightMin: features.includes("variable") ? 100 : weight,
@@ -116,6 +119,8 @@ const link = (i: string, f: string) => {
 const itemTags = new Set<string>(); // `${itemId}|${tagId}`
 // The shelf (the `tray` table): item id -> position.
 const tray = new Map<string, number>();
+// Installed fonts on the shelf (their ids are in `tray` too, for the one order): id -> name.
+const systemTrayNames = new Map<string, string>();
 let traySeq = 0;
 const smartFolders: { id: string; name: string; rule: Rule; color: string | null; mode: Mode }[] = [];
 const EXTS = ["jpg", "png", "jpg", "webp", "jpg", "heic"];
@@ -124,6 +129,9 @@ let uid = 0;
 const id = () => `m${(++uid).toString(36)}`;
 
 function seed() {
+  // An installed font put on the shelf on another computer, which this one doesn't have.
+  tray.set("sys:elsewhere", ++traySeq);
+  systemTrayNames.set("sys:elsewhere", "游明朝体 Pr6N R");
   const sizes = [
     [800, 600],
     [600, 800],
@@ -177,6 +185,8 @@ function seed() {
       fontScript,
       fontCategory,
       fontFeatures,
+      // The file's name for most; the Hiragino and Noto Sans JP Regular are installed too (`systemFonts`).
+      fontPsName: file === "Hiragino.ttc" ? "HiraginoSans-W3" : file.replace(/\.[^.]+$/, ""),
       id: id(),
       kind: "font",
       name: file,
@@ -415,6 +425,7 @@ const view = (it: MockItem): Item => {
     fontCategory: it.fontCategory ?? null,
     fontCategoryUser: it.fontCategoryUser ?? null,
     fontFeatures: it.fontFeatures ?? [],
+    fontPsName: it.fontPsName ?? null,
     inTray: tray.has(it.id),
     preview: null,
     folderId,
@@ -923,17 +934,35 @@ function handle(cmd: string, a: any): unknown {
       }
       return n;
     }
+    case "add_system_to_tray": {
+      const fresh = systemFonts.filter((f) => a.ids.includes(f.id) && !tray.has(f.id));
+      fresh.forEach((f) => {
+        tray.set(f.id, ++traySeq);
+        systemTrayNames.set(f.id, f.name);
+      });
+      return fresh.length;
+    }
+    case "system_tray": {
+      const order = [...tray.entries()].sort((x, y) => x[1] - y[1]).map(([i]) => i);
+      return { order, fonts: order.flatMap((i) => (systemTrayNames.has(i) ? [{ id: i, name: systemTrayNames.get(i)! }] : [])) };
+    }
+    case "library_font_ps_names":
+      return [...new Set(items.flatMap((i) => (i.kind === "font" && i.deletedAt === null && i.fontPsName ? [i.fontPsName] : [])))];
     case "add_to_tray": {
       const fresh = (a.ids as string[]).filter((i) => !tray.has(i) && items.some((x) => x.id === i));
       fresh.forEach((i) => tray.set(i, ++traySeq));
       return fresh.length;
     }
     case "remove_from_tray":
-      a.ids.forEach((i: string) => tray.delete(i));
+      a.ids.forEach((i: string) => {
+        tray.delete(i);
+        systemTrayNames.delete(i);
+      });
       return;
     case "clear_tray": {
       const ids = [...tray.entries()].sort((x, y) => x[1] - y[1]).map(([i]) => i);
       tray.clear();
+      systemTrayNames.clear();
       return ids;
     }
     case "reorder_tray": {

@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { api, EMPTY_FILTER, isSystemId, kindLabel, kindOfExt, libraryIds, type DuplicateEffect, type Item, type ItemKind, type LibraryInfo, type OrientOp, type View } from "./api";
 import { itemsNoun, kindsNoun } from "./modes";
+import { fontApi } from "../features/fonts/api";
 import {
   activeConditions,
   currentFolderId,
@@ -547,9 +548,21 @@ export function onShelf(ids: string[]): boolean {
 const openShelfAction = (): ToastAction | undefined =>
   st().shelfOpen ? undefined : { label: "シェルフを開く", onClick: () => st().toggleShelf() };
 
-/** Puts items on the shelf (after the ones already there). */
+/**
+ * Puts `ids` on the shelf: library items, and on the font shelf the fonts
+ * installed on this computer too (docs/SYSTEM_FONTS.md). Returns how many were added.
+ */
+function trayAdd(ids: string[]): Promise<number> {
+  const system = ids.filter(isSystemId);
+  const items = libraryIds(ids);
+  return Promise.all([
+    items.length ? api.addToTray(items) : 0,
+    system.length ? fontApi.addSystemToTray(system) : 0,
+  ]).then(([a, b]) => a + b);
+}
+
+/** Puts items (and installed fonts) on the shelf, after the ones already there. */
 export async function addToTray(ids: string[]) {
-  ids = libraryIds(ids);
   if (!ids.length) return;
   const want = shelfIds(ids);
   if (st().mode === "font") {
@@ -566,7 +579,7 @@ export async function addToTray(ids: string[]) {
   }
   let added = 0;
   const ok = await st().run(async () => {
-    added = await api.addToTray(want);
+    added = await trayAdd(want);
   });
   if (!ok) return;
   st().flashTarget("tray");
@@ -575,7 +588,6 @@ export async function addToTray(ids: string[]) {
 
 /** B: puts items on the shelf, or takes them off when all are already there. */
 export async function toggleTray(ids: string[]) {
-  ids = libraryIds(ids);
   if (!ids.length) return;
   if (!onShelf(ids)) return addToTray(ids);
   return removeFromShelf(shelfIds(ids));
@@ -587,7 +599,7 @@ export async function removeFromShelf(ids: string[]) {
   if (!(await st().run(() => api.removeFromTray(ids)))) return;
   st().toast(`${ids.length} 件をシェルフから外しました`, false, {
     label: "元に戻す",
-    onClick: () => st().run(() => api.addToTray(ids)),
+    onClick: () => st().run(() => trayAdd(ids)),
   });
 }
 
@@ -604,7 +616,7 @@ export async function clearTray() {
   if (!(await st().run(() => api.removeFromTray(ids)))) return;
   st().toast(`シェルフを空にしました（${ids.length} 件）`, false, {
     label: "元に戻す",
-    onClick: () => st().run(() => api.addToTray(ids)),
+    onClick: () => st().run(() => trayAdd(ids)),
   });
 }
 
@@ -641,8 +653,8 @@ export async function listTargets(source: ListSource, subfolders = true): Promis
     case "shown":
       return displayOrder();
     case "tray":
-      // What the shelf shows, in its order.
-      return st().shelf;
+      // What the shelf shows, in its order (installed fonts stay where they are).
+      return st().shelf.filter((i) => !isSystemId(i.id));
     case "folder":
       return queryView({ kind: "folder", id: source.id }, { includeSubfolders: subfolders });
     case "smart":

@@ -2,16 +2,17 @@
 // font, its name and the style to compare on the left, the same texts drawn
 // in each on the right. Fonts are always rows (no other arrangement), the
 // first line the letters and figures. docs/FONT_UI.md (比較ビュー).
-import { ArrowLeft, Heart, Minus, Plus, X } from "lucide-react";
+import { ArrowLeft, Heart, Minus, Monitor, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { removeFromShelf, setRating } from "../../lib/actions";
-import { api, EMPTY_FILTER, fontCategoryLabel, fontCategoryOf, type Item } from "../../lib/api";
+import { api, EMPTY_FILTER, fontCategoryLabel, fontCategoryOf, isSystemId, type Item } from "../../lib/api";
 import { composing } from "../../lib/ime";
 import { RatingStars } from "../../components/RatingStars";
 import { Slider } from "../../components/Slider";
 import { FONT_SHELF_MAX, useStore } from "../../store";
 import { fontChars, holdFont, loadFont } from "./loader";
 import { patternText } from "./patterns";
+import { systemFamily } from "./system";
 import { Sample } from "./Sample";
 import { weightName } from "./weights";
 
@@ -84,6 +85,23 @@ export function CompareView() {
   const [chosen, setChosen] = useState<Record<string, string>>({});
   /** Every font of the library by family, to offer each row its family's styles. */
   const [families, setFamilies] = useState<Map<string, Item[]>>(new Map());
+  /** The same for the installed fonts on the shelf: their family among the installed ones. */
+  const [systemFamilies, setSystemFamilies] = useState<Map<string, Item[]>>(new Map());
+  const systemNames = useMemo(
+    () => [
+      ...new Set(shelf.flatMap((i) => (isSystemId(i.id) && !i.unavailable && i.fontFamily ? [i.fontFamily] : []))),
+    ],
+    [shelf],
+  );
+  useEffect(() => {
+    let live = true;
+    Promise.all(systemNames.map(async (f) => [f, (await systemFamily(f)).sort(byWeight)] as const))
+      .then((list) => live && setSystemFamilies(new Map(list)))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [systemNames]);
 
   useEffect(() => {
     let live = true;
@@ -260,7 +278,7 @@ export function CompareView() {
           </p>
         ) : (
           fonts.map((f) => {
-            const members = (f.fontFamily && families.get(f.fontFamily)) || [f];
+            const members = (f.fontFamily && (isSystemId(f.id) ? systemFamilies : families).get(f.fontFamily)) || [f];
             const shown = members.find((m) => m.id === chosen[f.id]) ?? members.find((m) => m.id === f.id) ?? f;
             return (
               <CompareRow
@@ -309,11 +327,16 @@ function CompareRow({
   const [family, setFamily] = useState<string | null>(null);
   const [has, setHas] = useState<Set<number> | null>(null);
   const [failed, setFailed] = useState(false);
+  const system = isSystemId(item.id);
   useEffect(() => {
     let live = true;
     setFamily(null);
     setHas(null);
     setFailed(false);
+    if (shown.unavailable) {
+      setFailed(true);
+      return;
+    }
     const release = holdFont(shown.id);
     loadFont(shown.id)
       .then((f) => live && setFamily(f))
@@ -325,7 +348,7 @@ function CompareRow({
       live = false;
       release();
     };
-  }, [shown.id]);
+  }, [shown.id, shown.unavailable]);
 
   const latin = isLatin(item);
   const lines = useMemo(() => {
@@ -371,40 +394,58 @@ function CompareRow({
             <X size={13} />
           </button>
         </div>
-        <span className={dim}>{fontCategoryLabel(fontCategoryOf(item))}</span>
-        <label className="relative w-fit">
-          <select
-            value={shown.id}
-            disabled={members.length < 2}
-            onChange={(e) => onStyle(e.target.value)}
-            title={members.length < 2 ? "このファミリーのスタイルは 1 つです" : "比べる太さ"}
-            className={`h-6 rounded-md border px-1.5 disabled:opacity-60 ${
-              light ? "border-neutral-300 bg-white" : "border-line bg-bg"
-            }`}
-          >
-            {members.map((m) => (
-              <option key={m.id} value={m.id}>
-                {styleName(m)}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="flex items-center gap-1">
-          <RatingStars value={shown.rating} onChange={(n) => setRating([shown.id], n)} size={13} />
-        </div>
-        <button
-          onClick={() => useStore.getState().run(() => api.setFavorite([shown.id], !shown.favorite))}
-          className={`flex w-fit items-center gap-1 rounded px-1 py-0.5 hover:bg-black/10 ${
-            shown.favorite ? "text-pink-400" : dim
-          }`}
-        >
-          <Heart size={12} fill={shown.favorite ? "currentColor" : "none"} />
-          {shown.favorite ? "お気に入り" : "お気に入りに追加"}
-        </button>
+        {/* A font this computer doesn't have: its name only. */}
+        {!item.unavailable && (
+          <>
+            <span className={dim}>{fontCategoryLabel(fontCategoryOf(item))}</span>
+            <label className="relative w-fit">
+              <select
+                value={shown.id}
+                disabled={members.length < 2}
+                onChange={(e) => onStyle(e.target.value)}
+                title={members.length < 2 ? "このファミリーのスタイルは 1 つです" : "比べる太さ"}
+                className={`h-6 rounded-md border px-1.5 disabled:opacity-60 ${
+                  light ? "border-neutral-300 bg-white" : "border-line bg-bg"
+                }`}
+              >
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {styleName(m)}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </>
+        )}
+        {system ? (
+          // Installed fonts have no rating or favourite (docs/SYSTEM_FONTS.md).
+          <span className={`flex items-center gap-1 ${dim}`}>
+            <Monitor size={12} /> この端末のフォント
+          </span>
+        ) : (
+          <>
+            <div className="flex items-center gap-1">
+              <RatingStars value={shown.rating} onChange={(n) => setRating([shown.id], n)} size={13} />
+            </div>
+            <button
+              onClick={() => useStore.getState().run(() => api.setFavorite([shown.id], !shown.favorite))}
+              className={`flex w-fit items-center gap-1 rounded px-1 py-0.5 hover:bg-black/10 ${
+                shown.favorite ? "text-pink-400" : dim
+              }`}
+            >
+              <Heart size={12} fill={shown.favorite ? "currentColor" : "none"} />
+              {shown.favorite ? "お気に入り" : "お気に入りに追加"}
+            </button>
+          </>
+        )}
       </div>
       <div className="min-w-0 flex-1 px-5 py-3">
         {failed ? (
-          <span className={dim}>見本を表示できません</span>
+          <span className={dim}>
+            {shown.unavailable
+              ? "この端末にインストールされていないフォントです（別の端末でシェルフに置いたもの）"
+              : "見本を表示できません"}
+          </span>
         ) : (
           <>
             <div title={lines.first.title} className="truncate whitespace-pre">

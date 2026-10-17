@@ -10,6 +10,7 @@ import {
 } from "../../lib/api";
 import { useStore } from "../../store";
 import { fontApi, type FontFaceInfo } from "./api";
+import { FontLinkRow } from "./FontLink";
 
 const AXIS_LABEL: Record<string, string> = {
   wght: "太さ",
@@ -123,6 +124,7 @@ export function FontDetails({ item }: { item: Item }) {
           </ul>,
         )}
       {row("文字", `${f.charCount.toLocaleString()} 字 · ${f.glyphs.toLocaleString()} グリフ`)}
+      <FontLinkRow item={item} />
       {f.designer && row("製作", f.designer)}
       {f.version && row("版", <span className="block truncate">{f.version.replace(/^Version\s*/i, "")}</span>, f.version)}
     </>

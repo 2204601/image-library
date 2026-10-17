@@ -415,7 +415,7 @@ export function Inspector() {
         className="flex shrink-0 flex-col overflow-y-auto border-l border-line bg-panel p-4"
         style={{ width: inspectorWidth }}
       >
-        <SystemFontPanel single={single} n={n} />
+        <SystemFontPanel single={single} ids={ids} />
       </aside>
     );
   }

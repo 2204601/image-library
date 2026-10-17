@@ -4,6 +4,7 @@
 use crate::commands::{err, item_paths, with_lib, AppState, CmdResult};
 use crate::db;
 use crate::import;
+use serde::Serialize;
 use std::fs;
 use tauri::{AppHandle, Manager, State};
 
@@ -19,6 +20,46 @@ pub async fn system_fonts(app: AppHandle, reload: bool) -> CmdResult<Vec<super::
 #[tauri::command]
 pub fn reveal_system_font(id: String) -> CmdResult<()> {
     tauri_plugin_opener::reveal_item_in_dir(super::system::find(&id)?.path).map_err(err)
+}
+
+/// Puts installed fonts on the font shelf after what is there (their names are
+/// kept for a computer that doesn't have them). Returns how many were added.
+#[tauri::command]
+pub fn add_system_to_tray(state: State<AppState>, ids: Vec<String>) -> CmdResult<usize> {
+    let fonts: Vec<(String, String)> =
+        ids.iter().filter_map(|id| super::system::find(id).ok()).map(|f| (f.id, f.name)).collect();
+    with_lib(&state, |lib| db::add_system_to_tray(&lib.conn, &fonts).map_err(err))
+}
+
+#[derive(Serialize)]
+pub struct SystemTrayFont {
+    id: String,
+    name: String,
+}
+
+/// The installed fonts on the shelf, and the shelf's order across them and the
+/// items (the frontend puts the two together).
+#[derive(Serialize)]
+pub struct SystemTray {
+    order: Vec<String>,
+    fonts: Vec<SystemTrayFont>,
+}
+
+#[tauri::command]
+pub fn system_tray(state: State<AppState>) -> CmdResult<SystemTray> {
+    with_lib(&state, |lib| {
+        let fonts = db::system_tray(&lib.conn).map_err(err)?;
+        Ok(SystemTray {
+            order: db::tray_order(&lib.conn).map_err(err)?,
+            fonts: fonts.into_iter().map(|(id, name)| SystemTrayFont { id, name }).collect(),
+        })
+    })
+}
+
+/// PostScript names of the library's fonts: which installed fonts are in the library.
+#[tauri::command]
+pub fn library_font_ps_names(state: State<AppState>) -> CmdResult<Vec<String>> {
+    with_lib(&state, |lib| db::font_ps_names(&lib.conn).map_err(err))
 }
 
 /// The font file of a font item, or of a font installed on this computer

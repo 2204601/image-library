@@ -195,6 +195,13 @@ export interface Item {
   fontCategoryUser: string | null;
   /** Fonts: features (see FONT_FEATURES), empty until read. */
   fontFeatures: string[];
+  /** Fonts: PostScript name of the first font (null until read, or when it has none). */
+  fontPsName: string | null;
+  /**
+   * An installed font on the font shelf that this computer doesn't have (the
+   * library was put together on another one): only its name is known (docs/SYSTEM_FONTS.md).
+   */
+  unavailable?: boolean;
   /**
    * Font mode only: the row stands for a whole family; every font of it (the
    * row's own id first). Operations on the row reach them all.

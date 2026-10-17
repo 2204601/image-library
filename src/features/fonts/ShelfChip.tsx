@@ -1,13 +1,15 @@
 // A font on the shelf: a character in the font itself and its name.
+import { Monitor } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { Item } from "../../lib/api";
+import { isSystemId, type Item } from "../../lib/api";
 import { holdFont, loadFont } from "./loader";
 import { weightName } from "./weights";
 
-/** The font of `id`, loaded while shown (its CSS family once loaded). */
-function useLoadedFont(id: string): string | null {
+/** The font of `id`, loaded while shown (its CSS family once loaded); nothing for a font not here. */
+function useLoadedFont(id: string, unavailable?: boolean): string | null {
   const [family, setFamily] = useState<string | null>(null);
   useEffect(() => {
+    if (unavailable) return;
     let live = true;
     const release = holdFont(id);
     loadFont(id)
@@ -17,7 +19,7 @@ function useLoadedFont(id: string): string | null {
       live = false;
       release();
     };
-  }, [id]);
+  }, [id, unavailable]);
   return family;
 }
 
@@ -34,9 +36,22 @@ export function FontMark({ item, className }: { item: Item; className?: string }
   );
 }
 
-/** The font's mark and name, for the shelf's chip (the chip itself is Shelf.tsx's). */
+/**
+ * The font's mark and name, for the shelf's chip (the chip itself is
+ * Shelf.tsx's). An installed font has a screen beside its name; one this
+ * computer doesn't have only its name, struck through (docs/SYSTEM_FONTS.md).
+ */
 export function FontShelfLabel({ item }: { item: Item }) {
-  const family = useLoadedFont(item.id);
+  const family = useLoadedFont(item.id, item.unavailable);
+  if (item.unavailable)
+    return (
+      <span
+        className="min-w-0 truncate pl-1 text-dim line-through"
+        title={`${item.name}：この端末にインストールされていないフォントです（別の端末でシェルフに置いたもの）`}
+      >
+        {item.name}
+      </span>
+    );
   return (
     <>
       <span
@@ -45,6 +60,11 @@ export function FontShelfLabel({ item }: { item: Item }) {
       >
         {item.fontScript === "latin" ? "Aa" : "あ"}
       </span>
+      {isSystemId(item.id) && (
+        <span title="この端末のフォント" className="shrink-0 text-dim">
+          <Monitor size={11} />
+        </span>
+      )}
       <span className="min-w-0 truncate" title={item.name}>
         {item.fontFamily || item.name}
         {/* Which of the family's styles, unless it is the regular. */}
